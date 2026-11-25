@@ -1,8 +1,10 @@
 """Payment gate wire formats.
 
-Formats: ``RR/GATE/DECIDE-REQUEST/v1``, ``RR/GATE/DECIDE-RESPONSE/v1``,
-``RR/GATE/TOKEN/v2``, ``RR/GATE/CHECKPOINT/v3`` (ML-DSA-87 per-batch variant
-only), ``RR/GATE/KEY-CERT/v1`` (the tenant root signs one epoch key) and the SHA3-512 digest domains ``RR/GATE/DECISION-ID/v1``,
+Formats: ``RR/GATE/DECIDE-REQUEST/v2``, ``RR/GATE/DECIDE-RESPONSE/v2``,
+``RR/GATE/TOKEN/v3``, ``RR/GATE/CHECKPOINT/v3`` (ML-DSA-87 per-batch variant
+only), ``RR/GATE/KEY-CERT/v2`` (the tenant's root key signs and its witness key countersigns one epoch key and the verifier key, under an authority link; Lean
+``Cosign.KeyCert``), the verifier's cosign record ``RR/GATE/VCOSIGN/v1`` and the SHA3-512 digest domains ``RR/GATE/DECISION-ID/v1``,
+``RR/GATE/EARLIER/v1`` (the earlier payments an answered payment repeats),
 ``RR/GATE/MERKLE-NODE/v1`` (the batch token tree),
 ``RR/GATE/LINES-NODE/v1`` (a payment's lines tree), ``RR/GATE/SHARD/v1``
 (a member's shard).
@@ -21,22 +23,23 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 import re
-from typing import Final, Sequence
+from typing import Final, NamedTuple, Sequence
 
 
 class GateCodecError(ValueError):
     """A value the gate formats cannot carry.  The message is a fixed code."""
 
 
-DECIDE_REQUEST: Final = b"RR/GATE/DECIDE-REQUEST/v1\x00"
-DECIDE_RESPONSE: Final = b"RR/GATE/DECIDE-RESPONSE/v1\x00"
-TOKEN: Final = b"RR/GATE/TOKEN/v2\x00"
+DECIDE_REQUEST: Final = b"RR/GATE/DECIDE-REQUEST/v2\x00"
+DECIDE_RESPONSE: Final = b"RR/GATE/DECIDE-RESPONSE/v2\x00"
+TOKEN: Final = b"RR/GATE/TOKEN/v3\x00"
+EARLIER: Final = b"RR/GATE/EARLIER/v1\x00"
 CHECKPOINT: Final = b"RR/GATE/CHECKPOINT/v3\x00"
-KEY_CERT: Final = b"RR/GATE/KEY-CERT/v1\x00"
+KEY_CERT: Final = b"RR/GATE/KEY-CERT/v2\x00"
+VCOSIGN: Final = b"RR/GATE/VCOSIGN/v1\x00"  # the verifier's cosign record, and the domain of what it signs
 DECISION_ID: Final = b"RR/GATE/DECISION-ID/v1\x00"
 CONTEXT: Final = b"RR/GATE/CONTEXT/v1\x00"
-PAYMENT: Final = b"RR/GATE/PAYMENT/v1\x00"
-INPUT_V6: Final = b"RR/GATE/INPUT/v6\x00"
+INPUT_V7: Final = b"RR/GATE/INPUT/v7\x00"
 MERKLE_NODE: Final = b"RR/GATE/MERKLE-NODE/v1\x00"
 LINES_NODE: Final = b"RR/GATE/LINES-NODE/v1\x00"
 SHARD: Final = b"RR/GATE/SHARD/v1\x00"
@@ -44,7 +47,8 @@ STATE: Final = b"RR/GATE/STATE/v1\x00"
 
 FLOWS: Final = ("FFS_CYCLE", "FFS_CLAIM", "CAP_820", "SDP", "PLAN_PAY")
 RULED: Final = FLOWS[:3]  # decided line by line, so each payment carries a line; SDP and PLAN_PAY: HUMAN_REVIEW
-OUTCOMES: Final = ("ALLOW", "HOLD", "HUMAN_REVIEW", "BLOCK")
+# ANSWERED: an exact repeat of a paid line, answered at once with the earlier payments it repeats (Constitution I.4).
+OUTCOMES: Final = ("ALLOW", "HOLD", "HUMAN_REVIEW", "BLOCK", "ANSWERED")
 AUTHORITIES: Final = ("OBSERVE", "HOLD", "TRANSFER")
 # PAYMENT_ALREADY_DECIDED: a new command key, under any flow, for a payment
 # that already has a decision; the existing decision is returned.  A fenced or
@@ -72,7 +76,7 @@ MAX_TOKEN_LIFETIME: Final = 7 * 24 * 3600  # seconds from issued_at to expires_a
 MAX_DECISION_AGE: Final = {**dict.fromkeys(FLOWS, 14 * 86400), "FFS_CYCLE": 28 * 86400, "CAP_820": 62 * 86400}
 MAX_RETRY_AFTER_MS: Final = 3_600_000
 MAX_REQUEST_BYTES: Final = 8 * 1024 * 1024
-MAX_TOKEN_BYTES: Final = 4 * 1024  # the largest canonical token is 3,900 bytes
+MAX_TOKEN_BYTES: Final = 4 * 1024  # the largest canonical token is 4,028 bytes (tests/test_gate_exact_duplicate.py)
 ML_DSA_87_SIGNATURE: Final = 4627
 ML_DSA_87_PUBLIC_KEY: Final = 2592
 
@@ -175,119 +179,13 @@ def lines_root(lines: Sequence[bytes]) -> bytes:
 
 
 def payment_input(context: bytes, head: bytes, lines: Sequence[bytes], tail: bytes) -> bytes:
-    """INPUT/v6 of one DECIDE-REQUEST/v1 (conformance/ENGINE_V3.md section 18): over the batch's CONTEXT/v1 digest and the
-    request's PAYMENT/v1 digest, which reads its bytes before the lines (``head``, after a 4-byte length), the root of its
-    ``lines`` and its bytes after them (``tail``)."""
-    pay = sha3_512(PAYMENT + len(head).to_bytes(4, "big") + head + lines_root(lines) + tail)
-    return sha3_512(INPUT_V6 + context + pay)
+    """INPUT/v7 of one DECIDE-REQUEST/v2 (conformance/ENGINE_V3.md section 18), one hash: the batch's CONTEXT/v1 digest,
+    the request's bytes before the lines (``head``, after a 4-byte length), the root of its ``lines`` and its bytes
+    after them (``tail``)."""
+    return sha3_512(INPUT_V7 + context + len(head).to_bytes(4, "big") + head + lines_root(lines) + tail)
 
 
-# --------------------------------------------- FRAME/v3 request digest (stage S0)
-# The request side of FRAME/v3 (docs/integration/TRUNK_STEP2_FRAME_DESIGN.md sections 2.2-2.5; conformance/ENGINE_V3.md
-# sections 17 and 19).  The built gate_engine still speaks request version 1 (FRAME/v1 over the whole body, CONTEXT/v1),
-# and nothing in production calls this yet.  Unlike the records above the frame is little-endian.  Each value marked
-# "step 2 default" awaits rr-core's answer on frame v2 (design decisions 2 and 16).
-
-FRAME_V3: Final = b"RR/GATE/FRAME/v3\x00"  # step 2 default pending rr-core (design 2.8)
-CONTEXT_V2: Final = b"RR/GATE/CONTEXT/v2\x00"  # step 2 default pending rr-core; the v3 frame only (payment_input keeps CONTEXT/v1)
-DESC_AT_V3: Final = 76  # body offset of descriptor slot 1, 77 bytes per slot (unchanged from v1, design 2.2)
-# The four ENGINE_V3 section 19 feeds in slots 1-4, as row field widths (a member 32 bytes, its 0x01 top byte implied).
-_SECTION19_V3: Final = {1: ("dmf", (32, 4)), 2: ("pdeath", (21, 4)), 3: ("excl", (21, 4, 4)), 4: ("span", (32, 21, 4, 4))}
-ELIG_SLOT_V3: Final = 5  # eligibility's descriptor slot (body offset 384): step 2 default pending rr-core (design 2.2)
-SOC_SLOT_V3: Final = 6  # share of cost's descriptor slot (body offset 461): step 2 default pending rr-core (design 2.2)
-ELIG_ROW_V3: Final = (32, 21, 1, 4, 4)  # member, aid, level, start, stop (stride 62): step 2 default pending rr-core (design 2.3)
-SOC_ROW_V3: Final = (32, 4, 8, 1)  # member, month, cents, met (stride 45): step 2 default pending rr-core (design 2.3)
-# A v3 body's feeds in descriptor-slot order (slot s at DESC_AT_V3 + 77 * (s - 1)), as row field widths.  That the slots
-# are 1..6 and ROWS_AT_V3 follows the last is checked by tests/test_gate_request_v3_host.py, not at import.
-FEED_WIDTHS_V3: Final = {name: widths for _, (name, widths) in
-                         sorted({**_SECTION19_V3, ELIG_SLOT_V3: ("elig", ELIG_ROW_V3), SOC_SLOT_V3: ("soc", SOC_ROW_V3)}.items())}
-ROWS_AT_V3: Final = 538  # body offset of the feed rows, after six descriptors: step 2 default pending rr-core (design 2.2)
-PAY_WIDTH: Final = 261  # a redone payment (Rules/Spec.lean ``payWidth``); the v1 builders keep their own literal 261
-
-
-class _Walk:
-    """Little-endian reads over a v3 body; any read past its end is ``frame_walk`` (the engine: LENGTH)."""
-
-    def __init__(self, data: bytes) -> None:
-        self.data, self.at = data, 0
-        self.grant, self.bypasses = b"", []  # what ``_walk_ctx`` passes on the way, for the host's own reader
-
-    def skip(self, n: int) -> bytes:
-        if self.at + n > len(self.data):
-            _fail("frame_walk")
-        self.at += n
-        return self.data[self.at - n:self.at]
-
-    def u32(self) -> int:
-        return int.from_bytes(self.skip(4), "little")
-
-    def blob(self) -> bytes:
-        return self.skip(self.u32())
-
-
-def _walk_ctx(r: _Walk) -> int:
-    """``walkCtx`` of design 4.2 (unbuilt in Frame/Spec.lean): from the descriptor row counts, the redo count and the
-    authority section's counts and blob lengths alone, the body offset ``c`` of the request count ``nq``."""
-    r.at = 72  # today, asOf, prev
-    redo = r.u32()
-    rows = 0
-    for slot, widths in enumerate(FEED_WIDTHS_V3.values()):
-        r.at = DESC_AT_V3 + 77 * slot + 9  # past state, asOf, count
-        rows += r.u32() * sum(widths)
-    r.at = ROWS_AT_V3
-    r.skip(rows + PAY_WIDTH * redo + 64 + 9 + 4)  # the rows, the redone payments, the key-set pin, the floor, kfloor
-    r.grant = r.blob()
-    for _ in range(2):  # key set, release
-        r.blob()
-    for _ in range(r.u32()):  # key-set steps: epoch, then the step
-        r.skip(4)
-        r.blob()
-    r.bypasses = [r.blob() for _ in range(r.u32())]
-    return r.at
-
-
-def frame_parts(body: bytes) -> tuple[int, list[bytes], bytes, list[bytes]]:
-    """``frame_walk`` with what the walk passes: ``c``, the request blobs, the grant blob and the bypass blobs."""
-    r = _Walk(body)
-    c = _walk_ctx(r)
-    requests = [r.blob() for _ in range(r.u32())]
-    if r.at != len(body):
-        _fail("frame_walk")
-    return c, requests, r.grant, r.bypasses
-
-
-def frame_walk(body: bytes) -> tuple[int, list[bytes]]:
-    """``walk`` of design 4.2 (unbuilt in Frame/Spec.lean): ``c`` and the request blobs, the walk ending exactly at the
-    end of the body; else ``frame_walk``."""
-    return frame_parts(body)[:2]
-
-
-def walk_prime(prime: bytes) -> int | None:
-    """``walkPrime`` of design 4.2 (unbuilt in Frame/Spec.lean), the parser of ``body'``: ``walkCtx``, then ``n``, then
-    exactly ``4n`` bytes of lengths; the length it read (bytes after it are not read), or None when it is cut short."""
-    r = _Walk(prime)
-    try:
-        _walk_ctx(r)
-        r.skip(4 * r.u32())
-    except GateCodecError:
-        return None
-    return r.at
-
-
-def body_prime(body: bytes) -> tuple[bytes, list[bytes]]:
-    """``bodyPrime`` of design 4.2/4.10 (unbuilt in Frame/Spec.lean): ``body[0 .. c+4)`` then each request's u32 length, and the requests."""
-    c, requests = frame_walk(body)
-    return body[:c + 4] + b"".join(len(x).to_bytes(4, "little") for x in requests), requests
-
-
-def frame_digest(body: bytes) -> bytes:
-    """The FRAME/v3 header digest (ENGINE_V3.md section 17 with the v3 domain): SHA3-512(FRAME/v3 || body' || rd_1 || ... || rd_n),
-    ``rd_i`` the SHA3-512 of request ``i``.  A body whose lengths do not walk is ``frame_walk`` (the engine: LENGTH)."""
-    prime, requests = body_prime(body)
-    return sha3_512(FRAME_V3 + prime + b"".join(map(sha3_512, requests)))
-
-
-# ------------------------------------------------------ #1 DECIDE-REQUEST/v1
+# ------------------------------------------------------ #1 DECIDE-REQUEST/v2
 
 
 def encode_line(flow: str, line_id: str, member_key: bytes, payee_ref: str, rendering: str,
@@ -321,6 +219,7 @@ class DecideRequest:
     period: str
     lines: tuple[bytes, ...]
     evidence_refs: tuple[bytes, ...]
+    contest: bool = False  # the sender disputes an exact repeat: it is decided as any other payment
 
 
 def encode_decide_request(request: DecideRequest) -> bytes:
@@ -346,6 +245,9 @@ def encode_decide_request(request: DecideRequest) -> bytes:
     for ref in refs:
         w.digest(ref, "evidence_ref")
     _sorted_unique(refs, "evidence_refs")
+    if type(request.contest) is not bool:
+        _fail("contest")
+    w.out.append(request.contest)
     if len(w.out) > MAX_REQUEST_BYTES:
         _fail("size")
     return bytes(w.out)
@@ -417,28 +319,173 @@ def encode_checkpoint(cp: Checkpoint, signature: bytes) -> bytes:
     return attach_signature(encode_checkpoint_header(cp), signature)
 
 
-# ------------------------------------------------------------- #5 KEY-CERT/v1
+# ------------------------------------------------------------- #5 KEY-CERT/v2, the verifier's cosign record
 
 
-def encode_key_cert(tenant_id: str, epoch: int, shard_count: int, public_key: bytes) -> bytes:
-    """The exact bytes the tenant's root key signs (``attach_signature`` makes the certificate): the epoch's
-    ML-DSA-87 public key for the whole tenant, every program and shard, with the shard count."""
-    w = _Writer(KEY_CERT)
-    w.int(SIG_ML_DSA_87_BATCH, 1, "alg")
-    w.ident(tenant_id, "tenant_id")
-    w.int(epoch, 8, "epoch")
-    w.int(shard_count, 4, "shard_count", low=1)
-    w.digest(public_key, "public_key", ML_DSA_87_PUBLIC_KEY)
+MAX_KEY_CERT: Final = 16 * 1024  # Lean ``Cosign.maxCertBytes``
+KEY_BYTES: Final = 1 + 2 + ML_DSA_87_PUBLIC_KEY  # scheme u8, u16 length, public key (scheme 1 is ML-DSA-87)
+COSIGN_RECORD: Final = len(VCOSIGN) + DIGEST + 2 + ML_DSA_87_SIGNATURE  # 4,712 bytes
+
+
+def encode_key(public_key: bytes) -> bytes:
+    """A key as a certificate and an authority link carry it: scheme 1, u16 length, ML-DSA-87 public key."""
+    w = _Writer(b"")
+    w.int(SIG_ML_DSA_87_BATCH, 1, "scheme")
+    w.blob(public_key, "public_key", size=ML_DSA_87_PUBLIC_KEY, low=ML_DSA_87_PUBLIC_KEY)
     return bytes(w.out)
 
 
+def encode_key_cert(tenant_id: str, epoch: int, link: bytes, chain: Sequence[int], public_key: bytes, verifier_key: bytes) -> bytes:
+    """The exact bytes the tenant's root key signs and its witness key countersigns (``attach_signatures`` makes the
+    certificate): the epoch's ML-DSA-87 public key for the whole tenant, every program and shard, and the key that
+    cosigns its checkpoints, under the authority link whose body digest is ``link``, with the tenant's shard counts
+    up to this epoch (``chain``, the last one this epoch's)."""
+    w = _Writer(KEY_CERT)
+    w.ident(tenant_id, "tenant_id")
+    w.int(epoch, 8, "epoch")
+    w.digest(link, "link")
+    w.int(len(chain), 1, "chain", low=1, high=32)
+    for count in chain:
+        w.int(count, 4, "shard_count", low=1)
+    return bytes(w.out) + encode_key(public_key) + encode_key(verifier_key)
+
+
+def attach_signatures(body: bytes, root_signature: bytes, witness_signature: bytes) -> bytes:
+    """A KEY-CERT/v2 body, then u16 length and the root signature, then u16 length and the witness cosignature."""
+    return attach_signature(attach_signature(body, root_signature), witness_signature)
+
+
+class KeyCert(NamedTuple):
+    tenant_id: str
+    epoch: int
+    link: bytes
+    chain: tuple[int, ...]
+    key: bytes
+    verifier_key: bytes
+    body: bytes
+    root_signature: bytes
+    witness_signature: bytes
+
+
+def read_key_cert(cert: bytes) -> KeyCert:
+    """A KEY-CERT/v2 as Lean ``Cosign.decode`` reads it (the same layout; the registered scheme is ML-DSA-87 alone).
+    A certificate Lean would not decode raises ``ValueError``."""
+    at = 0
+
+    def take(n: int) -> bytes:
+        nonlocal at
+        if n > len(cert) - at:
+            raise ValueError("key_cert")
+        at += n
+        return cert[at - n : at]
+
+    def key() -> bytes:
+        scheme, size = take(1), int.from_bytes(take(2), "big")
+        if scheme != b"\x01" or size != ML_DSA_87_PUBLIC_KEY:
+            raise ValueError("key_cert")
+        return take(size)
+
+    if len(cert) > MAX_KEY_CERT or take(len(KEY_CERT)) != KEY_CERT:
+        raise ValueError("key_cert")
+    tenant = take(int.from_bytes(take(2), "big"))
+    if _ID.fullmatch(tenant.decode("ascii", "replace")) is None:
+        raise ValueError("key_cert")
+    epoch, link, chain = int.from_bytes(take(8), "big"), take(DIGEST), tuple(int.from_bytes(take(4), "big") for _ in range(take(1)[0]))
+    if epoch > MAX_NAT or not 1 <= len(chain) <= 32 or chain[0] < 1 or any(b <= a or b % a for a, b in zip(chain, chain[1:])) or chain[-1] >= 1 << 32:
+        raise ValueError("key_cert")
+    epoch_key, verifier_key = key(), key()
+    body = cert[:at]
+    root_signature, witness_signature = take(int.from_bytes(take(2), "big")), take(int.from_bytes(take(2), "big"))
+    if at != len(cert):
+        raise ValueError("key_cert")
+    return KeyCert(tenant.decode("ascii"), epoch, link, chain, epoch_key, verifier_key, body, root_signature, witness_signature)
+
+
 def key_cert_shards(cert: bytes) -> int:
-    """The shard count a KEY-CERT body names (or its certificate: the body comes first)."""
-    at = len(KEY_CERT) + 3 + int.from_bytes(cert[len(KEY_CERT) + 1:len(KEY_CERT) + 3], "big") + 8
-    return int.from_bytes(cert[at:at + 4], "big")
+    """The shard count a KEY-CERT names for its own epoch: the last of its chain."""
+    return read_key_cert(cert).chain[-1]
 
 
-# ------------------------------------------------------------------ #3 TOKEN/v2
+class Link(NamedTuple):
+    """The parts of an AUTHORITY-LINK/v1 a Python caller reads (Lean ``Cosign.pLink``): its tenant, generation, body, the
+    root and witness public keys and the two signatures.  The link's identity is the SHA3-512 of ``body``."""
+    tenant_id: str
+    gen: int
+    body: bytes
+    root_key: bytes
+    witness_key: bytes
+    self_signature: bytes
+    co_signature: bytes
+
+
+LINK: Final = b"RR/GATE/AUTHORITY-LINK/v1\x00"
+MAX_LINK: Final = 16 * 1024  # Lean ``Cosign.maxLinkBytes``
+
+
+def read_link(link: bytes) -> Link:
+    """An AUTHORITY-LINK/v1 as Lean ``Cosign.decodeLink`` reads it; one Lean would not decode raises ``ValueError``."""
+    at = 0
+
+    def take(n: int) -> bytes:
+        nonlocal at
+        if n > len(link) - at:
+            raise ValueError("link")
+        at += n
+        return link[at - n : at]
+
+    def key() -> bytes:
+        scheme, size = take(1), int.from_bytes(take(2), "big")
+        if scheme != b"\x01" or size != ML_DSA_87_PUBLIC_KEY:
+            raise ValueError("link")
+        return take(size)
+
+    if len(link) > MAX_LINK or take(len(LINK)) != LINK:
+        raise ValueError("link")
+    tenant = take(int.from_bytes(take(2), "big"))
+    gen, base, _prev, change = int.from_bytes(take(4), "big"), int.from_bytes(take(4), "big"), take(DIGEST), take(1)[0]
+    root = key()
+    take(DIGEST)
+    witness = key()
+    take(DIGEST)
+    flag, closed = take(1)[0], int.from_bytes(take(8), "big")
+    take(DIGEST)
+    body = link[:at]
+    self_signature, co_signature = take(int.from_bytes(take(2), "big")), take(int.from_bytes(take(2), "big"))
+    if (at != len(link) or _ID.fullmatch(tenant.decode("ascii", "replace")) is None or gen >= 1 << 31 or base > gen
+            or change > 2 or flag > 1 or (flag == 0 and closed) or closed > MAX_NAT):
+        raise ValueError("link")
+    return Link(tenant.decode("ascii"), gen, body, root, witness, self_signature, co_signature)
+
+
+def encode_link(tenant_id: str, root_key: bytes, root_next: bytes, witness_key: bytes, witness_next: bytes, approval: bytes, sign_root, sign_witness) -> bytes:
+    """A genesis AUTHORITY-LINK/v1 (generation 0, nothing closed), the layout ``read_link`` reads: the keys and the digests of
+    the keys that will follow them, the digest of the approval it records (Lean carries it and checks only its length), then
+    ``sign_root(body)`` and ``sign_witness(body)`` as the two signatures."""
+    w = _Writer(LINK)
+    w.ident(tenant_id, "tenant_id")
+    w.out += bytes(8) + bytes(DIGEST) + b"\x00"  # generation and base 0, no previous link, change 0 (genesis)
+    for key, following in ((root_key, root_next), (witness_key, witness_next)):
+        w.out += encode_key(key)
+        w.digest(following, "next_key")
+    w.out += bytes(9)  # nothing closed
+    w.digest(approval, "approval")
+    return attach_signatures(bytes(w.out), sign_root(bytes(w.out)), sign_witness(bytes(w.out)))
+
+
+def cosign_message(header: bytes, vrel: bytes) -> bytes:
+    """What the verifier signs (Lean ``vcosignMsg``): the VCOSIGN domain, the checkpoint digest, its own release."""
+    return VCOSIGN + sha3_512(header) + vrel
+
+
+def encode_cosign(vrel: bytes, signature: bytes) -> bytes:
+    """The cosign record a signed checkpoint may end with: VCOSIGN, the verifier release (64), u16 length, signature."""
+    w = _Writer(VCOSIGN)
+    w.digest(vrel, "vrel")
+    w.blob(signature, "signature", size=ML_DSA_87_SIGNATURE, low=ML_DSA_87_SIGNATURE)
+    return bytes(w.out)
+
+
+# ------------------------------------------------------------------ #3 TOKEN/v3
 
 
 @dataclass(frozen=True)
@@ -470,6 +517,7 @@ class TokenLeaf:
     seq: int
     issued_at: int
     expires_at: int
+    earlier_root: bytes = ZERO_DIGEST  # on the wire after bypass; nonzero exactly when ANSWERED (``earlier_root``)
 
 
 @dataclass(frozen=True)
@@ -507,6 +555,9 @@ def encode_token_leaf(leaf: TokenLeaf) -> bytes:
     w.digest(leaf.bypass, "bypass")
     if leaf.bypass != ZERO_DIGEST and not (leaf.outcome == "ALLOW" and leaf.flow in RULED):
         _fail("bypass")
+    w.digest(leaf.earlier_root, "earlier_root")
+    if (leaf.earlier_root == ZERO_DIGEST) != (leaf.outcome != "ANSWERED"):
+        _fail("earlier_root")
     for name in ("rule_version", "engine_release", "input_commitment"):
         w.digest(getattr(leaf, name), name)
     for name in ("decided_at", "epoch", "seq", "issued_at", "expires_at"):
@@ -552,7 +603,111 @@ def build_batch(
     return checkpoint, [Token(leaf, tuple(path), digest) for leaf, path in zip(leaves, paths)]
 
 
-# -------------------------------------------------------- #2 DECIDE-RESPONSE/v1
+# ---------------------------------------------------------------- EARLIER/v1
+
+
+def earlier_body(entries: Sequence[tuple[str, str, str, str]]) -> bytes:
+    """The list's bytes: a u16 count, then per entry its line id, the earlier program, payment id and line id as
+    identifiers; not empty, ascending by line id, at most one entry a line."""
+    if type(entries) is not tuple:
+        _fail("earlier")
+    w = _Writer(b"")
+    w.int(len(entries), 2, "earlier", low=1, high=MAX_LINES)
+    for entry in entries:
+        if type(entry) is not tuple or len(entry) != 4:
+            _fail("earlier")
+        for value in entry:
+            w.ident(value, "earlier")
+    _sorted_unique([entry[0].encode("ascii") for entry in entries], "earlier")
+    return bytes(w.out)
+
+
+def earlier_root(entries: Sequence[tuple[str, str, str, str]]) -> bytes:
+    """An ANSWERED leaf's ``earlier_root``: SHA3-512 of ``RR/GATE/EARLIER/v1`` and the list's bytes."""
+    return sha3_512(EARLIER + earlier_body(entries))
+
+
+def _field(data: bytes, at: int) -> tuple[bytes, int]:
+    """The u16-length-prefixed field of ``data`` at ``at``, and the offset after it."""
+    end = at + 2 + int.from_bytes(data[at : at + 2], "big")
+    if at + 2 > len(data) or end > len(data):
+        _fail("truncated")
+    return data[at + 2 : end], end
+
+
+def read_earlier(data: bytes, at: int = 0) -> tuple[tuple[tuple[str, str, str, str], ...], int]:
+    """The earlier list ``earlier_body`` wrote at ``at`` in ``data``, and the offset after it; any other bytes refuse."""
+    start, entries = at, []
+    if at + 2 > len(data):
+        _fail("earlier")
+    at += 2
+    try:
+        for _ in range(int.from_bytes(data[start:at], "big")):
+            entry = []
+            for _ in range(4):
+                value, at = _field(data, at)
+                entry.append(value.decode("ascii"))
+            entries.append(tuple(entry))
+    except UnicodeDecodeError:
+        _fail("earlier")
+    if earlier_body(tuple(entries)) != data[start:at]:  # canonical: not empty, identifiers, line ids ascending
+        _fail("earlier")
+    return tuple(entries), at
+
+
+_TOKEN_EARLIER: Final = {TOKEN: DIGEST, b"RR/GATE/TOKEN/v2\x00": 0}  # earlier-root width by prefix; v2, sealed before 2026-11-16, has none
+
+
+def _token_head(token: bytes) -> tuple[bytes, bytes, int, str, int]:
+    """The program and payment ids of the token bytes ``encode_token`` wrote, the offset of its outcome (after the lines
+    root), that outcome and its version's earlier-root width; another prefix, an outcome byte that names none, or ANSWERED
+    in a version without an earlier root, refuses."""
+    earlier = _TOKEN_EARLIER.get(token[: len(TOKEN)])
+    if earlier is None:
+        _fail("token")
+    program, at = _field(token, _field(token, len(TOKEN))[1])  # tenant, program
+    payment, at = _field(token, at + 4 + 1 + 8)  # shard, flow, revision
+    at = _field(token, _field(token, at + MEMBER_KEY)[1] + 8)[1] + DIGEST  # payee, amount, period, lines root
+    if at >= len(token) or not 1 <= token[at] <= len(OUTCOMES) or not earlier and OUTCOMES[token[at] - 1] == "ANSWERED":
+        _fail("outcome")  # ANSWERED came with the earlier root (TOKEN/v3): no v2 token names it
+    return program, payment, at, OUTCOMES[token[at] - 1], earlier
+
+
+def read_token_lines(token: bytes) -> tuple[str, str, bytes, str]:
+    """(program id, payment id, lines root, outcome) of the token bytes ``encode_token`` wrote; read, not checked."""
+    program, payment, at, outcome, _ = _token_head(token)
+    return program.decode("ascii"), payment.decode("ascii"), token[at - DIGEST : at], outcome
+
+
+def token_leaf(token: bytes) -> bytes:
+    """The leaf (``encode_token_leaf`` of the token's own version) the token bytes ``encode_token`` wrote begin with;
+    read, not checked."""
+    _, _, at, _, earlier = _token_head(token)
+    at += 2  # outcome, reason count
+    if at > len(token):
+        _fail("truncated")
+    for _ in range(token[at - 1]):
+        at = _field(token, at)[1]
+    at += 1 + 5 * DIGEST + earlier + 5 * 8  # authority; grant, bypass, rule version, engine release, input; earlier root; five times
+    if at > len(token):
+        _fail("truncated")
+    return token[:at]
+
+
+def read_token(token: bytes) -> tuple[str, str, tuple[str, ...], bytes]:
+    """(payment id, outcome, reason codes, earlier root) of the token bytes ``encode_token`` wrote, the zero digest for
+    a version without one; read, not checked."""
+    _, payment, at, outcome, earlier = _token_head(token)
+    reasons = []
+    at += 2
+    for _ in range(token[at - 1]):
+        code, at = _field(token, at)
+        reasons.append(code.decode("ascii"))
+    at += 1 + 2 * DIGEST  # authority, grant, bypass
+    return payment.decode("ascii"), outcome, tuple(reasons), token[at : at + DIGEST] if earlier else ZERO_DIGEST
+
+
+# -------------------------------------------------------- #2 DECIDE-RESPONSE/v2
 
 
 @dataclass(frozen=True)
@@ -564,6 +719,7 @@ class DecideResponse:
     token: Token | None = None
     reject_code: str | None = None
     retry_after_ms: int | None = None
+    earlier: tuple[tuple[str, str, str, str], ...] = ()  # after a carried token; not empty exactly when it is ANSWERED
 
 
 def encode_decide_response(response: DecideResponse) -> bytes:
@@ -582,6 +738,14 @@ def encode_decide_response(response: DecideResponse) -> bytes:
         token = encode_token(response.token)
         w.int(len(token), 4, "token", high=MAX_TOKEN_BYTES)
         w.out += token
+        if response.earlier == () and response.token.leaf.outcome != "ANSWERED":
+            w.int(0, 2, "earlier")
+        elif response.earlier != () and earlier_root(response.earlier) == response.token.leaf.earlier_root:
+            w.out += earlier_body(response.earlier)
+        else:
+            _fail("earlier")
+    elif response.earlier != ():
+        _fail("earlier")
     elif response.reject_code is not None:
         w.tag(REJECT_CODES, response.reject_code, "reject_code")
     else:

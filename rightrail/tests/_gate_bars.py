@@ -99,7 +99,7 @@ def with_head(data: bytes, head: bytes) -> bytes:
     """The saved frame with this store's head as the previous head (body offset 8), and the frame digest over the new body (FRAME_V1 section 2).
     A store's key is random, so a saved frame cannot carry the head: the sender puts it in between two answers (the time is reported)."""
     body = data[82:90] + head + data[154:]
-    return data[:18] + hashlib.sha3_512(b"RR/GATE/FRAME/v1\x00" + body).digest() + body
+    return data[:18] + hashlib.sha3_512(b"RR/GATE/FRAME2/v1\x00" + body).digest() + body
 
 
 def spawn_engine(store: Path) -> subprocess.Popen:

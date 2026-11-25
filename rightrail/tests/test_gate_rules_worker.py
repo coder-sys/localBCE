@@ -67,7 +67,7 @@ class RulesWorkerTests(fx.Scratch):
         w.JOB_MEMORY_CAP_BYTES = 200_000_000
         tmp = self.enterContext(self.scratch())
         self.assertTrue(w.run_frame(tmp, 0, b"x"))
-        big = decider.request_frame(g.feeds_of([]), 0, 1, 0, bytes(64), bytes(64), (0, 0), decider.Keys(b""), b"", b"", (), [b"x"] * 10_000_000)
+        big = decider.request_frame(g.feeds_of([]), 0, 1, 0, bytes(64), bytes(64), (0, 0, 0, bytes(64)), decider.Keys(b""), b"", b"", (), [b"x"] * 10_000_000)
         real_said, real_peak = process.ContainedWorker.diagnostic, process.ContainedWorker.peak_job_memory
 
         def said(worker):

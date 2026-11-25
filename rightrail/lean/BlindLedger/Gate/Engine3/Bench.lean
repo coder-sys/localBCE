@@ -4,10 +4,14 @@ import BlindLedger.Gate.Engine3.Sha3Range
 import BlindLedger.Gate.Engine3.ReadB
 import BlindLedger.Gate.Engine3.Chunk
 import BlindLedger.Gate.Engine3.Frame3
+import BlindLedger.Gate.Engine3.Step
+import BlindLedger.Gate.Engine3.Index
 import BlindLedger.Gate.Flat.Worker
 
 /-! Test-only checks of the key digests and the hashes (`key`, `sha3`, `hb`, `kat`: tests/test_sha3_known_answers.py) and of the
-    batch's entry slots against the model (`puts`: tests/test_engine3_recovery.py).  Not part of the engine. -/
+    batch's entry slots against the model (`puts`: tests/test_engine3_recovery.py), and the memory of the links files' head
+    tables (`links-mem M P`: two tables of `M` members and four of `P` providers, as `Engine3/HLinks.lean` fills them).  Not
+    part of the engine. -/
 
 open BlindLedger.Gate.Engine3
 open BlindLedger.Gate.Flat.Store
@@ -216,4 +220,30 @@ def main (args : List String) : IO UInt32 := do
       | _ => IO.println "?"
     return 0
   | ["puts"] => return if (← putsRun) then 0 else 1
-  | _ => IO.println "usage: engine3_bench key DIR | sha3 N | hb N | kat | puts"; return 2
+  | ["links-mem", m, p] =>
+    let (some m, some p) := (m.toNat?, p.toNat?) | return 2
+    Run.lazyCommit
+    let b0 ← Run.procMem 1
+    let w (i : Nat) : UInt64 × UInt64 := (mix (2 * i).toUInt64, mix (2 * i + 1).toUInt64)
+    let mut mr := Index.Idx.new 10
+    let mut mu := Index.Idx.new 10
+    for i in [0:m] do
+      mr := mr.insert (w i).1 (w i).2 i
+      mu := mu.insert (w i).1 (w i).2 i
+    let mut pr := Index.Idx.new 10
+    let mut pu := Index.Idx.new 10
+    let mut rr := Index.Idx.new 10
+    let mut ru := Index.Idx.new 10
+    for i in [0:p] do
+      let (h1, h2) := w (m + i)
+      pr := pr.insert h1 h2 i
+      pu := pu.insert h1 h2 i
+      rr := rr.insert h1 h2 i
+      ru := ru.insert h1 h2 i
+    let b1 ← Run.procMem 2
+    let gain (i : Nat) : Int := (getN b1 (8 * i) 8 : Int) - getN b0 (8 * i) 8
+    let tm := mr.bytes + mu.bytes
+    let tp := pr.bytes + pu.bytes + rr.bytes + ru.bytes
+    IO.println s!"LINKS_MEM members {m} providers {p} table bytes members {tm} providers {tp} total {tm + tp}; bytes gained: private {gain 0} working set {gain 1} allocator committed {gain 2}"
+    return 0
+  | _ => IO.println "usage: engine3_bench key DIR | sha3 N | hb N | kat | puts | links-mem M P"; return 2

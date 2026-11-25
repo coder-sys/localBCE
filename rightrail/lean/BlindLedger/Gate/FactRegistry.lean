@@ -1043,6 +1043,27 @@ theorem dayBefore_lt {d : Nat} (h : d ≠ 0) : dayBefore d < d := by
   repeat' split
   all_goals omega
 
+/-- Every valid date before a valid date `c` is at or before the day before `c`. -/
+theorem le_dayBefore {D c : Nat} (hD : Rules.validDate D = true) (hc : Rules.validDate c = true) (h : D < c) :
+    D ≤ dayBefore c := by
+  have hDm := (monthDays_le (D / 10000) (D / 100 % 100)).1
+  have hc1 : 1 ≤ Rules.monthDays (c / 10000) (c / 100 % 100 - 1) := by
+    unfold Rules.monthDays
+    repeat' split
+    all_goals omega
+  unfold Rules.validDate at hD hc
+  simp only [Bool.and_eq_true, decide_eq_true_eq] at hD hc
+  obtain ⟨⟨⟨⟨⟨_, _⟩, _⟩, _⟩, _⟩, hDd⟩ := hD
+  unfold dayBefore
+  split
+  · omega
+  · split
+    · by_cases hy : D / 10000 = c / 10000 ∧ D / 100 % 100 = c / 100 % 100 - 1
+      · rw [hy.1, hy.2] at hDd
+        omega
+      · omega
+    · split <;> omega
+
 #guard dayBefore 20260301 == 20260228 && dayBefore 20280301 == 20280229 && dayBefore 20260101 == 20251231 &&
   dayBefore 20260401 == 20260331 && dayBefore 20260315 == 20260314 && dayBefore 0 == 0
 
@@ -1114,12 +1135,14 @@ theorem dayBefore_valid {d : Nat} (hd : Rules.validDate d = true) (hmin : 10101 
         omega
       · omega
 
-/-- The `until` of a row of fseq `f`: the day before the `cfrom` of the source's full receipt with the lowest
-    `fseq` above `f` (`0` when that receipt states all of history, so the row speaks for no date), `OPEN`
-    when there is none.  It depends on `fseq` and the receipts only, never on arrival order. -/
+/-- The `until` of a row of fseq `f`: the day before the least `cfrom` of the source's full receipts with an
+    `fseq` above `f` (`0` when one of them states all of history, so the row speaks for no date), `OPEN`
+    when there is none.  Every newer full file states each date from its own `cfrom` on, and `cfrom` need
+    not rise with `fseq`, so the least one counts.  It depends on `fseq` and the receipts only, never on
+    arrival order. -/
 def lateUntil (rs : List Receipt) (f : Nat) : Nat :=
-  match pickMin (rs.filter fun a => a.cover == 1 && f < a.fseq) with
-  | some F => dayBefore F.cfrom
+  match ((rs.filter fun a => a.cover == 1 && f < a.fseq).map (·.cfrom)).min? with
+  | some c => dayBefore c
   | none => OPEN
 
 theorem lateUntil_open (rs : List Receipt) (f : Nat) (h : ∀ a ∈ rs, a.cover = 1 → a.fseq ≤ f) :
@@ -1130,20 +1153,33 @@ theorem lateUntil_open (rs : List Receipt) (f : Nat) (h : ∀ a ∈ rs, a.cover 
     simp only [Bool.and_eq_true, beq_iff_eq, decide_eq_true_eq] at hc
     have := h a ha hc.1
     omega
-  simp [lateUntil, this, pickMin]
+  simp [lateUntil, this]
 
 theorem lateUntil_cut (rs : List Receipt) (f : Nat) (F : Receipt) (hF : F ∈ rs) (h1 : F.cover = 1)
     (h2 : f < F.fseq) :
     ∃ G ∈ rs, G.cover = 1 ∧ f < G.fseq ∧ lateUntil rs f = dayBefore G.cfrom ∧
-      ∀ H ∈ rs, H.cover = 1 → f < H.fseq → G.fseq ≤ H.fseq := by
-  have hne : rs.filter (fun a => a.cover == 1 && f < a.fseq) ≠ [] :=
-    List.ne_nil_of_mem (List.mem_filter.mpr ⟨hF, by simp [h1, h2]⟩)
-  obtain ⟨G, hG⟩ := pickMin_isSome hne
-  obtain ⟨hG1, hG2⟩ := pickMin_spec hG
+      ∀ H ∈ rs, H.cover = 1 → f < H.fseq → G.cfrom ≤ H.cfrom := by
+  have hmem : F.cfrom ∈ (rs.filter fun a => a.cover == 1 && f < a.fseq).map (·.cfrom) :=
+    List.mem_map.mpr ⟨F, List.mem_filter.mpr ⟨hF, by simp [h1, h2]⟩, rfl⟩
+  obtain ⟨c, hc⟩ := Option.isSome_iff_exists.mp (List.isSome_min?_of_mem hmem)
+  obtain ⟨hc1, hc2⟩ := List.min?_eq_some_iff.mp hc
+  obtain ⟨G, hG1, rfl⟩ := List.mem_map.mp hc1
   obtain ⟨hGm, hGp⟩ := List.mem_filter.mp hG1
   simp only [Bool.and_eq_true, beq_iff_eq, decide_eq_true_eq] at hGp
-  refine ⟨G, hGm, hGp.1, hGp.2, by simp [lateUntil, hG], fun H hH hc hf => hG2 H ?_⟩
-  exact List.mem_filter.mpr ⟨hH, by simp [hc, hf]⟩
+  refine ⟨G, hGm, hGp.1, hGp.2, by simp [lateUntil, hc], fun H hH hhc hf => hc2 _ ?_⟩
+  exact List.mem_map.mpr ⟨H, List.mem_filter.mpr ⟨hH, by simp [hhc, hf]⟩, rfl⟩
+
+/-- A late row never speaks for a date that a newer full file of its source states: a date at or after that
+    file's `cfrom` (a real date, so not `0`). -/
+theorem lateUntil_lt (rs : List Receipt) (f D : Nat) (F : Receipt) (hF : F ∈ rs) (h1 : F.cover = 1)
+    (h2 : f < F.fseq) (hD : F.cfrom ≤ D) (hD0 : 0 < D) : lateUntil rs f < D := by
+  obtain ⟨G, _, _, _, hu, hm⟩ := lateUntil_cut rs f F hF h1 h2
+  have hGF := hm F hF h1 h2
+  rw [hu]
+  by_cases h0 : G.cfrom = 0
+  · simp [h0, dayBefore, hD0]
+  · have := dayBefore_lt h0
+    omega
 
 /-- Full-file absence ends statements only from a full receipt that left the source usable: no `DROP`, no
     `REUSED`, and no row of the file whose subject could not be read (§3.3). -/
@@ -1197,9 +1233,15 @@ def mkRcpt (src cover asof cfrom fseq tag rows frows : Nat) (reader : Nat := 1) 
     admitted := rows, same := 0, quar := 0, scope := ident 21 (if cover == 1 || inScope == 1 then "MEDICAID" else ""),
     frows := frows }
 
+-- `cfrom` need not rise with `fseq`: a newer full file that states from an earlier date cuts a late row there.
+#guard lateUntil [mkRcpt 1 1 20260301 20260301 20 1 0 0, mkRcpt 1 1 20260215 20260215 30 2 0 0] 10 == 20260214
+
 -- A gap at the next number is found at once, whatever the size of the range.
 #guard gapAt [mkRcpt 2 2 20260101 0 5 1 0 0] 5 9223372036854775807 &&
   !gapAt [mkRcpt 2 2 20260101 0 6 1 0 0, mkRcpt 2 2 20260101 0 7 2 0 0] 5 8
+
+-- A late row speaks only before the least `cfrom` above it, not the `cfrom` of the next `fseq`.
+#guard lateUntil [mkRcpt 1 1 20260301 20260301 30 1 0 0, mkRcpt 1 1 20260201 20260201 40 2 0 0] 10 == 20260131
 
 inductive Step where
   | adm (r : Receipt) (k : Nat)
@@ -1249,7 +1291,9 @@ def script : List Step :=
    .frame 20260101 20260101 (mkRcpt 1 2 20260101 0 20260102000000009 29 0 0) 0,
    .adm (mkRcpt 1 4 20260101 0 20260101000000100 99 0 0 3 0 1) 0,
    .adm (mkRcpt 1 4 20260102 0 20260101000000100 1 0 0 3 0 1) 0,
-   .adm (mkRcpt 1 4 20260101 0 20260101000000100 1 0 0 3 0) 0]
+   .adm (mkRcpt 1 4 20260101 0 20260101000000100 1 0 0 3 0) 0,
+   .adm (mkRcpt 1 1 20260215 20260215 20260101000000600 30 500 500) 1000, .cut 1 20260101000000100,
+   .cut 1 20260101000000300, .cut 1 20260101000000400, .cut 1 20260101000000500, .cut 1 20260101000000600]
 
 def expected : List String :=
   ["noReceipt", "admitted 0 0", "fresh", "age", "future", "already 0", "refused reused", "reused", "fresh",
@@ -1258,7 +1302,8 @@ def expected : List String :=
    "admitted 8 0", "fresh", "future", "refused day", "admitted 9 0", "admitted 10 0", "already 10",
    "refused reread", "refused record", "refused record", "refused unregistered", "refused record",
    "refused record", "admitted 11 0", "refused record", "refused record", "refused record", "refused reread",
-   "refused reread", "refused reread"]
+   "refused reread", "refused reread", "admitted 12 1", "20260214", "20260214",
+   "20260214", "20260214", "99991231"]
 
 #guard (script.foldl (runStep [e1, e2, e3]) ({}, [])).2 == expected
 

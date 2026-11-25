@@ -22,7 +22,7 @@ with patch.object(sys, "argv", [str(SCRIPT)]):
 
 class JournalFrameTests(unittest.TestCase):
     def test_actual_rrf4_frame_is_counted(self):
-        trailer = bytearray(835)
+        trailer = bytearray(627 + compare.chain.AUTH)  # the journal trailer's fixed parts plus the authority record
         trailer[100] = 1
         trailer[105] = 1
         trailer[174] = 1
@@ -41,7 +41,7 @@ class JournalFrameTests(unittest.TestCase):
                     compare.events(path)
 
     def test_incomplete_final_frame_is_reported_as_torn_tail_coverage(self):
-        raw = b"RRF4" + struct.pack("<III", 0, 0, 835) + b"partial"
+        raw = b"RRF4" + struct.pack("<III", 0, 0, 627 + compare.chain.AUTH) + b"partial"
         with tempfile.TemporaryDirectory() as td:
             path = Path(td) / "log"
             path.write_bytes(raw)

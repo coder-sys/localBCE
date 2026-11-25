@@ -9,7 +9,8 @@ open Lean
     initializer and `@[csimp]` theorem.  It exits 1 on any axiom outside `standardAxioms` and `axiomsAllowed`
     (so `sorryAx` and `Lean.ofReduceBool`, the axiom behind `native_decide`, fail), on any partial,
     implemented_by, extern, opaque, unsafe, fixpoint (`partial_fixpoint`) or loop (`while`/`repeat`, `IO.iterate`, `for` over a `Stream`) constant that `allowed` does not name, on `main` without compiled code, and
-    on an `Init` or `Std` module that resolves outside the toolchain. -/
+    on an `Init` or `Std` module that resolves outside the toolchain.  The one thing accepted by structure rather than by name is the
+    compiler's own `I.ctorIdx` with its unsafe `I.ctorIdx._impl` (`ctorIdxPair`). -/
 
 /-- Lean's own logic. -/
 def standardAxioms : List Name := [`propext, `Classical.choice, `Quot.sound]
@@ -35,10 +36,8 @@ def core (m : Name) : Allow :=
     it passes the gate only so a reviewer can decide, and the report names it. -/
 def allowed : List Allow := [
   core `Init, core `Std,
-  { name := `BlindLedger.Financial.WorkerCli.reserveArena, module := false, kinds := ["extern", "opaque"],
-    reason := "the worker's mimalloc arena reservation, one C call, no decision logic" },
-  { name := `BlindLedger.Gate.Engine.OneProc.reserveArena, module := false, kinds := ["extern", "opaque"],
-    reason := "gate_engine's mimalloc arena reservation, one C call, no decision logic" },
+  { name := `BlindLedger.Gate.Obligations.openExclusive, module := false, kinds := ["extern", "opaque"],
+    reason := "obligations_shard log open with no sharing: CRT _wsopen (_SH_DENYRW) on a path converted by kernel32 MultiByteToWideChar, asm-labelled C, no decision logic" },
   { name := `BlindLedger.Gate.Flat.Io.pgOpen, module := false, kinds := ["extern", "opaque"],
     reason := "gate_engine flat history file open: CRT _wopen on a path converted by kernel32 MultiByteToWideChar, asm-labelled C, no decision logic" },
   { name := `BlindLedger.Gate.Flat.Io.pgRead, module := false, kinds := ["extern", "opaque"],
@@ -51,6 +50,8 @@ def allowed : List Allow := [
     reason := "gate_engine flat history file CRT _chsize_s(fd, len), asm-labelled C, no decision logic" },
   { name := `BlindLedger.Gate.Flat.Io.pgClose, module := false, kinds := ["extern", "opaque"],
     reason := "gate_engine flat history file CRT _close(fd), asm-labelled C, no decision logic" },
+  { name := `BlindLedger.Gate.Flat.Io.pgReadAt, module := false, kinds := ["extern", "opaque"],
+    reason := "obligations_shard log record read at an offset: kernel32 ReadFile with an OVERLAPPED offset, asm-labelled C, no decision logic" },
   { name := `BlindLedger.Financial.serveWorker, module := false, kinds := ["fixpoint"],
     reason := "the worker's frame loop, unbounded by design (answers until end of input); kernel-visible body, serveWorker_run and serveWorker_stateless" }]
 
@@ -64,6 +65,73 @@ def trusted (m : Name) : Bool := (`Init).isPrefixOf m || (`Std).isPrefixOf m
 /-- Init/Std `partial` helpers that loop on a caller's continuation: project code that names one is an unbounded loop (`IO.iterate`;
     `for x in stream`, whose `Std.Stream.forIn.visit` runs while `next?` answers `some`).  Init and Std themselves may use them. -/
 def loopHelpers : List Name := [`IO.iterate, `Std.instForInOfMonadOfStream, `Std.Stream.forIn]
+
+-- CTORIDX-PAIR-BEGIN (tools/stmt_hash.lean carries the same text; tests/test_tcb_gate.py compares them)
+/-! Lean 4.36 (Lean/Meta/Constructions/CtorIdx.lean, `mkCtorIdx` and `mkCtorIdxImpl`) gives every inductive type `I` with more than
+    one constructor a function `I.ctorIdx : I → Nat`, defined by `I.casesOn`, and makes the compiler run the unsafe
+    `I.ctorIdx._impl`, which reads the constructor tag with `getObjTagNat`.  The pair is accepted by its structure and never by its
+    name: any code can define a `Foo.ctorIdx._impl` with another body. -/
+
+/-- Strips `k` lambdas, leaving loose variables; `none` if there are fewer. -/
+def stripLams : Expr → Nat → Option Expr
+  | e, 0 => some e
+  | .lam _ _ b _, k + 1 => stripLams b k
+  | _, _ => none
+
+/-- `fun xs x => getObjTagNat.{l} (I xs) x`, built from the binders of `ctorIdx`'s type (`k` of them, the last is `x`). -/
+def tagReader (l : Level) : Expr → Nat → Expr
+  | .forallE n t b bi, k + 1 =>
+    .lam n t (if k == 0 then mkApp2 (mkConst ``getObjTagNat [l]) (t.liftLooseBVars 0 1) (.bvar 0) else tagReader l b k) bi
+  | e, _ => e
+
+/-- The value `mkCtorIdx` gives `I.ctorIdx` for `I` with several constructors: `fun params indices x => I.casesOn params
+    (fun indices x => Nat) indices x (fun fields => 0) (fun fields => 1) ...`, with the fields' binder types left free. -/
+def casesOnShape (find? : Name → Option ConstantInfo) (info : InductiveVal) (v : Expr) : Bool :=
+  let n := info.numParams + info.numIndices
+  match stripLams v (n + 1) with
+  | none => false
+  | some b =>
+    let args := b.getAppArgs
+    let us := info.levelParams.map mkLevelParam
+    b.getAppFn == mkConst (Name.mkStr info.name "casesOn") (Level.one :: us)
+      && args.size == info.numParams + 1 + info.numIndices + 1 + info.ctors.length
+      && (List.range info.numParams).all (fun i => args[i]! == .bvar (n - i))
+      && (stripLams args[info.numParams]! (info.numIndices + 1)) == some (mkConst ``Nat)
+      && (List.range info.numIndices).all (fun j => args[info.numParams + 1 + j]! == .bvar (n - info.numParams - j))
+      && args[info.numParams + 1 + info.numIndices]! == .bvar 0
+      && (info.ctors.zipIdx).all fun (c, k) =>
+        match find? c with
+        | some (.ctorInfo ci) => (stripLams args[info.numParams + 2 + info.numIndices + k]! ci.numFields) == some (.lit (.natVal ci.cidx))
+        | _ => false
+
+/-- `I.ctorIdx` and `I.ctorIdx._impl` are exactly what the compiler builds for the inductive type `I` with several constructors:
+    `I.ctorIdx` is a safe definition by `I.casesOn`, implemented by `I.ctorIdx._impl` and by nothing else, and the unsafe
+    `I.ctorIdx._impl` has the same type and levels and is the tag read of `ctorIdx`'s own binders. -/
+def ctorIdxPair (find? : Name → Option ConstantInfo) (implBy? : Name → Option Name) (indName : Name) : Bool :=
+  match find? indName, find? (Name.mkStr indName "ctorIdx"), find? (Name.mkStr (Name.mkStr indName "ctorIdx") "_impl") with
+  | some (.inductInfo info), some (.defnInfo d), some (.defnInfo i) =>
+    let n := info.numParams + info.numIndices + 1
+    let rec sortOf : Expr → Nat → Option Level
+      | .sort l, 0 => some l
+      | .forallE _ _ b _, k + 1 => sortOf b k
+      | _, _ => none
+    info.ctors.length > 1 && d.safety == .safe && i.safety == .unsafe
+      && implBy? d.name == some i.name
+      && d.levelParams == info.levelParams && i.levelParams == info.levelParams
+      && i.type.eqv d.type
+      && casesOnShape find? info d.value
+      && (match sortOf info.type (n - 1) with
+          | some l => i.value.eqv (tagReader l d.type n)
+          | none => false)
+  | _, _, _ => false
+
+/-- A constant `c` carrying escape hatch `k` that is half of a compiler-built `ctorIdx` pair (see `ctorIdxPair`). -/
+def isCtorIdxPair (find? : Name → Option ConstantInfo) (implBy? : Name → Option Name) (c : Name) (k : String) : Bool :=
+  match c with
+  | .str ind "ctorIdx" => k == "implemented_by" && ctorIdxPair find? implBy? ind
+  | .str (.str ind "ctorIdx") "_impl" => k == "unsafe" && ctorIdxPair find? implBy? ind
+  | _ => false
+-- CTORIDX-PAIR-END
 
 /-- `c._unsafe_rec` is the body of partial def `c`: walked for what it reaches, but `c`'s own `partial` entry covers it. -/
 def kindsOf (env : Environment) (c : Name) (ci : ConstantInfo) : Array String := Id.run do
@@ -139,13 +207,31 @@ def checkExe (list : Bool) (sysroot : System.FilePath) (csimps : Array Compiler.
   -- functions, bare `initialize do ...` included); every `@[csimp]` theorem, whose proof licenses the compiler's replacement of one constant by another.
   let inits := (env.constants.fold (init := #[]) fun acc c _ => if hasInitAttr env c || isIOUnitInitFn env c then acc.push c else acc).qsort Name.lt
   let initFns := inits.filterMap (getInitFnNameFor? env)
-  let (order, called) := walk env (#[`main] ++ inits ++ initFns ++ csimps.map (·.thmName))
+  -- The `@[csimp]` entries each imported module outside Init/Std stored in its .olean: `importModules` without `loadExts`
+  -- still records every module's extension entries, read here as data, so no project initializer runs.
+  let mut own : Array Compiler.CSimp.Entry := #[]
+  for i in [:env.header.moduleNames.size] do
+    unless trusted env.header.moduleNames[i]! do
+      for e in Compiler.CSimp.ext.ext.getModuleEntries env i do
+        own := own.push (match e with | .global e | .scoped _ e => e)
+  let csimps := csimps ++ own
+  -- A `local csimp` entry is never stored, yet it changes how the rest of its module compiles, and `csimp` accepts any constant (theorem,
+  -- axiom or definition) whose type is an equality of two constants (`@c1 = @c2`). So every such constant a non-Init/Std module declares
+  -- is a root too, whatever its attributes.
+  let mut eqConsts : Array Name := #[]
+  for i in [:env.header.moduleNames.size] do
+    unless trusted env.header.moduleNames[i]! do
+      for ci in env.header.moduleData[i]!.constants do
+        if let some (_, l, r) := ci.type.eq? then
+          if l.isConst && r.isConst then eqConsts := eqConsts.push ci.name
+  let (order, called) := walk env (#[`main] ++ inits ++ initFns ++ csimps.map (·.thmName) ++ eqConsts)
   let cs := order.qsort Name.lt
   let mut axs : Array Name := #[]
   let mut counts : Array Nat := allowed.toArray.map fun _ => 0
   let mut bad : Array String := ← strayModules env sysroot
   if (IR.findEnvDecl env `main).isNone then bad := bad.push "no compiled code for main"
   let mut todos : Array String := #[]
+  let mut pairs := 0
   for c in cs do
     let some ci := env.find? c | continue
     if ci matches .axiomInfo _ then
@@ -156,6 +242,11 @@ def checkExe (list : Bool) (sysroot : System.FilePath) (csimps : Array Compiler.
           if (edges env r).1.contains c && !trusted (moduleOf env r) then bad := bad.push s!"axiom {c} [used by {r} in {moduleOf env r}]"
       else bad := bad.push s!"axiom {c}"
     for k in kindsOf env c ci do
+      -- A toolchain (`Init`/`Std`) pair is accepted here too, by the same structure; the `core` entry would also cover it.
+      if isCtorIdxPair env.find? (Compiler.getImplementedBy? env) c k then
+        if k == "unsafe" then pairs := pairs + 1  -- one per pair: its `_impl` half
+        if list then IO.println s!"    {k} {c}"
+        continue
       match allowed.findIdx? (matches? env c k) with
       | some i =>
         if allowed[i]!.reason.startsWith "VIOLATION-TODO" then todos := todos.push s!"{k} {c}"
@@ -166,16 +257,18 @@ def checkExe (list : Bool) (sysroot : System.FilePath) (csimps : Array Compiler.
   IO.println s!"{exe}: {cs.size} constants walked; axioms {axs.toList}"
   IO.println s!"  startup initializers: {inits.size}, {project.size} in BlindLedger {project.toList}"
   let stale := (csimps.filter (called.contains ·.fromDeclName)).map (·.fromDeclName)
-  IO.println s!"  csimp: {csimps.size} theorems walked; replaced constants still called by compiled code: {stale.toList}"
+  IO.println s!"  csimp: {csimps.size} theorems walked, {own.size} from project modules {(own.map (·.thmName)).qsort Name.lt |>.toList}; {eqConsts.size} constant-equality constants also rooted; replaced constants still called by compiled code: {stale.toList}"
   for (e, n) in allowed.zip counts.toList do
     if n > 0 then IO.println s!"  allowlist {e.name}{if e.module then ".*" else ""} x{n}: {e.reason}"
+  if pairs > 0 then
+    IO.println s!"  compiler-built ctorIdx pairs x{pairs}: `I.ctorIdx` by `I.casesOn` and its unsafe `I.ctorIdx._impl` tag read, each pair accepted by structure (Lean/Meta/Constructions/CtorIdx.lean)"
   for t in todos do IO.println s!"  VIOLATION-TODO {t}"
   for b in bad do IO.println s!"  VIOLATION {b}"
   IO.println s!"  {bad.size} violations"
   return bad.isEmpty
 
-/-- Extension state is loaded only with `loadExts`, which would run a module's initializers, so the `@[csimp]` table is
-    read from the toolchain's own `Init` and `Std` (no project code runs); a project `@[csimp]` fails the Python test. -/
+/-- Extension state is loaded only with `loadExts`, which would run a module's initializers, so the core `@[csimp]` table is
+    read from the toolchain's own `Init` and `Std`; `checkExe` adds the project's entries from its modules' stored data. -/
 unsafe def main (args : List String) : IO UInt32 := do
   let sysroot ← findSysroot
   initSearchPath sysroot

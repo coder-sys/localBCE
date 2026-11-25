@@ -33,7 +33,8 @@ def _cp(handle: str, epoch: int, counter: int, *, first: int = 0, start: int = 0
     linked to ``prev`` with chain head ``head``: its bytes, its tokens and its digest."""
     cp, tokens = fx.build([replace(leaf, epoch=epoch, tenant_id=tenant) for leaf in fx.batch_leaves(first, 2, start)], prev, head, counter)
     header = gate.encode_checkpoint_header(cp)
-    return gate.attach_signature(header, signer.sign(handle, header)), [gate.encode_token(t) for t in tokens], gate.checkpoint_digest(cp)
+    return (gate.attach_signature(header, signer.sign(handle, header)) + fx.cosign_record(header, tenant),
+            [gate.encode_token(t) for t in tokens], gate.checkpoint_digest(cp))
 
 _KILL = """
 import os, sys
@@ -44,7 +45,7 @@ from app import right_rail_gate_signer as signer
 from tests import test_right_rail_gate_formats as fx
 from tests import test_right_rail_gate_producer as pt
 from tests._test_only_counter import TestOnlyCounter
-store = payer.PayerStore({path!r}, root_keys={{}}, grants=())
+store = payer.PayerStore({path!r}, links={{}}, grants=())
 store.send(fx.payment_request(1), transmit=lambda data: os._exit(9))
 """
 
@@ -53,7 +54,7 @@ class PayerTests(fx.Scratch):
     """The payer reference adapter: pin before send, Lean decides every release, anything else holds."""
 
     def _store(self, tmp: str, grants=((fx.TENANT, fx.D[3], (fx.D[4],), (fx.D[6],)),)) -> payer.PayerStore:
-        return self.track(payer.PayerStore(Path(tmp) / "payer.sqlite3", root_keys={t: fx.keypair(f"root-{t}")[0] for t in (fx.TENANT, fx.OTHER)}, grants=grants))
+        return self.track(payer.PayerStore(Path(tmp) / "payer.sqlite3", links={t: fx.link(t) for t in (fx.TENANT, fx.OTHER)}, grants=grants))
 
     def test_kill_between_pin_persist_and_send_leaves_a_pin_and_no_command(self) -> None:
         with self.scratch() as tmp:
@@ -128,10 +129,10 @@ class PayerTests(fx.Scratch):
 
     def _ready(self, tmp: str, send: bool = True) -> tuple[gate.DecideRequest, list[bytes]]:
         """A stored checkpoint of payments 0 and 1 (and payment 0 sent), in a closed store: payment 0's request, both tokens."""
-        handle, root_pk, cert = fx.custody(tmp)
+        handle, held, cert = fx.custody(tmp)
         store = self._store(tmp)
         store.install_cert(cert)
-        signed, tokens = fx.signed_genesis(handle, seal=(root_pk, cert))
+        signed, tokens = fx.signed_genesis(handle, seal=(held, cert))
         self.assertEqual(store.store_checkpoint(signed), "stored")
         request = fx.payment_request(0)
         if send:
@@ -155,7 +156,7 @@ class PayerTests(fx.Scratch):
             for i, bad in enumerate(((fx.D[3], *approves), ("-" + fx.TENANT, fx.D[3], *approves), (fx.TENANT.encode(), fx.D[3], *approves))):
                 fresh = Path(tmp) / f"bad{i}.sqlite3"
                 with self.subTest(bad=bad[0]), self.assertRaises(gate.GateCodecError):
-                    payer.PayerStore(fresh, root_keys={}, grants=(bad,))
+                    payer.PayerStore(fresh, links={}, grants=(bad,))
                 self.assertFalse(fresh.exists())  # refused before any write
 
     def test_release_requires_the_exact_command_to_have_been_sent(self) -> None:
@@ -185,7 +186,7 @@ class PayerTests(fx.Scratch):
         barrier, outcomes = threading.Barrier(len(calls)), []
 
         def run(call: Callable[[payer.PayerStore], object]) -> None:
-            store = payer.PayerStore(Path(tmp) / "payer.sqlite3", root_keys={fx.TENANT: fx.keypair(f"root-{fx.TENANT}")[0]},
+            store = payer.PayerStore(Path(tmp) / "payer.sqlite3", links={fx.TENANT: fx.link(fx.TENANT)},
                                      grants=((fx.TENANT, fx.D[3], (fx.D[4],), (fx.D[6],)),))
             barrier.wait()
             outcomes.append(call(store))
@@ -267,9 +268,10 @@ class PayerTests(fx.Scratch):
 
     @staticmethod
     def _self_cert(epoch: int, key: bytes | None = None, rnd: bytes = bytes(32)) -> bytes:
-        """A certificate signed by the tenant's root: of ``key``, by default the root key certifying itself."""
-        body = gate.encode_key_cert(fx.TENANT, epoch, fx.SHARDS, key or fx.keypair(f"root-{fx.TENANT}")[0])
-        return gate.attach_signature(body, fx.det_sign(f"root-{fx.TENANT}", body, rnd))
+        """A certificate signed by the tenant's root and witness keys: of ``key``, by default one nothing else uses."""
+        body = gate.encode_key_cert(fx.TENANT, epoch, fx.link_digest(fx.TENANT), (fx.SHARDS,), key or bytes([9]) * gate.ML_DSA_87_PUBLIC_KEY,
+                                    fx.keypair(f"verifier-{fx.TENANT}")[0])
+        return fx.certify(body, fx.TENANT, rnd)
 
     def test_concurrent_installs_of_one_epoch_install_one_key(self) -> None:
         """Four connections install four keys for one tenant and epoch: each is answered on the witnesses under the write
@@ -345,6 +347,18 @@ class PayerTests(fx.Scratch):
                 path.chmod(stat.S_IREAD | stat.S_IWRITE)
             self.assertIsNotNone(self._store(tmp).release(request, token, now=fx.NOW))  # released once, never again
 
+    def test_a_stored_link_that_no_longer_verifies_fails_the_open(self) -> None:
+        """The stored chain is replayed through Lean at open: a link row whose signature was changed in the file is refused."""
+        with self.scratch() as tmp:
+            self._store(tmp).close()
+            db = sqlite3.connect(Path(tmp) / "payer.sqlite3", isolation_level=None)
+            db.execute("DROP TRIGGER links_update")  # the file's own guard against it; whoever edits the file can drop it
+            (stored,) = db.execute("SELECT link FROM links WHERE tenant=?", (fx.TENANT,)).fetchone()
+            db.execute("UPDATE links SET link=? WHERE tenant=?", (stored[:-1] + bytes([stored[-1] ^ 1]), fx.TENANT))
+            db.close()
+            with self.assertRaisesRegex(payer.GatePayerError, "link_refused"):
+                self._store(tmp)
+
     def test_a_first_open_cut_short_before_releases_is_completed_by_the_next_open(self) -> None:
         names = list(payer._TABLES)
         self.assertLess(names.index("closed"), names.index("releases"))  # releases never exists without closed
@@ -394,16 +408,24 @@ class PayerTests(fx.Scratch):
 
     def test_a_second_genesis_is_recorded_as_a_fork(self) -> None:
         with self.scratch() as tmp:
-            handle, root_pk, cert = fx.custody(tmp)
+            handle, held, cert = fx.custody(tmp)
             store = self._store(tmp)
             store.install_cert(cert)
             outcomes = [store.store_checkpoint(fx.signed_genesis(handle, n)[0]) for n in (0, 5)]  # two geneses, one equivocating writer
             self.assertEqual(outcomes, ["stored", "fork"])
             self.assertEqual(store.holds(), [])  # nothing is released or held by storing
 
-    def test_a_root_signed_self_certificate_still_fences_and_equivocates(self) -> None:
-        """M4 refuses the root key only as a checkpoint key: a root-signed certificate of the root key itself still
-        raises its tenant's fence, and with another key for the same epoch still blocks that epoch, in either order."""
+    def test_a_certificate_of_the_root_key_is_refused(self) -> None:
+        """No certificate may name a key of the held link (key reuse), though the root signs it: it is refused, no row."""
+        with self.scratch() as tmp:
+            store = self._store(tmp)
+            with self.assertRaisesRegex(payer.GatePayerError, "cert_refused"):
+                store.install_cert(self._self_cert(fx.EPOCH, fx.keypair(f"root-{fx.TENANT}")[0]))
+            self.assertEqual(self._count(tmp, "certs"), [0])
+
+    def test_a_root_signed_certificate_of_another_key_fences_and_equivocates(self) -> None:
+        """A root-signed certificate of an unused key raises its tenant's fence, and with another key for the same epoch
+        blocks that epoch, in either order."""
         with self.scratch() as tmp:
             handle, _, cert = fx.custody(tmp)
             store = self._store(tmp)
@@ -539,11 +561,11 @@ class PayerTests(fx.Scratch):
 
             def open_(where: str, name: str, epoch: int) -> producer.ShardProducer:
                 (Path(tmp) / where).mkdir(exist_ok=True)
-                handle, root_pk, cert = keys[name]
+                handle, held, cert = keys[name]
                 return self.track(producer.ShardProducer(
                     Path(tmp) / where / "shard.sqlite3", mark_path=Path(tmp) / where / "shard.mark", tenant_id=fx.TENANT,
-                    shard_id=fx.SHARD, epoch=epoch, handle=handle, root_pk=root_pk, key_cert=cert,
-                    payer_newest=gate.ZERO_DIGEST, counter=tpm, floors=lambda: (0, 0)))
+                    shard_id=fx.SHARD, epoch=epoch, handle=handle, link=held, cosign=fx.cosigner(),  key_cert=cert,
+                    payer_newest=gate.ZERO_DIGEST, counter=tpm, floors=lambda: (0, 0, 0, bytes(64))))
 
             seal = lambda p, start, at: pt.sealed(p, fx.batch_pays(2, start), state_digest=fx.STATE, created_at=fx.NOW + at, adds=b"")
             a = open_("a", "e7", fx.EPOCH)

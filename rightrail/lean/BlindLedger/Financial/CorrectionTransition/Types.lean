@@ -146,7 +146,7 @@ def correctionPaidWellFormed (paid : List CorrectionPaid) : Bool :=
     paid.all (fun entry => idWellFormed entry.actionId && entry.paidCents ≥ 1 &&
       amountWellFormed entry.paidCents)
 
-/-! Paid-so-far from the rows (design: docs/CORE_REDESIGN.md, "Lean paid sum"):
+/-! Paid-so-far from the rows (design: ARCHITECTURE.md, "Lean paid sum"):
     O(n + k log k + a).  Lean, not the caller, decides what each link pays. -/
 
 /-- One entry per link, in link order: the request it pays and the cents its

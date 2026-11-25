@@ -5,13 +5,40 @@ import BlindLedger.Gate.Producer
 /-! payer-batch-release-v1 (design 2026-10-01, `rrb/designs/payer-batch-release-goals.lean`; definitions are its
     final text); §B generalised to every checkpoint version after review MEDIUM-1 (2026-10-07).  `VerifyCli`
     runs `publishOkTree` for PUBLISH.
-      §A  RELEASE-BATCH: install certificates and verify each checkpoint once, then decide every item
+      §A  The state a frame decides on, and RELEASE-BATCH: admit the certificates and verify each checkpoint once,
+          then decide every item
       §B  one-tree PUBLISH (`publishOkTree`), checked against `publishOk`
     Theorems: `BatchTheorems`. -/
 
 namespace BlindLedger.Gate
 
-/-! ## §A  RELEASE-BATCH -/
+/-! ## §A  Frames and RELEASE-BATCH -/
+
+/-- A frame's check of a carried certificate: it stands under one of the frame's links (`Cosign.certUnder`: the
+    link it names, of its tenant and generation, whose root and witness keys both signed it), with its keys apart
+    from that link's.  The payer's store recorded the certificate from `Cosign.installCert`'s answer, which judged
+    it against the whole chain; a frame re-checks what one link can show. -/
+def underLinks (c : Crypto) (links : List Cosign.Link) (e : Cosign.KeyCert) : Bool :=
+  links.any fun l => Cosign.certUnder c l e && Cosign.keysApart c.hash [l] e
+
+/-- A frame's step on a decoded certificate: one that passes the frame's check `ok` and whose body is not held
+    enters the state by `Cosign.record`, the step `Cosign.installCert` ends in, with that answer.  Any other
+    leaves the state. -/
+def admit (ok : Cosign.KeyCert → Bool) (s : PayerState) (e : Cosign.KeyCert) :
+    PayerState × Option Cosign.CertAnswer :=
+  if ok e && !Cosign.held s.toAuth e then
+    ({ s with toAuth := (Cosign.record s.toAuth e).1 }, some (Cosign.record s.toAuth e).2)
+  else (s, none)
+
+/-- The certificate state a frame builds from its certificates, in the order the store recorded them. -/
+def replay (ok : Cosign.KeyCert → Bool) (h : List Cosign.KeyCert) : PayerState :=
+  h.foldl (fun s e => (admit ok s e).1) emptyState
+
+/-- The state a frame decides on: the certificates, equivocations and fence of `s`, under the chains and link
+    conflicts of `a`, each tenant's fence raised to `a`'s. -/
+def onLinks (s : PayerState) (a : Cosign.Auth) : PayerState :=
+  { s with chainOf := a.chainOf, retired := a.retired, conflicts := a.conflicts,
+           fence := fun t => max (s.fence t) (a.fence t) }
 
 /-- The payment a DECIDE-REQUEST asks about (moved out of `VerifyCli.release`, which built it inline). -/
 def Request.payment (r : Request) : Payment :=
@@ -27,52 +54,53 @@ structure Item where
   released : Bool
   pin : Option Bytes
 
-/-- What a RELEASE-BATCH frame carries once for all its items.  Bytes only, except fork evidence (both checkpoints of
-    each recorded fork), which the frame parser decodes (an undecodable one is a FRAME error: dropping it could only unblock). -/
+/-- What a RELEASE-BATCH frame carries once for all its items.  `links`: the links its certificates name; `auth`:
+    the tenant's chain, link conflicts and fence floor.  The rest is bytes, except fork evidence (both checkpoints
+    of each recorded fork), which the frame parser decodes (an undecodable one is a FRAME error: dropping it could
+    only unblock). -/
 structure ReleaseRun where
+  links : List Cosign.Link
+  auth : Cosign.Auth
   certs : List Bytes
   evidence : List (Stored × Stored)
   checkpoints : List Bytes
   now : Nat
   grants : List Grant
 
-/-- The installed certificates: `installCert` on each that decodes, in order, then only those that pass
-    `certChainOk` kept.  Fence and equivocations are `installCert`'s, so a root-signed certificate whose key is
-    not usable (a root key certified as an epoch key) still raises its tenant's fence, still blocks the epoch
-    it conflicts with, and still keeps a later certificate of its epoch out, but is never installed.  Replaces
-    `VerifyCli.certState`, which refused the whole frame on one undecodable certificate; such a certificate can
-    never pass `certChainOk`, so skipping it is exactly an `installCert` that refuses. -/
-def certsInstalled (c : Crypto) (certs : List Bytes) : PayerState :=
-  let s := (certs.filterMap decodeKeyCert).foldl (fun s e => (installCert c s e).1) emptyState
-  { s with certs := s.certs.filter c.certChainOk }
+/-- The frame's certificate state: `admit` on each certificate that decodes, in order, under the frame's links.
+    A certificate that does not decode, or does not stand under a carried link, is skipped: it could never be
+    admitted. -/
+def certsInstalled (c : Crypto) (r : ReleaseRun) : PayerState :=
+  onLinks (replay (underLinks c r.links) (r.certs.filterMap Cosign.decode)) r.auth
 
 /-- The signature step for one checkpoint: ML-DSA-87 under an installed certificate of its tenant and epoch
-    (`storeCheckpoint`'s check 2), against no stored checkpoint.  Fork detection is STORE's job, done when
-    the payer stored it; RELEASE reads the recorded forks from `evidence`. -/
+    (`storeCheckpoint`'s check 2), against no stored checkpoint and no recorded block.  Fork detection is STORE's
+    job, done when the payer stored it; RELEASE reads the recorded forks from `evidence`, and every block again
+    at the item's check 11. -/
 def verified (c : Crypto) (s0 : PayerState) (b : Bytes) : Option Stored :=
-  (storeCheckpoint c { s0 with checkpoints := [], forked := [], equivocations := [] } b).bind
+  (storeCheckpoint c { s0 with checkpoints := [], forked := [], equivocations := [], conflicts := [] } b).bind
     (·.checkpoints.head?)
 
-/-- The state one item is decided on: certificates, fence and equivocations from the frame's certificates,
+/-- The state one item is decided on: certificates, links, fence and equivocations from the frame,
     the given verified checkpoints, the frame's fork evidence, clock and grants, and the item's own rows. -/
 def itemState (s0 : PayerState) (cps : List Stored) (r : ReleaseRun) (it : Item) : PayerState :=
   { s0 with checkpoints := cps, forked := r.evidence, now := r.now, grants := r.grants,
             released := if it.released then [it.payment.key] else [],
             pins := it.pin.toList.map fun m => (it.payment.key, m) }
 
-/-- The single-token RELEASE (mode 0x05 today) as a function: install the certificates, verify the one
-    checkpoint, decide the one item.  Kept only as the specification `releaseBatch` is proved against. -/
+/-- The single-token RELEASE as a function: admit the certificates, verify the one checkpoint, decide the one
+    item.  Kept only as the specification `releaseBatch` is proved against. -/
 def releaseOne (c : Crypto) (r : ReleaseRun) (cp : Bytes) (it : Item) : Option Failure :=
-  let s0 := certsInstalled c r.certs
+  let s0 := certsInstalled c r
   firstFailure c (itemState s0 (verified c s0 cp).toList r it) it.payment it.token
 
 /-- Every checkpoint of the frame that verifies, each verified once. -/
 def verifiedAll (c : Crypto) (r : ReleaseRun) : List Stored :=
-  r.checkpoints.filterMap (verified c (certsInstalled c r.certs))
+  r.checkpoints.filterMap (verified c (certsInstalled c r))
 
 /-- RELEASE-BATCH: one answer per item, in item order; `none` is ACCEPT, `some f` is HOLD f. -/
 def releaseBatch (c : Crypto) (r : ReleaseRun) (items : List Item) : List (Option Failure) :=
-  let s0 := certsInstalled c r.certs
+  let s0 := certsInstalled c r
   let cps := verifiedAll c r
   items.map fun it => firstFailure c (itemState s0 cps r it) it.payment it.token
 
@@ -123,17 +151,17 @@ def tokenFitsTree (c : Crypto) (k : Nat) (x : Stored) (lv : List (List Bytes)) (
 /-- `publishOk` with each token decoded once and the tree built once: about 2k hashes per 1,000 tokens
     instead of about 11k, with the same checkpoint decoder (`storedOf`).  `gate_verify` PUBLISH runs this from
     B4; `publishOk` stays the specification (`publishOkTree_eq`). -/
-def publishOkTree (rootPk cert : Bytes) (last : Option Bytes) (new : Bytes) (tokens : List Bytes)
+def publishOkTree (link : Cosign.Link) (cert : Bytes) (last : Option Bytes) (new : Bytes) (tokens : List Bytes)
     (tpm : Nat) : Bool :=
-  match decodeKeyCert cert, storedOf sha3 new, tokens.mapM decodeToken with
+  match Cosign.decode cert, storedOf sha3 new, tokens.mapM decodeToken with
   | some e, some n, some ts =>
     let d := domain "MERKLE-NODE"
     let lv := levels sha3 d treeFuel (ts.map fun t => leafHash sha3 d t.leafBytes)
-    accepts rootPk cert new && last.all (fun b => (storedOf sha3 b).isSome) &&
+    accepts link cert new && last.all (fun b => (storedOf sha3 b).isSome) &&
       follows (last.bind (storedOf sha3)) n && n.checkpoint.counter == tpm + 1 && ts.length == n.checkpoint.count &&
       lv.getLast? == some [n.checkpoint.tokenRoot] &&
       (ts.zipIdx.all fun (t, i) =>
-        tokenFitsTree (realCrypto [(n.checkpoint.tenantId, rootPk)]) e.shardCount n lv i t) &&
+        tokenFitsTree realCrypto e.shardCount n lv i t) &&
       ascending (ts.map (·.leaf.paymentId))
   | _, _, _ => false
 

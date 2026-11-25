@@ -33,20 +33,36 @@ private theorem firstFailure_cps {c : Crypto} {s0 : PayerState} {cps cps' : List
     rw [hb]
     rfl
 
-/-- `verified` without the store: the checkpoint decodes and verifies under an installed usable certificate of
-    its tenant and epoch. -/
+/-- `verified` without the store: the checkpoint decodes, and one installed usable certificate of its tenant
+    and epoch verifies both its signature and the verifier's cosignature. -/
 private theorem verified_eq (c : Crypto) (s0 : PayerState) (b : Bytes) :
     verified c s0 b = (decodeCheckpoint b).bind fun x =>
       if s0.certs.any (fun e => e.tenantId == x.checkpoint.tenantId && e.epoch == x.checkpoint.epoch &&
-          (c.keyUsable e && c.sigOk e.publicKey x.header x.signature)) then
+          c.verify e.key x.header x.signature &&
+          x.cosign.any (cosignOk c e (c.hash x.header))) then
         some ⟨c.hash x.header, x.checkpoint, b⟩
       else none := by
   unfold verified storeCheckpoint
   cases decodeCheckpoint b with
   | none => rfl
   | some x =>
+    have hBA : (s0.certs.any (fun e => e.tenantId == x.checkpoint.tenantId && e.epoch == x.checkpoint.epoch &&
+          c.verify e.key x.header x.signature &&
+          x.cosign.any (cosignOk c e (c.hash x.header)))) = true →
+        (s0.certs.any (fun e => e.tenantId == x.checkpoint.tenantId && e.epoch == x.checkpoint.epoch &&
+          c.verify e.key x.header x.signature)) = true := by
+      intro h2
+      obtain ⟨e, he, hp⟩ := List.any_eq_true.1 h2
+      simp only [Bool.and_eq_true] at hp
+      exact List.any_eq_true.2 ⟨e, he, by simp only [Bool.and_eq_true]; exact hp.1⟩
     dsimp only
-    split <;> simp_all [blocked]
+    simp only [Option.bind_some]
+    generalize (s0.certs.any (fun e => e.tenantId == x.checkpoint.tenantId && e.epoch == x.checkpoint.epoch &&
+          c.verify e.key x.header x.signature &&
+          x.cosign.any (cosignOk c e (c.hash x.header)))) = B at hBA ⊢
+    generalize (s0.certs.any (fun e => e.tenantId == x.checkpoint.tenantId && e.epoch == x.checkpoint.epoch &&
+          c.verify e.key x.header x.signature)) = A at hBA ⊢
+    cases A <;> cases B <;> simp_all [blocked, Cosign.certBlocked, Cosign.linkBlocked]
 
 private theorem verified_digest {c : Crypto} {s0 : PayerState} {b : Bytes} {st : Stored}
     (h : verified c s0 b = some st) : ∃ x, decodeCheckpoint b = some x ∧ st.digest = c.hash x.header := by
@@ -152,7 +168,7 @@ theorem releaseBatch_eq {c : Crypto} {r : ReleaseRun} {items : List Item}
 theorem releaseBatch_spec {c : Crypto} {r : ReleaseRun} {items : List Item} {i : Nat} {it : Item}
     (hi : items[i]? = some it) :
     (releaseBatch c r items)[i]? = some none ↔
-      verifyToken c (itemState (certsInstalled c r.certs) (verifiedAll c r) r it) it.payment it.token = true := by
+      verifyToken c (itemState (certsInstalled c r) (verifiedAll c r) r it) it.payment it.token = true := by
   simp only [releaseBatch, List.getElem?_map, hi, Option.map_some, Option.some.injEq]
   exact firstFailure_none
 
@@ -176,51 +192,62 @@ theorem releaseBatch_cp_isolation {c : Crypto} {r r' : ReleaseRun} {items : List
   cases r
   cases r'
   simp only [ReleaseRun.mk.injEq, true_and] at hs
-  obtain ⟨rfl, rfl, rfl, rfl⟩ := hs
+  obtain ⟨rfl, rfl, rfl, rfl, rfl, rfl⟩ := hs
   rfl
 
-/-- Installed certificates came from the frame, each root-signed (what `installCert` checks). -/
-private theorem foldl_install_certs (c : Crypto) :
-    ∀ (es : List EpochCert) (s : PayerState) (e : EpochCert),
-      e ∈ (es.foldl (fun s e => (installCert c s e).1) s).certs → e ∈ s.certs ∨ (e ∈ es ∧ c.rootSigned e = true)
+/-- A certificate of the frame's state came from the frame's list and passed the frame's check. -/
+private theorem foldl_admit_certs (ok : Cosign.KeyCert → Bool) :
+    ∀ (es : List Cosign.KeyCert) (s : PayerState) (e : Cosign.KeyCert),
+      e ∈ (es.foldl (fun s e => (admit ok s e).1) s).certs → e ∈ s.certs ∨ (e ∈ es ∧ ok e = true)
   | [], _, _, h => Or.inl h
   | a :: es, s, e, h => by
-    rcases foldl_install_certs c es _ e h with h | h
-    · rw [installCert_certs] at h
-      split at h
-      · rename_i ha
-        rcases List.mem_cons.1 h with rfl | h
-        · simp only [Bool.and_eq_true] at ha
-          exact Or.inr ⟨List.mem_cons_self, ha.1⟩
-        · exact Or.inl h
-      · exact Or.inl h
+    rcases foldl_admit_certs ok es _ e h with h | h
+    · have h1 : e ∈ (admit ok s a).1.certs := h
+      unfold admit at h1
+      by_cases ha : (ok a && !Cosign.held s.toAuth a) = true
+      · rw [if_pos ha] at h1
+        simp only [Bool.and_eq_true] at ha
+        have h' : e ∈ (Cosign.record s.toAuth a).1.certs := h1
+        rw [Cosign.record_certs] at h'
+        split at h'
+        · rcases List.mem_cons.1 h' with rfl | h'
+          · exact Or.inr ⟨List.mem_cons_self, ha.1⟩
+          · exact Or.inl h'
+        · exact Or.inl h'
+      · rw [if_neg ha] at h1
+        exact Or.inl h1
     · exact Or.inr ⟨List.mem_cons_of_mem _ h.1, h.2⟩
 
-theorem certsInstalled_mem {c : Crypto} {certs : List Bytes} {e : EpochCert}
-    (h : e ∈ (certsInstalled c certs).certs) :
-    c.certChainOk e = true ∧ ∃ b ∈ certs, decodeKeyCert b = some e := by
-  obtain ⟨h, hc⟩ := List.mem_filter.1 h
-  rcases foldl_install_certs c _ _ e h with h | ⟨hm, -⟩
-  · simp [emptyState] at h
+/-- The certificates a frame decides on are certificates the frame carried, each verified in this call under a
+    link the frame carried. -/
+theorem certsInstalled_mem {c : Crypto} {r : ReleaseRun} {e : Cosign.KeyCert}
+    (h : e ∈ (certsInstalled c r).certs) :
+    underLinks c r.links e = true ∧ ∃ b ∈ r.certs, Cosign.decode b = some e := by
+  have h' : e ∈ (replay (underLinks c r.links) (r.certs.filterMap Cosign.decode)).certs := h
+  rcases foldl_admit_certs _ _ _ e h' with h | ⟨hm, hc⟩
+  · simp [emptyState, Cosign.Auth.empty] at h
   · exact ⟨hc, List.mem_filterMap.1 hm⟩
 
 /-- No stored "verified" flag: an ACCEPT was earned in this call.  The token's checkpoint is among the
     frame's bytes, its ML-DSA-87 signature verified here under a certificate of the same tenant and epoch,
-    and that certificate's chain to the root verified here.  The inputs are bytes; nothing the adapter
-    stored stands in for either check. -/
+    the verifier's cosignature of it verified here under that certificate's verifier key, and that
+    certificate's root and witness signatures verified here under a link the frame carries.  The certificate
+    and the checkpoint are bytes; nothing the adapter stored stands in for any of these checks.  The links are
+    the store's: `Cosign.installLink` verified each once, when it was installed. -/
 theorem releaseBatch_accept_verified {c : Crypto} {r : ReleaseRun} {items : List Item} {i : Nat} {it : Item}
     (hi : items[i]? = some it) (ha : (releaseBatch c r items)[i]? = some none) :
     ∃ t b x e, decodeToken it.token = some t ∧ b ∈ r.checkpoints ∧ decodeCheckpoint b = some x ∧
-      c.hash x.header = t.checkpointDigest ∧ (∃ cb ∈ r.certs, decodeKeyCert cb = some e) ∧
-      c.certChainOk e = true ∧ e.tenantId = x.checkpoint.tenantId ∧ e.epoch = x.checkpoint.epoch ∧
-      c.sigOk e.publicKey x.header x.signature = true := by
+      c.hash x.header = t.checkpointDigest ∧ (∃ cb ∈ r.certs, Cosign.decode cb = some e) ∧
+      underLinks c r.links e = true ∧ e.tenantId = x.checkpoint.tenantId ∧ e.epoch = x.checkpoint.epoch ∧
+      c.verify e.key x.header x.signature = true ∧
+      ∃ v, x.cosign = some v ∧ cosignOk c e (c.hash x.header) v = true := by
   have hv := (releaseBatch_spec hi).1 ha
   unfold verifyToken at hv
   cases ht : decodeToken it.token with
   | none => simp [ht] at hv
   | some t =>
     simp only [ht] at hv
-    cases hbt : batchOf (itemState (certsInstalled c r.certs) (verifiedAll c r) r it) t with
+    cases hbt : batchOf (itemState (certsInstalled c r) (verifiedAll c r) r it) t with
     | none => simp [hbt] at hv
     | some st =>
       have hf : (verifiedAll c r).find? (·.digest == t.checkpointDigest) = some st := hbt
@@ -241,7 +268,14 @@ theorem releaseBatch_accept_verified {c : Crypto} {r : ReleaseRun} {items : List
           obtain ⟨e, he, hm⟩ := List.any_eq_true.1 hany
           simp only [Bool.and_eq_true, beq_iff_eq] at hm
           obtain ⟨hco, hcb⟩ := certsInstalled_mem he
-          exact ⟨t, b, x, e, rfl, hb, hx, hdig, hcb, hco, hm.1.1, hm.1.2, hm.2.2⟩
+          have hcs : ∃ v, x.cosign = some v ∧ cosignOk c e (c.hash x.header) v = true := by
+            have h2 := hm.2
+            cases hcx : x.cosign with
+            | none => simp [hcx] at h2
+            | some v =>
+              rw [hcx] at h2
+              exact ⟨v, rfl, h2⟩
+          exact ⟨t, b, x, e, rfl, hb, hx, hdig, hcb, hco, hm.1.1.1, hm.1.1.2, hm.1.2, hcs⟩
         · simp at hvb
 
 private theorem zip_map_self {α β : Type} (f : α → β) :
@@ -267,7 +301,7 @@ theorem releaseBatch_once {c : Crypto} {r : ReleaseRun} {items : List Item} {ten
   · intro p hp hrel
     obtain ⟨it, -, rfl⟩ := List.mem_map.1 hp
     dsimp only at hrel ⊢
-    cases hff : firstFailure c (itemState (certsInstalled c r.certs) (verifiedAll c r) r it) it.payment
+    cases hff : firstFailure c (itemState (certsInstalled c r) (verifiedAll c r) r it) it.payment
         it.token with
     | some f => rfl
     | none =>
@@ -278,7 +312,7 @@ theorem releaseBatch_once {c : Crypto} {r : ReleaseRun} {items : List Item} {ten
       | none => simp [htk] at hv
       | some t =>
         simp only [htk] at hv
-        cases hbt : batchOf (itemState (certsInstalled c r.certs) (verifiedAll c r) r it) t with
+        cases hbt : batchOf (itemState (certsInstalled c r) (verifiedAll c r) r it) t with
         | none => simp [hbt] at hv
         | some st =>
           simp only [hbt, Bool.and_eq_true] at hv
@@ -467,6 +501,7 @@ private theorem storedOfAny_count {b : Bytes} {x : Stored} (h : storedOf sha3 b 
     simp only [pSignedCheckpoint, StateT.run_bind] at hr
     obtain ⟨c, hc, hr⟩ := bind_some hr
     obtain ⟨s, -, hr⟩ := bind_some hr
+    obtain ⟨o, -, hr⟩ := bind_some hr
     simp only [StateT.run_pure, Option.pure_def, Option.some.injEq, Prod.mk.injEq] at hr
     obtain ⟨rfl, -⟩ := hr
     have hp := consumed_run hc
@@ -505,10 +540,10 @@ private theorem mapM_decode : ∀ {tokens : List Bytes} {ts : List Token}, token
 
 /-- Soundness, the only direction safety needs: the one-tree check never publishes what `publishOk`
     refuses, so `publishOk_sound` carries over unchanged. -/
-theorem publishOkTree_sound {rootPk cert new : Bytes} {last : Option Bytes} {tokens : List Bytes} {tpm : Nat}
-    (h : publishOkTree rootPk cert last new tokens tpm = true) : publishOk rootPk cert last new tokens tpm = true := by
+theorem publishOkTree_sound {link : Cosign.Link} {cert new : Bytes} {last : Option Bytes} {tokens : List Bytes} {tpm : Nat}
+    (h : publishOkTree link cert last new tokens tpm = true) : publishOk link cert last new tokens tpm = true := by
   unfold publishOkTree at h
-  cases he : decodeKeyCert cert with
+  cases he : Cosign.decode cert with
   | none => simp [he] at h
   | some e =>
     cases hn : storedOf sha3 new with
@@ -541,7 +576,7 @@ theorem publishOkTree_sound {rootPk cert new : Bytes} {last : Option Bytes} {tok
             leafHash sha3 (domain "MERKLE-NODE") ts[i].leafBytes := by
           simp [List.getD_eq_getElem?_getD, hit]
         rw [e1, e2] at hpv
-        show tokenFits (realCrypto [(n.checkpoint.tenantId, rootPk)]) e.shardCount n i b = true
+        show tokenFits realCrypto e.shardCount n i b = true
         unfold tokenFits
         rw [hd]
         simp only [inBatch, verifyPath, Bool.and_eq_true, beq_iff_eq, decide_eq_true_eq]
@@ -764,12 +799,12 @@ private theorem tree_agrees {H : Bytes → Bytes} {d : Bytes} (hlen : ∀ z, (H 
 
 /-- Completeness: whatever `publishOk` accepts, the one-tree check accepts too, unless the batch's tokens
     carry a SHA3-512 collision, which `publishCollision` returns. -/
-theorem publishOkTree_complete {rootPk cert new : Bytes} {last : Option Bytes} {tokens : List Bytes} {tpm : Nat}
-    (h : publishOk rootPk cert last new tokens tpm = true) :
-    publishOkTree rootPk cert last new tokens tpm = true ∨
+theorem publishOkTree_complete {link : Cosign.Link} {cert new : Bytes} {last : Option Bytes} {tokens : List Bytes} {tpm : Nat}
+    (h : publishOk link cert last new tokens tpm = true) :
+    publishOkTree link cert last new tokens tpm = true ∨
       ∃ x y, publishCollision tokens = some (x, y) ∧ x ≠ y ∧ sha3 x = sha3 y := by
   unfold publishOk at h
-  cases he : decodeKeyCert cert with
+  cases he : Cosign.decode cert with
   | none => simp [he] at h
   | some e =>
   cases hn : storedOf sha3 new with
@@ -781,7 +816,7 @@ theorem publishOkTree_complete {rootPk cert new : Bytes} {last : Option Bytes} {
   have hdec : ∀ b ∈ tokens, (decodeToken b).isSome := by
     intro b hb
     obtain ⟨i, hi⟩ := List.mem_iff_getElem?.1 hb
-    have hf : tokenFits (realCrypto [(n.checkpoint.tenantId, rootPk)]) e.shardCount n i b = true :=
+    have hf : tokenFits realCrypto e.shardCount n i b = true :=
       hall (b, i) (List.mem_zipIdx_iff_getElem?.2 hi)
     unfold tokenFits at hf
     cases hd : decodeToken b with
@@ -796,13 +831,13 @@ theorem publishOkTree_complete {rootPk cert new : Bytes} {last : Option Bytes} {
       pathRoot sha3 (domain "MERKLE-NODE") treeFuel i n.checkpoint.count
         (leafHash sha3 (domain "MERKLE-NODE") t.leafBytes) t.siblings = some n.checkpoint.tokenRoot ∧
       ∀ lv, t.siblings = pathOf lv i →
-        tokenFitsTree (realCrypto [(n.checkpoint.tenantId, rootPk)]) e.shardCount n lv i t = true := by
+        tokenFitsTree realCrypto e.shardCount n lv i t = true := by
     intro t i hti
     have hit : ts[i]? = some t := List.mem_zipIdx_iff_getElem?.1 hti
     have hlt : i < ts.length := (List.getElem?_eq_some_iff.1 hit).1
     obtain ⟨b, hb⟩ : ∃ b, tokens[i]? = some b := ⟨tokens[i]'(by omega), List.getElem?_eq_getElem (by omega)⟩
     have hd : decodeToken b = some t := by rw [hget i b hb, hit]
-    have hf : tokenFits (realCrypto [(n.checkpoint.tenantId, rootPk)]) e.shardCount n i b = true :=
+    have hf : tokenFits realCrypto e.shardCount n i b = true :=
       hall (b, i) (List.mem_zipIdx_iff_getElem?.2 hb)
     unfold tokenFits at hf
     rw [hd] at hf
@@ -855,16 +890,16 @@ theorem publishOkTree_complete {rootPk cert new : Bytes} {last : Option Bytes} {
     exact (htok t i hti).2.2.2 _ (hpath i t.siblings ⟨t, hti, rfl⟩)
 
 /-- The exe's PUBLISH is `publishOk`, exactly, unless the batch's own hash inputs collide (then it refuses). -/
-theorem publishOkTree_eq {rootPk cert new : Bytes} {last : Option Bytes} {tokens : List Bytes} {tpm : Nat}
+theorem publishOkTree_eq {link : Cosign.Link} {cert new : Bytes} {last : Option Bytes} {tokens : List Bytes} {tpm : Nat}
     (hc : publishCollision tokens = none) :
-    publishOkTree rootPk cert last new tokens tpm = publishOk rootPk cert last new tokens tpm := by
-  cases ha : publishOk rootPk cert last new tokens tpm with
+    publishOkTree link cert last new tokens tpm = publishOk link cert last new tokens tpm := by
+  cases ha : publishOk link cert last new tokens tpm with
   | true =>
     rcases publishOkTree_complete ha with h | ⟨_, _, h, -⟩
     · exact h
     · simp [hc] at h
   | false =>
-    cases ht : publishOkTree rootPk cert last new tokens tpm with
+    cases ht : publishOkTree link cert last new tokens tpm with
     | false => rfl
     | true => exact absurd (publishOkTree_sound ht) (by simp [ha])
 
@@ -873,9 +908,9 @@ theorem publishOkTree_eq {rootPk cert new : Bytes} {last : Option Bytes} {tokens
 /-- A crash between the first seal's signature commit and the counter's first increment heals: the store's newest
     sealed checkpoint is the one PUBLISH accepted with no predecessor, so with the counter unwritten and that
     checkpoint's own counter the start catches up (one increment, read back) instead of refusing. -/
-theorem first_seal_crash_heals {rootPk cert new : Bytes} {tokens : List Bytes} {tpm : Nat}
-    (h : publishOkTree rootPk cert none new tokens tpm = true) :
-    custodyOf rootPk cert new none = .catchUp := by
+theorem first_seal_crash_heals {link : Cosign.Link} {cert new : Bytes} {tokens : List Bytes} {tpm : Nat}
+    (h : publishOkTree link cert none new tokens tpm = true) :
+    custodyOf link cert new none = .catchUp := by
   obtain ⟨ha, -, e, n, -, hn, hf, -⟩ := publishOk_sound (publishOkTree_sound h)
   have hf' : follows none n = true := by simpa using hf
   have h1 := follows_none_counter hf'
@@ -885,7 +920,7 @@ theorem first_seal_crash_heals {rootPk cert new : Bytes} {tokens : List Bytes} {
     value `a` was sealed at (the catch-up of `first_seal_crash_heals`, or `a`'s own increment), nor on top of `a`:
     with `custodyStep_unwritten` (no seal at an unwritten counter over a sealed store), no second counter-1
     checkpoint is publishable over the store; only a store deleted before the first increment starts over. -/
-theorem counter_one_once {r₁ r₂ c₁ c₂ a b : Bytes} {l₁ l₂ : Option Bytes} {ts₁ ts₂ : List Bytes} {t₁ t₂ : Nat}
+theorem counter_one_once {r₁ r₂ : Cosign.Link} {c₁ c₂ a b : Bytes} {l₁ l₂ : Option Bytes} {ts₁ ts₂ : List Bytes} {t₁ t₂ : Nat}
     (h₁ : publishOkTree r₁ c₁ l₁ a ts₁ t₁ = true) (h₂ : publishOkTree r₂ c₂ l₂ b ts₂ t₂ = true)
     (moved : t₁ < t₂ ∨ l₂ = some a) :
     (storedOf sha3 b).map (·.checkpoint.counter) ≠ some 1 := by

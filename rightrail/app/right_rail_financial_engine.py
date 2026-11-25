@@ -1136,9 +1136,9 @@ def run_offset_authorization_v1(*, request: bytes) -> dict[str, Any]:
 # --- Live evaluator: one long-lived Lean worker decides every owner evaluation ---
 
 EVALUATOR_PATH: Final[Path] = Path(__file__).resolve().parents[1] / "artifacts" / "engine-evaluator" / "blind_financial_worker.exe"
-EVALUATOR_ARTIFACT_SIZE_BYTES: Final[int] = 6_510_592
+EVALUATOR_ARTIFACT_SIZE_BYTES: Final[int] = 7_425_536
 EVALUATOR_ARTIFACT_SHA256: Final[bytes] = bytes.fromhex(
-    "2AC5F5EB783AC99111B4A28B35DF6F23F47E773C2F10A281C01BC02E878841D8"
+    "4BAE13D7ADCA231AC2EB66BCA4BA4906DADF824AF91C9BB2C020E1068E4A1213"
 )
 EVALUATOR_JOB_MEMORY_CAP_BYTES: Final[int] = 1_000_000_000
 EVALUATOR_TIMEOUT_SECONDS: Final[float] = 5.0

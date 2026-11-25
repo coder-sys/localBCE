@@ -136,7 +136,7 @@ async function handle(m, S) {
       if (["warning", "error"].includes(message.type())) S.diagnostics.push({ type: message.type(), text: message.text() });
     });
     const response = await page.goto("http://127.0.0.1:" + m.port + (m.path || "/"));
-    await settle(S);
+    if (m.wait !== false) await settle(S);
     return { html: await response.text(), view: await view(S) };
   }
   if (m.op === "post") {
@@ -560,7 +560,7 @@ def _open_rows(view: dict[str, Any], expected: int) -> int:
         raise RuntimeError(f"scorecard_open_rows_disagree:{count}!={expected}")
     return count
 
-# Each task tag names the role it is performed as (Art. XIII.4: roles are
+# Each task tag names the role it is performed as (Art. XII.7: roles are
 # real, so the journey now opens each task's page as that role would).
 _TASK_ROLE = {"director": "director", "analyst": "analyst", "approver": "approver",
               "auditor": "auditor", "replacement": "operator"}
@@ -614,7 +614,7 @@ class _Task:
             raise RuntimeError("scorecard_command_unavailable:" + name)
         self.step("click: " + name)
         status = self.browser.last_view["texts"].get("command-status", "")
-        # The declared success text (Art. XIII.4) is checked first: a control's own
+        # The declared success text (Art. XII.7) is checked first: a control's own
         # wording (e.g. reject-offset's "You rejected the offset...") may legitimately use a
         # failure-shaped word, so only fall back to the denylist once it disagrees.
         expected = _MODEL["controls"][name]["responses"]["success"]["message"].replace("{amount}", "$3,000.00").split(".")[0]

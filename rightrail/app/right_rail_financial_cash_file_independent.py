@@ -18,7 +18,7 @@ from app import right_rail_financial_owner_independent as ledger
 
 
 _MAX_CENTS = 2**63 - 1
-# docs/CORE_REDESIGN.md "Cash-file capacity": a file is one run_batch (at most 500 commands), and each payment
+# ARCHITECTURE.md "Cash-file capacity": a file is one run_batch (at most 500 commands), and each payment
 # re-binds every earlier payment of its item, so one file names an item at most MAX_ITEM_ROWS times.
 MAX_ROWS = 500
 MAX_ITEM_ROWS = 6
@@ -329,7 +329,7 @@ class CashFileCheck:
         self.intake = None if intake is None else _parsed(ledger._canonical(intake))
         self._context = _freeze(context)
         self._source = _freeze(source)
-        manifest = _parsed(context["baseline_bytes"])  # B: the owner's history-export manifest (docs/CORE_REDESIGN.md "History segments")
+        manifest = _parsed(context["baseline_bytes"])  # B: the owner's history-export manifest (ARCHITECTURE.md "History segments")
         try:  # the export verifier's own manifest checks: shape, digest, meta, authority, scope, identity
             meta = ledger._verify_manifest(manifest, context["expected_authority"], context["expected_scope"])[0]
         except ledger.IndependentFinancialError as error:
@@ -575,7 +575,7 @@ class CashFileCheck:
             "cash_delta_cents": recorded_cents, "proofSuiteId": None,
             "production_usable": False, "activation": False,
         }
-        if self._preview:  # never committed: the owner rolls the copy back (docs/CORE_REDESIGN.md "Cash-file capacity")
+        if self._preview:  # never committed: the owner rolls the copy back (ARCHITECTURE.md "Cash-file capacity")
             _require(not connection.execute("PRAGMA foreign_key_check").fetchall(), "cash_file_failed")  # the deferred keys COMMIT would check
         return touched  # the obligations verified above, with nothing written since
 

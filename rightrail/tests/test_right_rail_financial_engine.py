@@ -19,7 +19,7 @@ class RightRailFinancialEngineTests(unittest.TestCase):
         engine._close_evaluator()
 
     def test_correction_request_vector_is_blfcmd03_and_its_mutants_are_refused(self) -> None:
-        # Lean paid sum (docs/CORE_REDESIGN.md): the request carries payment links, never paid totals.
+        # Lean paid sum (ARCHITECTURE.md "Lean paid sum"): the request carries payment links, never paid totals.
         vectors = REPO_ROOT / "artifacts" / "engine-correction" / "vectors"
         request, expected_result = (vectors / "request.bin").read_bytes(), (vectors / "result.expected.bin").read_bytes()
         self.assertEqual(hashlib.sha256(request).digest(), engine.CORRECTION_TRANSITION_REQUEST_VECTOR_SHA256)

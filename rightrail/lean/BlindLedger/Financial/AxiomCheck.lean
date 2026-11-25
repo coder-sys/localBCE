@@ -265,7 +265,7 @@ namespace BlindLedger.Financial
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Batch.respondBatchBA_eq
 /-- info: 'BlindLedger.Financial.Batch.respondBatch_map' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Batch.respondBatch_map
-/-- info: 'BlindLedger.Financial.Batch.parseBatchRequest_exact' depends on axioms: [propext, Quot.sound] -/
+/-- info: 'BlindLedger.Financial.Batch.parseBatchRequest_exact' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Batch.parseBatchRequest_exact
 /-- info: 'BlindLedger.Financial.Batch.respondBatch_rejects' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Batch.respondBatch_rejects
@@ -279,7 +279,7 @@ namespace BlindLedger.Financial
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Payment.paymentTransition_mutated_post
 /-- info: 'BlindLedger.Financial.Payment.paymentTransition_alias_post' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Payment.paymentTransition_alias_post
-/-- info: 'BlindLedger.Financial.Payment.rawEncode_applyWrites_length' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+/-- info: 'BlindLedger.Financial.Payment.rawEncode_applyWrites_length' depends on axioms: [propext, Quot.sound] -/
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Payment.rawEncode_applyWrites_length
 /-- info: 'BlindLedger.Financial.Payment.paymentTransition_result_cash' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Payment.paymentTransition_result_cash
@@ -338,7 +338,7 @@ namespace BlindLedger.Financial
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.DecisionPackage.conclude
 /-- info: 'BlindLedger.Financial.DecisionPackage.packageRequestRespond' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.DecisionPackage.packageRequestRespond
-/-- info: 'BlindLedger.Financial.DecisionPackage.openRequests_length' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+/-- info: 'BlindLedger.Financial.DecisionPackage.openRequests_length' depends on axioms: [propext, Quot.sound] -/
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.DecisionPackage.openRequests_length
 /-- info: 'BlindLedger.Financial.DecisionPackage.openRequests_cons' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.DecisionPackage.openRequests_cons
@@ -362,7 +362,7 @@ namespace BlindLedger.Financial
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.DecisionPackage.packageRequestRespond_length
 /-- info: 'BlindLedger.Financial.DecisionPackage.packageDelivery_supported_iff' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.DecisionPackage.packageDelivery_supported_iff
-/-- info: 'BlindLedger.Financial.DecisionPackage.packageAnswer_eq' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+/-- info: 'BlindLedger.Financial.DecisionPackage.packageAnswer_eq' depends on axioms: [propext, Quot.sound] -/
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.DecisionPackage.packageAnswer_eq
 /-- info: 'BlindLedger.Financial.DecisionPackage.packageRequestRespond_answer' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.DecisionPackage.packageRequestRespond_answer
@@ -400,7 +400,7 @@ namespace BlindLedger.Financial
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.DecisionPackage.conclude_cash_independent_of_action
 /-- info: 'BlindLedger.Financial.DecisionPackage.decodePackageFacts_canonical' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.DecisionPackage.decodePackageFacts_canonical
-/-- info: 'BlindLedger.Financial.DecisionPackage.decodePackageFacts_encode' depends on axioms: [propext, Quot.sound] -/
+/-- info: 'BlindLedger.Financial.DecisionPackage.decodePackageFacts_encode' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.DecisionPackage.decodePackageFacts_encode
 /-- info: 'BlindLedger.Financial.DecisionPackage.decodePackageFacts_wellFormed' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.DecisionPackage.decodePackageFacts_wellFormed
@@ -420,7 +420,7 @@ end BlindLedger.Financial
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Payment.evaluateState_summarize
 /-- info: 'BlindLedger.Financial.Payment.state_requests_paid' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Payment.state_requests_paid
-/-- info: 'BlindLedger.Financial.Payment.anchorItem_fits' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+/-- info: 'BlindLedger.Financial.Payment.anchorItem_fits' depends on axioms: [propext, Quot.sound] -/
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Payment.anchorItem_fits
 /-- info: 'BlindLedger.Financial.Payment.anchorItem_length' depends on axioms: [propext, Quot.sound] -/
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Payment.anchorItem_length

@@ -17,7 +17,7 @@ from app import right_rail_gate_codec as gate
 from app import right_rail_gate_decide as decide
 from app import right_rail_gate_payer as payer
 from app import right_rail_gate_producer as producer
-from conformance import gate_rules_v2_ref as ref
+from conformance import gate_rules_v1_ref as ref
 from tests import _gate_authority as au
 from tests import _gate_shards as g
 from tests import test_flat_worker as fw
@@ -81,14 +81,14 @@ def pay_number(r: gate.DecideRequest) -> int:
 def build(spec: dict, batch: int, prev: bytes) -> bytes:
     pin, doc = au.genesis()
     keys = decide.Keys(doc if spec["keyset"] else b"", (spec["step"],) if spec["step"] else ())
-    data = decide.request_frame(g.feeds_of(spec["feeds"] or g._HEAD), 0, batch, g.ASOF, prev, pin, (spec["floor"] or 0, 0), keys, spec["grant"],
+    data = decide.request_frame(g.feeds_of(spec["feeds"] or g._HEAD), 0, batch, g.ASOF, prev, pin, (spec["floor"] or 0, 0, 0, bytes(64)), keys, spec["grant"],
                                 fx.D[4], spec["byps"], spec["reqs"], spec["redo"])
     if spec["floor"] is not None:
         return data
     body, at = data[82:], 76 + 4 * 77  # no floor asserted: the flag after the feeds' rows, the redone payments and the pin is cleared
     at += sum(int.from_bytes(body[76 + 77 * i + 9:76 + 77 * i + 13], "little") * w for i, w in enumerate(map(sum, decide.FEED_WIDTHS.values()))) + 261 * len(spec["redo"]) + 64
     body = body[:at] + b"\x00" + body[at + 1:]
-    return data[:18] + hashlib.sha3_512(b"RR/GATE/FRAME/v1\x00" + body).digest() + body
+    return data[:18] + hashlib.sha3_512(b"RR/GATE/FRAME2/v1\x00" + body).digest() + body
 
 
 def cases() -> dict[str, list[dict]]:
@@ -258,7 +258,7 @@ class AnswerBindingTests(unittest.TestCase):
         leaf_at = []
         for _ in range(1):
             leaf_at.append(r.at)
-            r.take(10)
+            r.take(6)
             if r.num(1):
                 r.take(64)
             r.take(64)
@@ -266,7 +266,7 @@ class AnswerBindingTests(unittest.TestCase):
         flip = lambda at: answer[:at] + bytes([answer[at] ^ 1]) + answer[at + 1:]  # noqa: E731
         for name, bad in (
                 ("another grant id", flip(grant_at)),
-                ("an invented bypass id", flip(leaf_at[0] + 11)),
+                ("an invented bypass id", flip(leaf_at[0] + 7)),
                 ("no leaves for a batch with requests", answer[:count_at] + bytes(4) + answer[leaves_end:])):
             with self.subTest(name), self.assertRaises(decide.GateDecideError):
                 decide._answer(bad, data)
@@ -281,20 +281,50 @@ class ClearedHoldReleaseTests(fx.Scratch):
         self.assertEqual((y.outcome, y.reasons, y.authority), ("ALLOW", (), "TRANSFER"))
         self.assertNotEqual(y.bypass, gate.ZERO_DIGEST)
         with self.scratch() as tmp:
-            handle, root_pk, cert = fx.custody(tmp)
+            handle, held, cert = fx.custody(tmp)
             p = self.track(producer.ShardProducer(Path(tmp) / "shard.sqlite3", mark_path=Path(tmp) / "shard.mark", tenant_id=fx.TENANT,
-                                                  shard_id=0, epoch=fx.EPOCH, handle=handle, root_pk=root_pk, key_cert=cert,
-                                                  payer_newest=gate.ZERO_DIGEST, counter=TestOnlyCounter(Path(tmp) / "shard.counter"), floors=lambda: (0, 0)))
+                                                  shard_id=0, epoch=fx.EPOCH, handle=handle, link=held, cosign=fx.cosigner(), key_cert=cert,
+                                                  payer_newest=gate.ZERO_DIGEST, counter=TestOnlyCounter(Path(tmp) / "shard.counter"), floors=lambda: (0, 0, 0, bytes(64))))
             p.prepared = ans = decide.Answer((), fx.STATE, b"", None, None, fx.D[1], 0, 1, (y,), fx.D[4])
             _, signed, (token,) = p.commit(fx.PROGRAM, ans, fx.NOW)
             self.assertEqual((token.leaf.outcome, token.leaf.reason_codes, token.leaf.bypass), ("ALLOW", (), y.bypass))
-            store = self.track(payer.PayerStore(Path(tmp) / "payer.sqlite3", root_keys={fx.TENANT: root_pk},
+            store = self.track(payer.PayerStore(Path(tmp) / "payer.sqlite3", links={fx.TENANT: held},
                                                 grants=((fx.TENANT, y.grant_id, (fx.D[4],), (fx.D[4],)),)))
             store.install_cert(cert)
             self.assertEqual(store.store_checkpoint(signed), "stored")
             store.send(LAPSED, transmit=lambda data: None)
             self.assertIsNone(store.release(LAPSED, gate.encode_token(token), now=fx.NOW))
             self.assertEqual(store.release(LAPSED, gate.encode_token(token), now=fx.NOW), "released")
+
+
+class OldApprovalTests(unittest.TestCase):
+    """Adding reasons 24-28 left the APPROVAL/v2 bytes as they were (holds and overrides stay u32 masks), so its tag is
+    unchanged: an approval signed before reads, and is identified, exactly as it was.  The digests are those of the
+    unsigned grant and bypass below, taken from the code before reasons 24-28."""
+
+    GRANT = "35c40c8d00733535cdea88cde2d4fb9969319cd89b137a488cf54f6e08cfe04a9298e5ef776a8bec0816885e0deed3cd3fecf22b6189a5e498a601f54b3e2032"
+    GRANT_SIGNED = "71647a1b6583c224041838d117bbdf1b47650ae7bd38f9e9dfd9ad1fc79baf9a900f1ebe3ef057af43d0b3541d4bb9f346f3bb073966a49685cd7ba677d06e32"
+    BYPASS = "732544bbcaf5ee65d0e6369c9bae325a75b4625759bb8a5381dbc77f6d7a8070691829db785f8fa32b19f9b8243b76d0254546e5f7ad8602be63a2b3bd165815"
+    BYPASS_SIGNED = "8cfec61214da53f26a5cf5a3c4d56a30facd3a4a5f37d6c6e54810b9e872979bcaeaea9b9da857082bfb2a1d51221e2876bed0aa8794cb2a3d2ece84c80ee89d"
+
+    def test_old_approval_bytes_and_ids(self):
+        grant = au.grant([(fx.PROGRAM, CLAIM | SDP, 2, BYPASSABLE)])
+        byp = au.bypass(fx.PROGRAM, "pay-old", au.H(b"old-request"), BYPASSABLE)
+        for doc, kind, ident, signed, pays in ((grant, 1, self.GRANT, self.GRANT_SIGNED, frozenset()),
+                                               (byp, 2, self.BYPASS, self.BYPASS_SIGNED, {(fx.PROGRAM.encode(), b"pay-old")})):
+            u = fx.unsigned(doc)
+            self.assertEqual((len(u), au.H(u).hex(), au.H(b"RR/GATE/APPROVAL/v2/SIG\x00" + u).hex()),
+                             ({1: 131, 2: 193}[kind], ident, signed))
+            self.assertEqual(decide._approval(doc), (kind, bytes.fromhex(ident), pays))
+
+    def test_engine_takes_the_old_grant_as_before(self):
+        """The engine admits the old grant: each leaf names its id, and the held payment holds for MEMBER_NOT_ENROLLED."""
+        with tempfile.TemporaryDirectory() as tmp:
+            [(why, pays, notes)] = run_case(cases()["hold_grant"], Path(tmp))
+        self.assertEqual((why, notes), (None, []))
+        self.assertEqual({p.grant_id.hex() for p in pays}, {self.GRANT})
+        self.assertEqual([(p.outcome, p.authority) for p in pays], [("ALLOW", "HOLD"), ("HOLD", "HOLD")])
+        self.assertIn("MEMBER_NOT_ENROLLED", pays[1].reasons)
 
 
 if __name__ == "__main__":

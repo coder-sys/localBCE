@@ -108,9 +108,6 @@ def decMeta3 (bs : Bytes) : Option (Bytes × Nat × List Tomb × List Nat) := do
   let (tk, r) ← decKhs kn r
   if r.isEmpty then pure (m, seq, ts, tk) else none
 
-/-- The authority record's length: pin 64, epoch 4, ratchet head 64, day 4, checkpoint 64, floor 8. -/
-def authLen : Nat := 208
-
 /-- One batch's frame: the installed chunk (number, pages, metadata v3), none when the batch changed nothing; then the
     trailer's fields. -/
 structure Frame where

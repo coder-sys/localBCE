@@ -3,7 +3,6 @@ small histories, a refused open writes nothing, a corrupt page or an unreadable 
 leaves the store before or after the batch, as the signed head says; an unsigned whole frame left by a kill is kept for the same
 request and nothing else (test-only exes; synthetic, non-PHI)."""
 
-import functools
 import hashlib
 import msvcrt
 import os
@@ -29,21 +28,8 @@ CRASH = BIN / "gate_rules_crashtest.exe"  # the only exe that reads RR_FLAT_CRAS
 PAGE = 4096
 POINTS = ["frame-torn", "frame-write", "frame-sync"]  # where a commit can be killed: body written, trailer written, synced
 NB = {"RR_FLAT_NB": "8"}  # a small directory: the second batch grows it, so the batches after rebuild it from the log
+GENESIS = chain.genesis(0, g.ASOF, g.PIN)
 MEMBERS = [1001, 1002, 1003, 1005, 7701, 504, 1006, 1007]
-
-
-@functools.lru_cache(maxsize=None)
-def genesis() -> bytes:
-    """Shard 0's genesis head under the harness key-set pin, computed at first use, so importing this module reads no ``g.PIN``
-    (which runs the signer unless ``RR_GATE_UNSIGNED=1``)."""
-    return chain.genesis(0, g.ASOF, g.PIN)
-
-
-def __getattr__(name: str):
-    """``GENESIS`` (``genesis()``) for the modules that read ``fw.GENESIS``."""
-    if name == "GENESIS":
-        return genesis()
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def u16(b: bytes) -> bytes:
@@ -101,15 +87,15 @@ def repin(data: bytes, pin: bytes) -> bytes:
     descs = [data[at + 77 * i:at + 77 * i + 77] for i in range(4)]
     at += 4 * 77 + sum(int.from_bytes(d[9:13], "little") * w for d, w in zip(descs, map(sum, decider.FEED_WIDTHS.values()))) + 261 * redo
     body = data[82:at] + pin + data[at + 64:]
-    return data[:18] + hashlib.sha3_512(b"RR/GATE/FRAME/v1\x00" + body).digest() + body
+    return data[:18] + hashlib.sha3_512(b"RR/GATE/FRAME2/v1\x00" + body).digest() + body
 
 
-FLOORS: dict[bytes, tuple[int, int]] = {}  # head -> the (grant serial, key-set epoch) floors its sealed record reports
+FLOORS: dict[bytes, chain.Floors] = {}  # head -> the floors (grant serial, key-set epoch, rule set) its sealed record reports
 
 
-def floors(prev: bytes) -> tuple[int, int]:
+def floors(prev: bytes) -> chain.Floors:
     """The floors a host asserts on the batch after the one that ended at ``prev``: those its sealed record reported."""
-    return FLOORS.get(prev, (0, 0))
+    return FLOORS.get(prev, chain.floors_of(None))
 
 
 def read(data: bytes, out: bytes):
@@ -162,7 +148,7 @@ class FlatWorkerTests(unittest.TestCase):
         return eng, d
 
     def test_engine_equals_one_shot_on_small_histories(self):
-        rng, (eng, _), prev, history, want = random.Random(11), self.engine("w"), genesis(), [], []
+        rng, (eng, _), prev, history, want = random.Random(11), self.engine("w"), GENESIS, [], []
         for k in range(5):
             reqs, rows = batch(rng, k, 12)
             data, out = eng.ask(k, prev, reqs)
@@ -175,7 +161,7 @@ class FlatWorkerTests(unittest.TestCase):
 
     def test_a_redone_payment_is_decided_as_the_one_shot_decides(self):
         # batch 1 redoes a payment of batch 0 (it owns its line again) and one that is in no batch
-        rng, (eng, _), prev, history, redos = random.Random(5), self.engine("r"), genesis(), [], {1: (pay_number(1000), pay_number(999999))}
+        rng, (eng, _), prev, history, redos = random.Random(5), self.engine("r"), GENESIS, [], {1: (pay_number(1000), pay_number(999999))}
         for k in range(3):
             reqs, rows = batch(rng, k, 12)
             data, out = eng.ask(k, prev, reqs, redos.get(k, ()))
@@ -189,7 +175,7 @@ class FlatWorkerTests(unittest.TestCase):
             with self.subTest(why=why, fresh=fresh):
                 rng = random.Random(9)
                 eng, d = self.engine(f"o{why}{fresh}")
-                data, out = eng.ask(0, genesis(), batch(rng, 0, 10)[0])
+                data, out = eng.ask(0, GENESIS, batch(rng, 0, 10)[0])
                 head, second = read(data, out)[2], batch(rng, 1, 10)[0]
                 if why == "CORRUPT":
                     p = d / "log"  # a byte of the first frame's metadata: the chain no longer holds
@@ -212,7 +198,7 @@ class FlatWorkerTests(unittest.TestCase):
         def start(name: str):
             rng = random.Random(5)
             eng, d = self.engine(name)
-            data, out = eng.ask(0, genesis(), batch(rng, 0, 10)[0])
+            data, out = eng.ask(0, GENESIS, batch(rng, 0, 10)[0])
             return eng, d, read(data, out)[2], batch(rng, 1, 10)[0]
 
         eng, _, head, second = start("c")
@@ -240,7 +226,7 @@ class FlatWorkerTests(unittest.TestCase):
         rng, d = random.Random(9), self.tmp / name
         reqs = [batch(rng, k, n1 if k == 1 else 12) for k in range(3)]
         first = Engine(d, env=env)
-        head1 = read(*first.ask(0, genesis(), reqs[0][0]))[2]
+        head1 = read(*first.ask(0, GENESIS, reqs[0][0]))[2]
         first.close()
         second = Engine(d, CRASH if crash else ENGINE, {"RR_FLAT_CRASH": crash} if crash else None)
         data, out = second.ask(1, head1, reqs[1][0])
@@ -334,6 +320,41 @@ class FlatWorkerTests(unittest.TestCase):
         self.assertEqual(read(data, out)[0], "flat_io")
         self.assertEqual(snap(d), before)
 
+    def test_a_store_with_the_208_byte_authority_record_or_a_rule_set_is_refused(self):
+        """A store written before the record carried the rule set (no converter): each trailer's record is cut to 208 bytes
+        and the frame's trailer length lowered to match.  A store whose record has a rule-set version above 0, which this
+        engine never writes, is refused too.  Nothing is decided or written; the store as written decides."""
+        rng, (eng, base) = random.Random(9), self.engine("base")
+        head = read(*eng.ask(0, GENESIS, batch(rng, 0, 10)[0]))[2]
+        data, out = eng.ask(1, head, batch(rng, 1, 10)[0])
+        head, auth = read(data, out)[2], read(data, out)[4]
+        eng.close()
+        second = batch(rng, 2, 10)[0]
+        log, pos, ends = (base / "log").read_bytes(), 0, []
+        while pos < len(log):
+            np_, ml, tl = struct.unpack("<III", log[pos + 4:pos + 16])
+            ends.append((pos, pos + 16 + np_ * PAGE + ml, tl))
+            pos += 16 + np_ * PAGE + ml + tl
+        pos, t, tl = ends[-1]
+        at = log.index(auth, t)  # the last trailer's record: the record after the last batch
+        # a 208-byte record does not decode, so its frame reads as torn and the store as a head mismatch; a record edited under
+        # a valid chain fails the replay (the head commits to the record)
+        cases = {"208 bytes": ("flat_head", log[:pos + 12] + struct.pack("<I", tl - (chain.AUTH - 208)) + log[pos + 16:at + 208] + log[at + chain.AUTH:]),
+                 "rule-set version 1": ("flat_replay", log[:at + 208] + bytes([7]) * 64 + (1).to_bytes(4, "big") + log[at + chain.AUTH:])}
+        for name, (word, bad) in cases.items():
+            with self.subTest(name):
+                d = self.tmp / name.replace(" ", "")
+                shutil.copytree(base, d)
+                (d / "log").write_bytes(bad)
+                other = Engine(d)
+                self.addCleanup(other.close)
+                before = snap(d)
+                why, recs, *_ = read(*other.ask(2, head, second))
+                self.assertEqual(why, word)
+                self.assertEqual((recs, snap(d)), ([], before))
+        eng, _ = self.engine("base")
+        self.assertIsNone(read(*eng.ask(2, head, second))[0])
+
     def test_an_unreadable_log_is_io(self):
         """A log that cannot be read is neither absent nor a wrong head: IO, nothing written."""
         d, reqs, head1, data, out = self.crash_case("rt")
@@ -344,12 +365,12 @@ class FlatWorkerTests(unittest.TestCase):
     def test_a_second_writer_on_a_held_index_is_refused(self):
         rng = random.Random(4)
         eng, d = self.engine("lock")
-        head = read(*eng.ask(0, genesis(), batch(rng, 0, 6)[0]))[2]
+        head = read(*eng.ask(0, GENESIS, batch(rng, 0, 6)[0]))[2]
         head2 = read(*eng.ask(1, head, batch(rng, 1, 6)[0]))[2]
         third, was = batch(rng, 2, 6)[0], snap(d)
         other = Engine(d)
         self.addCleanup(other.close)
-        for k, prev in ((2, head2), (0, genesis())):  # an open, then an init
+        for k, prev in ((2, head2), (0, GENESIS)):  # an open, then an init
             self.assertEqual(read(*other.ask(k, prev, third))[0], "flat_lock")
             self.assertEqual(snap(d), was)
         eng.close()
@@ -357,13 +378,45 @@ class FlatWorkerTests(unittest.TestCase):
         self.addCleanup(again.close)
         self.assertIsNone(read(*again.ask(2, head2, third))[0])
 
+    def test_an_unsigned_frame_decided_under_a_lower_rule_set_floor_is_cut(self):
+        """The tenant's rule-set floor rose after the unsigned frame was decided (version 0 there, 1 asserted now): that
+        frame can never be signed (``right_rail_gate_chain.behind``), so another request cuts it from the log instead of
+        CONFLICT.  This store has no rule set, so that request is held whole (RULESET_STALE); the request that made the cut
+        frame then decides again."""
+        d, reqs, head1, killed, _ = self.crash_case("pendrs", "frame-sync")
+        kept = snap(d)["log"]
+        eng = Engine(d)
+        self.addCleanup(eng.close)
+        serial, epoch = floors(head1)[:2]
+        bodies = [gate.encode_decide_request(r) for r in batch(random.Random(77), 1, 12)[0]]
+        risen = decider.request_frame(g.HEAD, 0, 2, g.ASOF, head1, g.PIN, (serial, epoch, 1, bytes([7]) * 64), g.KEYS, g.GRANT,
+                                      eng.release, (), bodies)
+        self.assertEqual(read(risen, eng.send(risen))[0], "grant_ruleset_stale")
+        cut = snap(d)["log"]
+        self.assertTrue(len(cut) < len(kept) and kept.startswith(cut))
+        self.assertIsNone(read(killed, eng.send(killed))[0])
+
+    def test_a_frame_presenting_rule_set_records_is_held_and_one_without_requests_is_refused(self):
+        """This engine runs no rule set: a batch whose frame presents a record is held whole (RULESET_NOT_RUN) and writes
+        nothing; records in a frame without requests are refused (RECORD).  Their bytes are not read."""
+        eng, d = self.engine("rsets")
+        head = read(*eng.ask(0, GENESIS, batch(random.Random(5), 0, 4)[0]))[2]
+        was = snap(d)
+        for name, bodies, want in (("with requests", [gate.encode_decide_request(r) for r in batch(random.Random(6), 1, 4)[0]],
+                                    "grant_ruleset_not_run"), ("without requests", [], "flat_record")):
+            with self.subTest(name):
+                data = decider.request_frame(g.HEAD, 0, 2, g.ASOF, head, g.PIN, floors(head), g.KEYS, g.GRANT, eng.release, (), bodies,
+                                             rulesets=[b"a rule-set record"])
+                self.assertEqual(read(data, eng.send(data))[0], want)
+                self.assertEqual(snap(d), was)
+
     def test_a_writer_behind_a_resident_engines_back_is_neither_trusted_nor_overwritten(self):
         """Another writer's frame lands past the signed head under a resident engine: the engine reads the disk again, keeps that
         frame as the unsigned one it is, and refuses a request that is not the one that made it (CONFLICT): nothing is released
         and the file is not touched."""
         rng = random.Random(8)
         eng, d = self.engine("back")
-        head = read(*eng.ask(0, genesis(), batch(rng, 0, 6)[0]))[2]
+        head = read(*eng.ask(0, GENESIS, batch(rng, 0, 6)[0]))[2]
         e = self.tmp / "back2"
         shutil.copytree(d, e, ignore=shutil.ignore_patterns("lock"))
         other = Engine(e)
@@ -380,7 +433,7 @@ class FlatWorkerTests(unittest.TestCase):
     def test_only_the_crash_test_exe_reads_the_crash_variable(self):
         def run(exe: Path, point: str, n: int) -> tuple[int, bytes]:
             eng = Engine(self.tmp / f"env{n}", exe, {"RR_FLAT_CRASH": point})
-            out = eng.ask(0, genesis(), batch(random.Random(3), 0, 4)[0])[1]
+            out = eng.ask(0, GENESIS, batch(random.Random(3), 0, 4)[0])[1]
             eng.close()
             return eng.p.returncode, out
 

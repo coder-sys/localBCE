@@ -1,4 +1,5 @@
 import BlindLedger.Gate.PublishFast
+import BlindLedger.Gate.Cosign.CodecLaws
 import BlindLedger.Sha3QuickEq
 
 /-! `publishOkTreeB_eq` and `publishFrameB_eq`: the `ByteArray` readers and the slice-based decision answer exactly
@@ -147,11 +148,13 @@ theorem sim_leaf : Sim rLeaf pLeaf := by
   refine Sim.bind (sim_take _) fun _ => ?_
   refine Sim.bind (sim_take _) fun _ => ?_
   refine Sim.bind (sim_take _) fun _ => ?_
+  refine Sim.bind (sim_take _) fun _ => ?_
   refine Sim.bind (sim_nat _ _ _) fun _ => ?_
   refine Sim.bind (sim_nat _ _ _) fun _ => ?_
   refine Sim.bind (sim_nat _ _ _) fun _ => ?_
   refine Sim.bind (sim_nat _ _ _) fun _ => ?_
   refine Sim.bind (sim_nat _ _ _) fun _ => ?_
+  refine Sim.bind (sim_need _) fun _ => ?_
   refine Sim.bind (sim_need _) fun _ => ?_
   refine Sim.bind (sim_need _) fun _ => ?_
   refine Sim.bind (sim_need _) fun _ => ?_
@@ -167,17 +170,19 @@ theorem sim_token : Sim rToken pToken := by
   refine Sim.bind (sim_take _) fun _ => ?_
   exact Sim.pure _
 
-theorem decodeTokenB_eq (b : ByteArray) : decodeTokenB b = decodeToken b.data.toList := by
-  unfold decodeTokenB decodeToken parse
-  obtain ⟨hs1, hs2⟩ := sim_token b 0 (Nat.zero_le _)
+/-- A whole-slice read answers what the whole-input parse of a simulated parser answers. -/
+theorem parseB_eq {α : Type} {r : Rd α} {p : P α} (h : Sim r p) (limit : Nat) (b : ByteArray) :
+    parseB r limit b = parse p limit b.data.toList := by
+  unfold parseB parse
+  obtain ⟨hs1, hs2⟩ := h b 0 (Nat.zero_le _)
   have r0 : rest b 0 = b.data.toList := List.drop_zero
   have hl : b.data.toList.length = b.size := by simp
   rw [r0] at hs1
-  by_cases hbig : b.size > maxTokenBytes
+  by_cases hbig : b.size > limit
   · simp [hbig, hl]
-  · have hbig' : ¬ b.data.toList.length > maxTokenBytes := by rw [hl]; exact hbig
+  · have hbig' : ¬ b.data.toList.length > limit := by rw [hl]; exact hbig
     simp only [hbig, hbig', if_false]
-    rcases hr : rToken b 0 with _ | ⟨t, o⟩
+    rcases hr : r b 0 with _ | ⟨t, o⟩
     · rw [hr] at hs1
       simp only [Option.map_none] at hs1
       rw [← hs1]
@@ -196,6 +201,9 @@ theorem decodeTokenB_eq (b : ByteArray) : decodeTokenB b = decodeToken b.data.to
         cases hrest : rest b o with
         | nil => exact absurd hrest hne
         | cons _ _ => simp [e2, rest] at hrest ⊢
+
+theorem decodeTokenB_eq (b : ByteArray) : decodeTokenB b = decodeToken b.data.toList :=
+  parseB_eq sim_token maxTokenBytes b
 
 /-! ## Hashing and the Merkle levels -/
 
@@ -297,51 +305,23 @@ theorem mapM_decode (tokens : List ByteArray) :
   | nil => rfl
   | cons a l ih => simp [List.mapM_cons, decodeTokenB_eq, ih, lst]
 
-theorem decodeKeyCert_signed {b : Bytes} {e : EpochCert} (h : decodeKeyCert b = some e) : e.signed = b := by
-  unfold decodeKeyCert parse at h
-  generalize hr : (pKeyCert.run b) = r at h
-  rcases r with _ | ⟨y, _ | ⟨a, l⟩⟩
-  · simp at h
-  · obtain ⟨_, rfl⟩ := by simpa using h
-    unfold pKeyCert at hr
-    simp only [StateT.run, bind, StateT.bind, consumed, pure, StateT.pure] at hr
-    split at hr
-    · simp [Option.bind] at hr
-      rw [← hr.1]
-      simp [hr.2]
-    · simp [Option.bind] at hr
-  · simp at h
+theorem accepts_eq {link : Cosign.Link} {cert new : Bytes} {x : SignedCheckpoint} {e : Cosign.KeyCert}
+    (hx : decodeCheckpoint new = some x) (he : Cosign.decode cert = some e) :
+    accepts link cert new = acceptsD link new x e := by
+  unfold accepts acceptsD installCert Cosign.installCert
+  rw [he]
+  dsimp only
+  rcases Cosign.install realCrypto (linkState link).toAuth e with ⟨a, b⟩
+  cases b <;> first | rfl | (unfold storeCheckpoint; rw [hx]; rfl)
 
-theorem accepts_eq {rootPk cert new : Bytes} {x : SignedCheckpoint} {e : EpochCert}
-    (hx : decodeCheckpoint new = some x) (he : decodeKeyCert cert = some e) :
-    accepts rootPk cert new = acceptsD rootPk new x e := by
-  have hs : decodeKeyCert e.signed = some e := by rw [decodeKeyCert_signed he]; exact he
-  have hr : rootSignedFast [(x.checkpoint.tenantId, rootPk)] e =
-      (realCrypto [(x.checkpoint.tenantId, rootPk)]).rootSigned e := by
-    simp [realCrypto, rootSignedFast, hs]
-  have hi : installCert { realCrypto [(x.checkpoint.tenantId, rootPk)] with
-      rootSigned := rootSignedFast [(x.checkpoint.tenantId, rootPk)] } emptyState e =
-      installCert (realCrypto [(x.checkpoint.tenantId, rootPk)]) emptyState e := by
-    unfold installCert
-    simp only [hr]
-  unfold accepts acceptsD
-  rw [hx, he]
-  simp only [hi]
-  rcases installCert (realCrypto [(x.checkpoint.tenantId, rootPk)]) emptyState e with ⟨s, b⟩
-  cases b
-  · rfl
-  · unfold storeCheckpoint
-    rw [hx]
-    rfl
-
-theorem publishOkTreeB_eq (rootPk cert : ByteArray) (last : Option ByteArray) (new : ByteArray)
+theorem publishOkTreeB_eq (link : Cosign.Link) (cert : ByteArray) (last : Option ByteArray) (new : ByteArray)
     (tokens : List ByteArray) (tpm : Nat) :
-    publishOkTreeB rootPk cert last new tokens tpm =
-      publishOkTree rootPk.data.toList cert.data.toList (last.map (·.data.toList)) new.data.toList
+    publishOkTreeB link cert last new tokens tpm =
+      publishOkTree link cert.data.toList (last.map (·.data.toList)) new.data.toList
         (tokens.map (·.data.toList)) tpm := by
   unfold publishOkTreeB publishOkTree
   rw [mapM_decode]
-  rcases he : decodeKeyCert cert.data.toList with _ | e
+  rcases he : Cosign.decode cert.data.toList with _ | e
   · rfl
   rcases hx : decodeCheckpoint new.data.toList with _ | x
   · simp [storedOf, hx]
@@ -421,8 +401,8 @@ theorem many_rd (b : ByteArray) : ∀ (k o : Nat), o ≤ b.size →
 
 theorem publishFrameB_eq (b : ByteArray) : publishFrameB b = publishFrame b.data.toList := by
   have z : 0 ≤ b.size := Nat.zero_le _
-  have t0 : (take mlDsa87Key).run b.data.toList = (rdB b 0 mlDsa87Key).map fun p => (lst p.1, rest b p.2) := by
-    simpa [rest, rd, lst, Option.map_map, Function.comp_def] using take_rd b 0 mlDsa87Key z
+  have t0 : pFramed.run b.data.toList = (rFramedB b 0).map fun p => (lst p.1, rest b p.2) := by
+    simpa [rest] using framed_rd b 0 z
   have hemp : ∀ l : ByteArray, l = ByteArray.empty ↔ l.data = #[] := by
     intro l
     constructor
@@ -432,9 +412,9 @@ theorem publishFrameB_eq (b : ByteArray) : publishFrameB b = publishFrame b.data
       | mk d => simp only at h; subst h; rfl
   unfold publishFrame parse pPublishArgs publishFrameB
   simp only [Nat.lt_irrefl, if_false]
-  rcases h1 : rdB b 0 mlDsa87Key with _ | ⟨r, o1⟩
+  rcases h1 : rFramedB b 0 with _ | ⟨r, o1⟩
   · simp [StateT.run_bind, t0, h1]
-  have l1 := (rdB_le h1).2
+  have l1 := rFramedB_le h1
   rcases h2 : rFramedB b o1 with _ | ⟨c, o2⟩
   · simp [StateT.run_bind, t0, h1, framed_rd b o1 l1, h2]
   have l2 := rFramedB_le h2

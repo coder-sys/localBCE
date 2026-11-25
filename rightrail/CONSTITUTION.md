@@ -2,19 +2,19 @@
 
 Adopted 2026-09-24. This is the supreme rule set for all RightRail work: every
 product, module, agent, script, cleanup and release. It is distilled from the
-founder's directives (final architecture directive, project-wide enforcement
-supplement and runtime-convergence directive, 2026-09-23), the Sept 24
-operating plan ("RightRail — State control, explained"), the design ideology,
-and the standing agent rules. Where any other document conflicts with this
-one, this one wins. The full-stack target (`docs/RIGHTRAIL_FULL_STACK_TARGET.md`)
-elaborates it; it cannot weaken it.
+founders' directives and the standing working rules. Where any other document
+conflicts with this one, this one wins. The full-stack target
+(`docs/RIGHTRAIL_FULL_STACK_TARGET.md`) elaborates it; it cannot weaken it.
 
 ## Preamble
 
-RightRail gives a Medicaid agency a state-controlled operating layer for
-consequential responsibilities. It keeps the approved rule, the evidence, the
-unresolved work, the decision and the current handoff connected until the
-responsibility is complete — and it keeps the state free to leave.
+RightRail gives a state agency that runs public benefit programs, Medicaid first,
+a state-controlled operating layer for consequential responsibilities. It keeps
+the approved rule, the evidence, the unresolved work, the decision and the
+current handoff connected until the responsibility is complete — and it keeps
+the state free to leave. In the end state, every payment the state routes
+through RightRail passes its gate before the money goes out, under the state's
+own signed authority; the state's payment systems still move the money.
 
 ## Article I — The state governs
 
@@ -42,6 +42,8 @@ responsibility is complete — and it keeps the state free to leave.
    repeats an already-paid line is not held for a person: it is answered at
    once, naming the earlier payment, and the sender can contest the answer in
    one step. A line that only resembles a paid line stays with a person.
+   Answering an exact repeat this way is not a BLOCK: the line was already paid
+   once, and the answer only names that payment.
 
 ## Article II — Facts stay separate
 
@@ -115,14 +117,16 @@ silent default.
    service still works. Transfer fences the old writer; issued actions keep
    their identity.
 
-## Article VIII — Neutral economics
+## Article VIII — State-controlled economics
 
-RightRail is paid for operating the service (about $2M/year plus the marginal
-10/7/5-basis-point covered-flow schedule, 5 bp floor; Provider App priced
-separately), never by outcomes: no share of denials, recoveries, penalties,
-sanctions or savings. No compatibility or certification fees for vendors, no
-exit fees, no closed standards, no lobbying for barriers. Billing never gains
-operational authority.
+RightRail is paid for operating the service, at one published price for every
+state, never by outcomes: no share of denials, recoveries, penalties, sanctions
+or savings. No compatibility or certification fees for vendors, no exit fees, no
+closed standards, no lobbying for barriers. Billing never gains operational
+authority. The price schedule is in `docs/RIGHTRAIL_FULL_STACK_TARGET.md`
+section 2, and changes to it need the founders' written approval. RightRail is
+never the health plan or the drug-benefit manager, and never bids for a state's
+claims or eligibility modules.
 
 ## Article IX — Small, single, measured
 
@@ -145,7 +149,9 @@ operational authority.
    shrinks (`GROWS` in that test, each with its planned fix). No bound may
    become a way to block service as history grows. Every input, queue, report,
    export and proof has explicit bounds. Measure before claiming performance.
-4. Build what the plan needs now. The private zero-knowledge evidence mode
+4. Build the whole planned product; never shrink it to fit today's state or one
+   pilot's needs. Only the order in which work is shown and sold is chosen by what
+   is ready. The private zero-knowledge evidence mode
    (PRIVATE_ZK) is an active prototype track (founder, 2026-09-25). It produces
    evidence only, never a hold or payment directive. It never blocks core, gate
    or product work, and the non-ZK evidence path ships first. No PRIVATE_ZK
@@ -157,35 +163,37 @@ operational authority.
    what is blocked, the next step — in a few lines; it keeps no change log,
    since `git log` is the log. Raw logs live in log files, not in markdown.
    No hash tables in status documents except the pinned-artifact list.
-2. Heavy runs (builds, tests, provers) on the laptop go only through the guarded wrapper `C:/Users/neers/rrb/tools/rr_guarded.ps1`, under the guard and memory limits named in the driver root `AGENTS.md` (one source; no other document restates them). The wrapper is never bypassed or weakened there. CI and cloud runners use their own resource limits. The release producer is parked in `parked/` until a release is planned, and it moves to the wrapper before it runs again.
+2. Heavy runs (builds, tests, provers) on a development machine go only through the guarded wrapper and under the guard and memory limits named in the driver root `AGENTS.md` (one source; no other document restates them). The wrapper is never bypassed or weakened there. CI and cloud runners use their own resource limits. The release producer is parked in `parked/` until a release is planned, and it moves to the wrapper before it runs again.
 3. Never destroy uncommitted work, raw evidence, keys, or the only copy of
    anything. Deletions are recoverable first (Recycle Bin, Git bundle, archive).
 4. Every session leaves a working increment and a clear next step.
 
-## Article XI — How we build (engineering ideology)
+## Article XI — How we build
 
-Distilled from `docs/DESIGN_IDEOLOGY.md` (2026-08-14 original and 2026-09-23
-revision). These are binding working principles, not suggestions.
+These are binding working principles, not suggestions.
 
-1. **Invariant first.** Start from the property that must be true for a decision
+1. **Invariant first.** Start from the property that must hold for a decision
    to be safe, then build the smallest implementation that makes it executable
    and independently checkable. An existing workflow, benchmark, digest, caller
    boolean or green gate is not authority just because it exists.
-2. **Gates serve invariants.** A gate can be stale, wrong or over-broad. For a
-   protected gate — Lean theorem statements, `artifacts/**`, the
-   constitution-invariants test, wire formats, digest domains and the guard —
-   change it only in the open, recording: the exact predicate; the invariant
-   and failure it protects; the raw evidence it is unsuitable; the disposition
-   (retain, replace, weaken, disable, suspend, relabel); the replacement
-   control; scope and duration; and the claims withdrawn. A changed gate
-   inherits none of the old assurance. Never bypass a gate silently or change
-   policy bytes to get a pass. An ordinary test edit outside this list needs
-   only a clear commit message. A re-pin that leaves every pinned executable's SHA-256 unchanged and only refreshes its source-manifest record is a record update, not a gate change: it still needs the live pin check, but only a clear commit message, not the full record.
+2. **Gates serve invariants.** A gate can be stale, wrong or over-broad. A
+   protected gate (Lean theorem statements, `artifacts/**`, the
+   constitution-invariants test, wire formats, digest domains and the guard)
+   changes only in the open, with a record of: the exact predicate; the
+   invariant and failure it protects; the raw evidence it is unsuitable; the
+   disposition (retain, replace, weaken, disable, suspend, relabel); the
+   replacement control; scope and duration; and the claims withdrawn. A changed
+   gate inherits none of the old assurance. Never bypass a gate silently or
+   change policy bytes to get a pass. An ordinary test edit outside this list
+   needs only a clear commit message. A re-pin that leaves every pinned
+   executable's SHA-256 unchanged and only refreshes its source-manifest record
+   is a record update, not a gate change: it still needs the live pin check and
+   a clear commit message, not the full record.
 3. **Disciplined creativity.** The current implementation is a hypothesis. When
    evidence shows it cannot meet the invariant, bound or throughput target,
-   return to first principles and look for a materially simpler composition,
-   representation, schedule or owner. Make new ideas falsifiable with the
-   cheapest deterministic test. Novelty is not progress; the best solution is the
+   return to first principles for a materially simpler composition,
+   representation, schedule or owner, and test the idea with the cheapest
+   deterministic test. Novelty is not progress: the best solution is the
    smallest one that makes the required truth easier to verify, faster to
    produce and harder to misuse.
 4. **Persistence.** Once work is authorized, carry it through its dependency
@@ -198,12 +206,13 @@ revision). These are binding working principles, not suggestions.
    are untrusted: they may propose bytes, never authorize a receipt or mutation.
    Growing the trusted core needs a named invariant, owner, binding, attack test
    and evidence.
-6. **Smallest complete boundary, then extend.** Build in order: exact input and
-   identity contract → bounded producer artifact → independent verifier →
-   mutation and replay tests → resource and cleanup evidence → composition with
-   the next verified piece. Removing duplication, transport or ceremony is good
-   engineering; removing privacy, exact binding, fail-closed parsing,
-   independent verification, mutation coverage or resource accounting is not.
+6. **Smallest complete boundary, then extend.** A boundary is complete, with an
+   independent verifier, mutation and replay tests and resource and cleanup
+   evidence, before it is composed with the next verified piece (build order:
+   `ARCHITECTURE.md`, "Design rules beyond the Constitution"). Removing
+   duplication, transport or ceremony is good engineering; removing privacy,
+   exact binding, fail-closed parsing, independent verification, mutation
+   coverage or resource accounting is not.
 7. **Maximum modularity, minimum surface.** Each boundary has one owner, one
    narrow versioned contract, one testable failure surface and one trust class.
    Compose small complete parts rather than a monolith, but never split an
@@ -214,24 +223,24 @@ revision). These are binding working principles, not suggestions.
    changing any other part. A change that must touch several parts at once
    shows a boundary in the wrong place, and the boundary is fixed rather than
    worked around. A part's contract (inputs, outputs, failure cases, trust
-   class) is written down where the part lives.
+   class) is written down where the part lives. Speed never buys a compromise
+   on safety, verifiability or modularity, anywhere in the stack.
 8. **Formal means executed.** A Lean definition counts only if it runs in the
    deployed path or has a reviewed refinement proof to what runs. A model plus
-   matching examples is not verified code. Pin toolchains, enumerate admitted
-   axioms, check proofs independently, and version theorem statements as
-   trust-critical interfaces. A proof never upgrades an unproved crypto
-   assumption, a dishonest source or an unlawful policy.
-9. **Deterministic and reproducible.** Canonicalize inputs, encodings,
-   toolchains, ordering and identities; make any needed entropy explicit;
-   record what is needed to rebuild a result. A result that cannot be rebuilt or
-   read back is an observation, not a system fact.
+   matching examples is not verified code. Toolchains are pinned, admitted
+   axioms enumerated, proofs checked independently, and theorem statements
+   versioned as trust-critical interfaces. A proof never upgrades an unproved
+   crypto assumption, a dishonest source or an unlawful policy.
+9. **Deterministic and reproducible.** Inputs, encodings, toolchains, ordering
+   and identities are canonical; needed entropy is explicit; what is needed to
+   rebuild a result is recorded. A result that cannot be rebuilt or read back is
+   an observation, not a system fact.
 10. **Monotonic, fail-closed safety.** Unknown, missing, mismatched, timed-out,
     partial, stale, malformed or cleanup-failed state never creates authority.
     Epochs, identities and anti-rollback domains only move forward.
 11. **Evidence has a class.** Every claim is labelled measured, independently
-    verified, derived, projected, reference-only or unknown, and is never
-    stronger than its class. When evidence weakens, the claim is downgraded
-    immediately.
+    verified, derived, projected, reference-only or unknown, is never stronger
+    than its class, and is downgraded at once when its evidence weakens.
 12. **Recovery before optimization.** Restart, retry, idempotency, rollback,
     cleanup and partial failure are designed before speed. Optimize only the
     measured dominant stage, keep the same semantics and security boundary, and
@@ -242,11 +251,11 @@ revision). These are binding working principles, not suggestions.
 14. **Adversarial simplicity.** Prefer boring, inspectable mechanisms with few
     dependencies, explicit data flow, bounded parsers and obvious failure
     behavior. Cleverness, hidden automation, novel cryptography and extra
-    abstraction are liabilities until they earn their place with a named benefit
-    and executable tests.
-15. **Privacy is measured.** Privacy is tested as a property — output shape,
-    timing, memory, errors, logs, temp files, artifacts and retries must not
-    depend on hidden values — not asserted by a label.
+    abstraction are liabilities until a named benefit and executable tests earn
+    their place.
+15. **Privacy is measured.** Privacy is tested as a property, not asserted by a
+    label: output shape, timing, memory, errors, logs, temp files, artifacts and
+    retries must not depend on hidden values.
 16. **Maximum auditability.** Every consequential decision can be replayed and
     explained afterwards by someone who does not trust RightRail. Each decision
     keeps one record, bound by hash, of its exact canonical inputs, the rule
@@ -258,95 +267,81 @@ revision). These are binding working principles, not suggestions.
     question is answered from the record, not from logs, memory or a person.
     The record stays where the data stays (Article IV).
 
-## Article XII — Felt value
+## Article XII — Felt value, design and staff first
 
-Correctness that nobody feels is not a product. Every product, feature and
-priority decision must answer, in writing, before work starts:
+Correctness that nobody feels is not a product. Everything RightRail builds
+(screens, rules, checks, safeguards, failure handling and recovery) must make
+staff work easier, faster and less confusing, and leave staff feeling in
+control. Safety is never paid for with staff effort.
 
-1. **Who feels it** — a named role (state program analyst, finance approver,
-   program director, MCO/vendor operations, provider billing staff, auditor,
-   replacement operator).
-2. **When** — the concrete daily or periodic moment it changes (e.g. "Monday
-   reconciliation", "preparing an approval", "answering an auditor",
-   "onboarding a new rule", "replacing a contractor").
-3. **What changes** — the before/after in one of the plan's measured units:
-   unresolved-item age, decision-preparation time, repeated evidence
-   requests, staff steps, correction accuracy, implementation effort (days
-   to put a new rule or program live), support effort, contractor-transition
-   effort, and time to answer "what is actually happening and who owns it".
-4. **Friction targeted** — which structural pain it removes beyond our own
-   products: long implementation projects, difficulty replacing or
-   disciplining vendors and plans, missing or untrustworthy operational data,
-   repeated reconstruction of history, and chasing counterparties for records.
-
-Rules:
-- Work that moves none of these units for any role is deprioritized, however
-  elegant. Invisible correctness work is justified only by the felt outcome it
-  protects, and is named as such.
-- A substantial workflow change also assesses staff effort, repeated evidence
-  requests, data movement, troubleshooting, installation and updates,
-  recovery, independent exit and reuse; it compares a materially simpler
-  approach and shows the chosen tradeoff in the affected workflow.
-- The synthetic demonstration (the Hospital H cycle and later workflows) is
-  the scorecard: it measures these units per role, and a change that makes a
-  measured unit worse is a regression, reviewed like a failing safety test.
-- The staff-facing surface (Mirror and the staff workspace) is held to the
-  same standard as the owner: it runs, is tested, and is where value is
-  demonstrated.
-- A product-change description states its felt effect in one line, or says
-  "none (infrastructure for: …)"; this is required in product-change
-  descriptions, not in every STATUS.md entry.
-
-## Article XIII — Design and interaction integrity
-
-Every screen must feel expensive, calm and obvious, the way the best consumer
-hardware does. Restraint is the standard: what is left out matters as much as
-what is added.
-
-1. **The answer first.** Each screen leads with the one thing its role needs
-   (what is happening, who owns it, what to do next) in plain words and exact
-   figures. Detail is one deliberate step away, never in the way.
-2. **One primary action per screen.** Secondary actions are quiet. Nothing
-   decorative, no jargon, no internal identifiers, digests or codes shown to
-   staff unless they asked for them.
-3. **Restrained system.** One type family, a small fixed palette and spacing
+1. **Felt value, in writing, before work starts.** Every product, feature and
+   priority decision names: who feels it (a named role: state program analyst,
+   caseworker, county or local office staff, finance approver, program director,
+   health plan or vendor operations, provider billing staff, auditor, replacement
+   operator); when (the concrete daily or periodic
+   moment it changes, such as Monday reconciliation, preparing an approval,
+   answering an auditor, onboarding a new rule or replacing a contractor); what
+   changes (the before and after in a measured unit: unresolved-item age,
+   decision-preparation time, repeated evidence requests, staff steps,
+   correction accuracy, implementation effort in days to put a new rule or
+   program live, support effort, contractor-transition effort, and time to
+   answer "what is actually happening and who owns it"); and the structural
+   friction it removes beyond our own products (long implementation projects,
+   difficulty replacing or disciplining vendors and plans, missing or
+   untrustworthy operational data, repeated reconstruction of history, chasing
+   counterparties for records).
+2. Work that moves none of these units for any role is deprioritized, however
+   elegant. Invisible correctness work is justified only by the felt outcome it
+   protects, and is named as such.
+3. A substantial workflow change also assesses staff effort, repeated evidence
+   requests, data movement, troubleshooting, installation and updates,
+   recovery, independent exit and reuse; it compares a materially simpler
+   approach and shows the chosen tradeoff in the affected workflow.
+4. **The scorecard.** The synthetic demonstration (the Hospital H cycle and
+   later workflows) measures these units per role. A change that makes a
+   measured unit worse is a regression, reviewed like a failing safety test; a
+   prettier screen that adds staff steps is a regression; and a change that adds
+   staff steps, confusion or waiting without giving staff something they can
+   act on is a regression, however safe it is. The staff-facing surface (Mirror
+   and the staff workspace) is held to the same standard as the owner: it runs,
+   is tested, and is where value is demonstrated. A product-change description
+   (not every `STATUS.md` entry) states its felt effect in one line, or says
+   "none (infrastructure for: …)".
+5. **The answer first, one primary action.** Every screen feels expensive, calm
+   and obvious, the way the best consumer hardware does; restraint is the
+   standard, and what is left out matters as much as what is added. Each screen
+   leads with the one thing its role needs (what is happening, who owns it,
+   what to do next) in plain words and exact figures; detail is one deliberate
+   step away, never in the way. One primary action per screen; secondary
+   actions are quiet. Nothing decorative, no jargon, and no internal
+   identifiers, digests or codes shown to staff unless they asked for them.
+6. **Restrained system.** One type family, a small fixed palette and spacing
    scale, tabular figures with amounts aligned to the cent, consistent words for
    the same thing everywhere, motion only to explain a change. Light and dark
    themes, and WCAG 2.1 AA accessibility, are part of done.
-4. **Every pathway is proven.** The interface is defined by one declared
+7. **Every pathway is proven.** The interface is defined by one declared
    interaction model: every screen, every control, every transition, and the
    backend call each control makes. Automated checks prove, exhaustively over
    that model and for every role:
-   - no dead control: every visible, enabled control leads to a defined result;
-   - no orphan screen: every screen is reachable from the start;
-   - no trap: from every screen and every error, the user can reach a
-     meaningful next step or home;
-   - no dead connection: every control's backend call exists, and every
-     response it can return (success, refusal, conflict, outage) has a defined,
-     plain-language screen;
-   - no illogical path: a control a role can never use successfully is not
-     shown to that role, and a finished action cannot be repeated by accident.
+   a. no dead control: every visible, enabled control leads to a defined result;
+   b. no orphan screen: every screen is reachable from the start;
+   c. no trap: from every screen and every error, the user can reach a
+      meaningful next step or home;
+   d. no dead connection: every control's backend call exists, and every
+      response it can return (success, refusal, conflict, outage) has a defined,
+      plain-language screen;
+   e. no illogical path: a control a role can never use successfully is not
+      shown to that role, and a finished action cannot be repeated by accident.
    A real-browser crawl then clicks every control in every reachable state and
    fails if the running interface differs from the declared model.
-5. **Measured.** Design changes are judged by the Article XII scorecard; a
-   prettier screen that adds staff steps is a regression.
-
-## Article XIV — Staff first, in everything
-
-Everything RightRail builds (screens, rules, checks, safeguards, failure
-handling and recovery) must make staff work easier, faster and less confusing,
-and leave staff feeling in control. Safety is never paid for with staff effort.
-
-1. What the system can safely fix itself, it fixes and notes. It never hands
+8. What the system can safely fix itself, it fixes and notes. It never hands
    staff a chore.
-2. What needs a person reaches them once per cause, never once per line. It
+9. What needs a person reaches them once per cause, never once per line. It
    comes with the plain reason, the money at stake, the deadline, who owns it
    and one action that settles it.
-3. Staff can always see what is happening, why, and what they can do about it.
-4. "Visible" means visible in the record and to the auditor, never silent. It
-   never means a flood of alerts.
-5. A change that adds staff steps, confusion or waiting without giving staff
-   something they can act on is a regression, however safe it is.
+10. Staff can always see what is happening, why, and what they can do about
+    it. "Visible" means visible in the record and to the auditor, never silent.
+    It never means a flood of alerts.
 
 ## Enforcement
 
@@ -359,83 +354,33 @@ and leave staff feeling in control. Safety is never paid for with staff effort.
 
 ## Amendment
 
-Only the founders amend this constitution. Amendments are explicit, dated edits
+Only the founders amend this constitution. The written word of either founder
+authorizes an amendment; its log entry quotes those words and names who gave
+them. Amendments are explicit, dated edits
 to this file with a one-line reason. Silence, convenience or a passing test is
-never an amendment. Each amendment-log entry quotes the founder's own words that authorize it.
+never an amendment. Each amendment-log entry quotes the founders' own words that
+authorize it. Git holds each amendment's full text and reasoning under the
+commit named in its entry.
 
 ### Amendment log
 
-- 2026-09-24 — Article XI added at the founder's direction: the values and
-  ideology in `docs/DESIGN_IDEOLOGY.md` (original 2026-08-14 and revised
-  2026-09-23) are incorporated as binding engineering principles.
-- 2026-09-24 — Article VI.4 added at the founder's direction: the pre-state
-  build phase is the plan; missing state/receiver/real data is not a blocker.
-- 2026-09-24 — Article XII added at the founder's direction: every product
-  decision must name who feels it, when, the measured before/after, and the
-  structural friction removed; the synthetic demo is the scorecard.
-- 2026-09-24 — Article XIII added at the founder's direction: interfaces must
-  feel expensive, restrained and intuitive, and every control and pathway is
-  proven over a declared interaction model with no dead buttons, orphan
-  screens, traps, dead connections or illogical paths.
-- 2026-09-25 — Article IX.4 amended at the founder's direction: private
-  zero-knowledge is un-parked as an active, evidence-only prototype track that
-  never blocks core or gate work.
-- 2026-09-25 — Articles IX.1, I.2, I.4, X.1, Enforcement, XI.2, XI.16/XII and
-  X.2 amended, and a post-quantum-only signature line added to Article VI:
-  ZK moves to its own repository (`rightrail-zk`) pinned by hash; the payment
-  gate's authority, fail policy, emergency bypass and off-by-default state are
-  named explicitly, and BLOCK stays human or state action; STATUS.md is
-  current truth only, with no change log; the "every change names its
-  articles" rule is dropped; the full 8-field gate-change record applies only
-  to a named protected-paths list; XI.16 folds into Article XII, whose
-  felt-value line applies to product-change descriptions, not every STATUS
-  entry; and the guard memory floor applies to laptop runs, not CI/cloud.
-  Decided by the lead under the founder's 2026-09-25 grant; founder decided
-  the PQ-only line.
-- 2026-09-29 — Article X.2 amended, founder-approved (grants cited), recorded by
-  lead: it names the live guard (v7 through `rr_guarded.ps1`) and keeps v4 for
-  engine and release builds. Grants: 2026-09-28 "2 is fine instead of 2.2";
-  2026-09-28 "when im not actively using the laptop ... only 1 gb cap remains";
-  2026-09-29 "As long as it doesn't compromise safety and accuracy do whatever u
-  want"; standing 2026-09-25 "u have all auth". XI.2 records:
-  `git log --grep '^XI.2:'`.
-- 2026-10-01 — Articles X.2 and XI.2 and the Amendment section amended by the founders ("yes", 2026-10-01, to: re-recording a program fingerprint that did not change is not a gate change; the memory-guard rules live in one place; every amendment quotes the founder's words; and the release-packaging tool is shelved until a release is planned). X.2 points to the driver root AGENTS.md and drops the v4 exception; XI.2 treats an unchanged-hash re-pin as a record update; amendment entries quote the founder.
-- 2026-10-01 — Article IX.3 strengthened by the founders ("we need to make sure
-  our stack doesnt get bloated or gets slower or vulenrable as history grows,
-  thats a core value, we need to makes re thats handled", 2026-10-01):
-  a deterministic growth test pins the listed operations' work at two history
-  sizes, with a shrink-only exception list.
-- 2026-10-06 — Article I.2 amended by the founders ("make it all happen, the
-  constiution change", 2026-10-06, approving the text): the gate fails closed;
-  the only bypass is of one named payment, fully verified before it goes by
-  named state employees who sign an approval for exactly that payment. No
-  standing, time-window, fail-open or after-the-fact bypass; no recoupment.
-- 2026-10-27 — Article XI.16 added and Article XI.7 extended by the founders
-  ("Yes, draft the auditability amendment (and maximum modularity too) for me
-  to approve", then "sure", 2026-10-27, approving the text): every decision is
-  replayable and explainable from its own record; every part is replaceable,
-  testable and provable on its own against a written contract.
-- 2026-10-31 — Article XIV added by the founders ("Nuclear grade design doesn't
-  mean we make the staff's loves harder we must make their ui experience much
-  better and their work easier faster and less confusing and make them feel
-  empowered", "ts should our design philosophy for everything", then "sure do
-  it", 2026-10-31, approving the text): safety, checks and failure handling are
-  judged by staff effort; repairable faults are fixed, not handed to staff;
-  held work reaches staff once per cause with one settling action.
-- 2026-11-05 — Article IX.3 and the 2026-09-29 log entry corrected by the
-  founders ("im saying yes to these changes", 2026-11-05): IX.3 names the
-  growth test's `GROWS` list instead of a stale payment count, and the XI.2
-  record pointer names the git log, where those records now live.
-- 2026-11-06 — Article VI.2 amended by the founders ("Yes, public data",
-  2026-11-06; "Yes, that text", 2026-11-06): tests may also read public non-PHI
-  reference data; member, claim and payment data stay synthetic.
-- 2026-11-14 — Article I.2 amended by the founder ("Approve both", 2026-11-14,
-  approving the proposed change): a held payment may also be released by cause,
-  with one signed decision that names the exact listed set of held payments
-  sharing one cause; the roster, threshold, separation and calendar rules of
-  any release apply, and it is never standing or future.
-- 2026-11-14 — Article I.4 amended by the founder ("Approve both", 2026-11-14,
-  approving the proposed change): a line that exactly repeats an already-paid
-  line is answered at once, naming the earlier payment, and is contestable in
-  one step; it is no longer held for a person. This reverses the 2026-11-08
-  decision to hold exact duplicates.
+Date | change (clauses) | founders' words | commit
+
+- 2026-09-24 | XI added: the design ideology (2026-08-14, revised 2026-09-23) becomes binding engineering principles | none recorded (before the quote rule) | 82a20872
+- 2026-09-24 | VI.4 added: the pre-state build phase is the plan, not a blocker | none recorded (before the quote rule) | 68e53d23
+- 2026-09-24 | XII added: felt value (who, when, measured before/after, friction; demo is the scorecard) | "i cant keep asking u questions constantly... we need a solution" | bbd4fe04
+- 2026-09-24 | XIII added: design and interaction integrity, every pathway proven | "think like Steve Jobs and Jony Ive" | 6b93be25
+- 2026-09-25 | IX.4: private zero-knowledge un-parked, evidence only, never blocks core or gate | "whatever u want ... aligned with my ideologies fully" | 200df662
+- 2026-09-25 | IX.1, I.2, I.4, X.1, X.2, XI.2, XII, Enforcement amended; VI.5 PQ-only added; former XI.16 (customer effect) folded into XII | "u have all auth"; PQ line: "our whole stack is supposed to be post quantum" | 71f9e6f9
+- 2026-09-29 | X.2 names the live guard and wrapper | "doesn't compromise safety and accuracy do whatever u want" | bd090fb2, 2ec89a0b
+- 2026-10-01 | X.2 one guard source; XI.2 unchanged-hash re-pin is a record update; entries quote the founders; release producer parked | "yes" | 46d6fd2c
+- 2026-10-01 | IX.3 strengthened: deterministic growth test, shrink-only exception list | "stack doesnt get bloated or gets slower or vulenrable as history grows" | b02d2e5d, a36839b1
+- 2026-10-06 | I.2: gate fails closed; bypass only per named, pre-verified payment | "make it all happen, the constiution change" | d1c2fa00
+- 2026-10-27 | XI.16 added (maximum auditability); XI.7 extended (maximum modularity) | "draft the auditability amendment (and maximum modularity too)"; "sure" | 8d0de54a
+- 2026-10-31 | XIV added: staff first in everything | "make their work easier faster and less confusing"; "sure do it" | d46da391
+- 2026-11-05 | IX.3 names the `GROWS` list; 2026-09-29 entry's record pointer corrected | "im saying yes to these changes" | d8c95918
+- 2026-11-06 | VI.2: tests may also read public non-PHI reference data | "Yes, public data"; "Yes, that text" | af472b15
+- 2026-11-14 | I.2: release by cause, exact listed set, never standing or future | "Approve both" | 06435d1f, cd713f0e
+- 2026-11-14 | I.4: exact duplicates answered at once, contestable in one step (reverses 2026-11-08) | "Approve both" | 06435d1f, cd713f0e
+- 2026-11-22 | Restated: XIII and XIV merged into XII (number map below); preamble scope and end state; VIII state-controlled economics; IX.4 build scope; XII.1 roles; X.2; I.4 exact repeat; Amendment; XI.7 speed sentence | Neer: "sure"; "do it"; "Sure"; "Do em all" | this commit
+  Number map: XIII.3-5 became XII.6, XII.7, XII.4; XIV.1-5 became XII.8-10 and XII.4. XI.6 build order moved to `ARCHITECTURE.md`; no rule removed.

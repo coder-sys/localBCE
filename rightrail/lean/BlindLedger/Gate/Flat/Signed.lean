@@ -107,18 +107,15 @@ def Feed.byId {α : Type} (att : Bool) : Option (Feed α) → Nat → List α
   | some x, i => if att then x.get i else []
   | none, _ => []
 
-/-- What the decider reads: present = attached, usable = COUNTED and usable on the trailer.  Eligibility is not a
-    signed kind: it is absent (decision 15), as `Scoped.kRules` reads none. -/
+/-- What the decider reads: present = attached, usable = COUNTED and usable on the trailer. -/
 def signedFeeds (v : View) (fx : FeedSet) (today : Nat) : Feeds :=
   { dmfSome := v.dmf.attached, pdSome := v.pd.attached, exclSome := v.ex.attached, spanSome := v.en.attached,
-    eligSome := false,
     dmfOk := v.dmf.cause == .COUNTED && Feed.usable today 90 fx.dmf,
     pdOk := v.pd.cause == .COUNTED && Feed.usable today 90 fx.pd,
     exclOk := v.ex.cause == .COUNTED && Feed.usable today 31 fx.ex,
     spanOk := v.en.cause == .COUNTED && Feed.usable today 7 fx.en,
-    eligOk := false,
     dmf := Feed.byId v.dmf.attached fx.dmf, pdeath := Feed.byId v.pd.attached fx.pd,
-    excl := Feed.byId v.ex.attached fx.ex, span := Feed.byId v.en.attached fx.en, elig := fun _ => [] }
+    excl := Feed.byId v.ex.attached fx.ex, span := Feed.byId v.en.attached fx.en }
 
 /-- A batch on signed feeds: the read's view, then the indexed decision on the feeds it makes usable. -/
 def decideSignedIdx (verify : Bytes → Bytes → Bytes → Bool) (s : St) (o : Offer) (st : Keyset.Ratchet) (fx : FeedSet)
@@ -129,14 +126,11 @@ def decideSignedIdx (verify : Bytes → Bytes → Bytes → Bool) (s : St) (o : 
 /-- Two feed views the decider cannot tell apart: it reads per id at most `capN + 1` facts. -/
 def Feeds.Same (fd fd' : Feeds) : Prop :=
   fd.dmfSome = fd'.dmfSome ∧ fd.pdSome = fd'.pdSome ∧ fd.exclSome = fd'.exclSome ∧ fd.spanSome = fd'.spanSome ∧
-    fd.eligSome = fd'.eligSome ∧
     fd.dmfOk = fd'.dmfOk ∧ fd.pdOk = fd'.pdOk ∧ fd.exclOk = fd'.exclOk ∧ fd.spanOk = fd'.spanOk ∧
-    fd.eligOk = fd'.eligOk ∧
     (∀ i, (fd.dmf i).take (capN + 1) = (fd'.dmf i).take (capN + 1)) ∧
     (∀ i, (fd.pdeath i).take (capN + 1) = (fd'.pdeath i).take (capN + 1)) ∧
     (∀ i, (fd.excl i).take (capN + 1) = (fd'.excl i).take (capN + 1)) ∧
-    (∀ i, (fd.span i).take (capN + 1) = (fd'.span i).take (capN + 1)) ∧
-    (∀ i, (fd.elig i).take (capN + 1) = (fd'.elig i).take (capN + 1))
+    (∀ i, (fd.span i).take (capN + 1) = (fd'.span i).take (capN + 1))
 
 variable {verify : Bytes → Bytes → Bytes → Bool} {o : Offer} {st : Keyset.Ratchet} {rows : Rows} {fx : FeedSet}
   {now today : Nat} {redo f : List Nat} {byp : List (Nat × Nat)} {b : List Line} {s : St} {c : Ctx} {rel unr : Snapshot Line} {H : Bytes → Bytes}
@@ -152,13 +146,10 @@ private def specFeeds (c : Ctx) : Feeds :=
     spanOk := usable c.today 7 okSpan c.enrollment, dmf := fun i => (entries c.dmf).filter (·.id == i),
     pdeath := fun i => (entries c.providerDeaths).filter (·.id == i),
     excl := fun i => (entries c.exclusions).filter (·.id == i),
-    span := fun i => (entries c.enrollment).filter (·.member == i),
-    eligSome := c.eligibility.isSome, eligOk := usable c.today 7 okElig c.eligibility,
-    elig := fun i => (entries c.eligibility).filter (·.member == i) }
+    span := fun i => (entries c.enrollment).filter (·.member == i) }
 
 private theorem specFeeds_inv (c : Ctx) : FCtxInv ⟨c.today, c.redo, specFeeds c, c.byp, c.lim⟩ c :=
-  ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, fun _ => rfl, fun _ => rfl, fun _ => rfl, fun _ => rfl, rfl, rfl,
-    rfl, rfl, fun _ => rfl⟩
+  ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, fun _ => rfl, fun _ => rfl, fun _ => rfl, fun _ => rfl, rfl, rfl⟩
 
 private theorem take_facts {α : Type} {xs ys : List α} (h : xs.take (capN + 1) = ys.take (capN + 1)) :
     facts xs = facts ys ∧ feedOver xs = feedOver ys := by
@@ -172,18 +163,17 @@ private theorem take_facts {α : Type} {xs ys : List α} (h : xs.take (capN + 1)
 
 private theorem over_same {fd fd' : Feeds} (h : Feeds.Same fd fd') :
     (∀ i, feedOver (fd.dmf i) = feedOver (fd'.dmf i)) ∧ (∀ i, feedOver (fd.pdeath i) = feedOver (fd'.pdeath i)) ∧
-      (∀ i, feedOver (fd.excl i) = feedOver (fd'.excl i)) ∧ (∀ i, feedOver (fd.span i) = feedOver (fd'.span i)) ∧
-      (∀ i, feedOver (fd.elig i) = feedOver (fd'.elig i)) := by
-  obtain ⟨-, -, -, -, -, -, -, -, -, -, f1, f2, f3, f4, f5⟩ := h
+      (∀ i, feedOver (fd.excl i) = feedOver (fd'.excl i)) ∧ (∀ i, feedOver (fd.span i) = feedOver (fd'.span i)) := by
+  obtain ⟨-, -, -, -, -, -, -, -, f1, f2, f3, f4⟩ := h
   exact ⟨fun i => (take_facts (f1 i)).2, fun i => (take_facts (f2 i)).2, fun i => (take_facts (f3 i)).2,
-    fun i => (take_facts (f4 i)).2, fun i => (take_facts (f5 i)).2⟩
+    fun i => (take_facts (f4 i)).2⟩
 
 private theorem uncapped_same {fe : Fetched} {fd fd' : Feeds} (h : Feeds.Same fd fd') (hb : Uncapped fe fd b) :
     Uncapped fe fd' b := by
-  obtain ⟨o1, o2, o3, o4, o5⟩ := over_same h
+  obtain ⟨o1, o2, o3, o4⟩ := over_same h
   intro l hl
   have := hb l hl
-  simpa only [capped, hotKeys, feedCapped, o1, o2, o3, o4, o5] using this
+  simpa only [capped, hotKeys, feedCapped, o1, o2, o3, o4] using this
 
 private theorem one_rows {α : Type} {Hd : Option SnapshotV2.Head} {k : Kind} {fl : α → List (Nat × Nat)}
     {so : Option (Snapshot α)} {xo : Option Bytes} {r : SnapshotV2.Signed α}
@@ -267,8 +257,7 @@ private theorem same_all (hx : FeedSetInv fx rows) :
     (lone := o.en.isSome || rows.en.isSome) (x := o.en) (sl := (readAll verify o c.today st rows).en) x4
     fun _ h => one_rows (verify := verify) (Hd := (readAll verify o c.today st rows).head) (k := .ENROLLMENT)
       (fl := Span.fields) (xo := o.en) h
-  exact ⟨d1.1, d2.1, d3.1, d4.1, rfl, d1.2.1, d2.2.1, d3.2.1, d4.2.1, rfl, d1.2.2, d2.2.2, d3.2.2, d4.2.2,
-    fun _ => rfl⟩
+  exact ⟨d1.1, d2.1, d3.1, d4.1, d1.2.1, d2.2.1, d3.2.1, d4.2.1, d1.2.2, d2.2.2, d3.2.2, d4.2.2⟩
 
 private theorem oneIdx_eq {α : Type} {k : Kind} {fl : α → List (Nat × Nat)} {okf : Nat → α → Bool} {key : α → Nat}
     {Hd : Option SnapshotV2.Head} {ft : Option (Feed α)} {so : Option (Snapshot α)} {xo : Option Bytes}
@@ -317,23 +306,22 @@ theorem fetched_feeds {a u : Head} {fe : Fetched} {fc fc' : FCtx} (h : Feeds.Sam
   obtain ⟨t', r', fd', y', l'⟩ := fc'
   dsimp only at h ht hr hy hl ⊢
   subst ht hr hy hl
-  obtain ⟨o1, o2, o3, o4, o5⟩ := over_same h
-  obtain ⟨e1, e2, e3, e4, e9, e5, e6, e7, e8, e10, f1, f2, f3, f4, f5⟩ := h
+  obtain ⟨o1, o2, o3, o4⟩ := over_same h
+  obtain ⟨e1, e2, e3, e4, e5, e6, e7, e8, f1, f2, f3, f4⟩ := h
   have g1 : ∀ i, facts (fd.dmf i) = facts (fd'.dmf i) := fun i => (take_facts (f1 i)).1
   have g2 : ∀ i, facts (fd.pdeath i) = facts (fd'.pdeath i) := fun i => (take_facts (f2 i)).1
   have g3 : ∀ i, facts (fd.excl i) = facts (fd'.excl i) := fun i => (take_facts (f3 i)).1
   have g4 : ∀ i, facts (fd.span i) = facts (fd'.span i) := fun i => (take_facts (f4 i)).1
-  have g5 : ∀ i, facts (fd.elig i) = facts (fd'.elig i) := fun i => (take_facts (f5 i)).1
   constructor
   · have hx : localIx a u fe (localRows fe.rel) (localRows fe.unr) ⟨t, r, fd, y, l⟩ b =
         localIx a u fe (localRows fe.rel) (localRows fe.unr) ⟨t, r, fd', y, l⟩ b := by
-      simp only [localIx, idMap, e1, e2, e3, e4, e5, e6, e7, e8, e9, e10, g1, g2, g3, g4, g5]
+      simp only [localIx, idMap, e1, e2, e3, e4, e5, e6, e7, e8, g1, g2, g3, g4]
     have hh : hotKeys fe fd b = hotKeys fe fd' b := by simp only [hotKeys, o4]
     have hc : cappedWith (idCapped fe) (hotKeys fe fd b) fd = cappedWith (idCapped fe) (hotKeys fe fd' b) fd' :=
-      funext fun l => by simp only [hh, cappedWith, feedCapped, o1, o2, o3, o4, o5]
+      funext fun l => by simp only [hh, cappedWith, feedCapped, o1, o2, o3, o4]
     simp only [decideFetched]
     rw [hx, hc]
-  · simp only [work, factWork, g1, g2, g3, g4, g5]
+  · simp only [work, factWork, g1, g2, g3, g4]
 
 /-- On a batch no cap touches, over an index of the carried sets and tables of the frame's rows, the signed flat batch
     is `Consume.decideSigned` on the carried state: its view, its decisions, the rows it appends. -/
@@ -369,9 +357,7 @@ theorem allow_signed_idx (hx : FeedSetInv fx rows) (hd : d ∈ (decideSignedIdx 
     exact Consume.counted_good fun k => by
       cases k <;> first | exact o1.1 | exact o2.1 | exact o3.1 | exact o4.1
 
-/-! ### Vectors (`Consume`'s all-COUNTED frame as feeds).  No signed-path vector exercises an ALLOW until the signed
-    path is extended (decision 15; design 4.6b, section 9 field 8): the `outcome != .ALLOW` checks here and in
-    `Consume.vStale` are trivially true.  Mutants and the vector that kills each: `Ok` ignoring `counted`
+/-! ### Vectors (`Consume`'s ALLOW frame as feeds).  Mutants and the vector that kills each: `Ok` ignoring `counted`
     (`signedFeeds` without the cause test): the bad-digest vector; `take capN` for `take (capN + 1)` in `vFeed`: the
     1,025-fact vector; the count unchecked (`x.rows == x.count` dropped from `Feed.usable`): the short-count vector. -/
 
@@ -395,9 +381,8 @@ def vSame (o : Offer) (dm : Snapshot Death) : Bool :=
       { Consume.vR with dmf := some dm }).view Consume.vB.today) &&
     vOut (vIdx o (vFx dm)).2.1 == vOut (Consume.vDec o { Consume.vR with dmf := some dm })
 
--- feed read = row read: all four counted; the signed path reads no eligibility (decision 15), so HUMAN_REVIEW on
--- STALE_ELIGIBILITY alone (no other rule fires) where it was ALLOW
-#guard vSame Consume.vO Scoped.vD4 && vOut (vIdx Consume.vO (vFx)).2.1 == [(.HUMAN_REVIEW, [.STALE_ELIGIBILITY])]
+-- feed read = row read: ALLOW, all four counted
+#guard vSame Consume.vO Scoped.vD4 && vOut (vIdx Consume.vO (vFx)).2.1 == [(.ALLOW, [])]
 #guard vKinds (vIdx Consume.vO (vFx)).1 |>.all (·.cause == .COUNTED)
 -- a bad digest (rows other than the signed ones) is BINDING and STALE_DMF, as for rows
 def vBad : Snapshot Death := { Scoped.vD4 with entries := [⟨99, 20200102⟩] }

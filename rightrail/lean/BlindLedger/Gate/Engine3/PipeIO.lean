@@ -26,7 +26,7 @@ opaque writeRange (b : @& ByteArray) (off len : USize) : IO UInt32
 
 /-- Runs the allocator's process start-up, which the Windows loader callback would run but this build does not link: until it
     has run the allocator treats the process as still loading and frees memory with a reset, which keeps it charged. -/
-@[extern c inline "({ extern void rr_mi_load(void) __asm__(\"_Z16_mi_process_loadv\"); rr_mi_load(); lean_io_result_mk_ok(lean_box(0)); })"]
+@[extern c inline "(mi_process_init(), lean_io_result_mk_ok(lean_box(0)))"]
 opaque allocLoad : IO Unit
 
 end BlindLedger.Gate.Engine3.Run

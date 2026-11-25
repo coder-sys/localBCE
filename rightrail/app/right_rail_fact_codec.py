@@ -107,18 +107,23 @@ def decode_fact(b: bytes) -> dict:
 
 
 def encode_receipt(r: dict) -> bytes:
-    body = bytes([RECEIPT_TAG]) + _put(RECEIPT, r)
+    """The fields, then `rd` (64 bytes: the hash of the frame's reference rows; zero, or absent from `r`, when it had
+    none), then 16 zero bytes."""
+    body = bytes([RECEIPT_TAG]) + _put(RECEIPT, r) + _put([("rd", "b", 64)], {"rd": r.get("rd", bytes(64))})
     return body + bytes(BODY - len(body))
 
 
 def decode_receipt(b: bytes) -> dict:
-    """Exactly 245 bytes, tag 0x40, canonical identifiers and zero padding; otherwise ValueError."""
+    """Exactly 245 bytes, tag 0x40, canonical identifiers and zero padding; otherwise ValueError.  `rd` is in the dict
+    only when it is not zero."""
     if len(b) != BODY:
         raise ValueError("wrong length")
     if b[0] != RECEIPT_TAG:
         raise ValueError("not a receipt")
     r, at = _get(RECEIPT, b, 1)
-    if any(b[at:]):
+    if any(b[at:at + 64]):
+        r["rd"] = bytes(b[at:at + 64])
+    if any(b[at + 64:]):
         raise ValueError("nonzero padding")
     return r
 

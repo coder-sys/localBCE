@@ -92,22 +92,22 @@
     ]
   },
   "toolchain": {
-    "descriptor": "leanprover/lean4:v4.33.1",
+    "descriptor": "leanprover/lean4:v4.36.0",
     "platform": "windows-x86_64",
-    "lean_version": "Lean (version 4.33.1, x86_64-w64-windows-gnu, commit 819816b2e0a3bf405af45ae5c7af2491d8f5bee6, Release)",
-    "lake_version": "Lake version 5.0.0-src+819816b (Lean version 4.33.1)",
+    "lean_version": "Lean (version 4.36.0, x86_64-w64-windows-gnu, commit 611c117bfaf7b7ae1cfcf246ce6fba31e8f509e9, Release)",
+    "lake_version": "Lake version 5.0.0-src+611c117 (Lean version 4.36.0)",
     "executables": {
       "lake": {
-        "bytes": 87552,
-        "sha256": "565c3976275d79e104421014b6229f4fcf4a8c8edfe164a43b344c91af6f496c"
+        "bytes": 87040,
+        "sha256": "fd15d19aedd70272e2b405bd4f26ce936a9198b9748996dd0bcddcdde0423218"
       },
       "lean": {
         "bytes": 83456,
-        "sha256": "af49bacfabaa1fea71332ca0feae0fa1a60912219d5902291adc79f905bffb8d"
+        "sha256": "f567cc855e5f8006f65076bc813711d581edbae54f1d1d138462e7114351b532"
       },
       "leanchecker": {
-        "bytes": 115200,
-        "sha256": "31b506f83737b7d629fd11699df5aaf88c3b50be23c28219e6b283f0de98f85c"
+        "bytes": 120320,
+        "sha256": "51f6b4098bb0d5b4a4de5c5f8501fac0c53d7236137b3f32d56b7e2717d05853"
       }
     }
   },

@@ -10,6 +10,7 @@ theorem openRequests_length (left : Nat) (rs : List PkgActionRow) : (openRequest
 
 private theorem rowBefore_irrefl (a : PkgActionRow) : rowBefore a a = false := by
   simp [rowBefore]
+  exact Std.lt_irrefl
 
 private theorem rowBefore_trans {a b c : PkgActionRow} (h1 : rowBefore a b = true) (h2 : rowBefore b c = true) :
     rowBefore a c = true := by

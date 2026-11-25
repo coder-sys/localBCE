@@ -256,7 +256,7 @@ class RightRailFinancialConstitutionInvariantTests(_AcceptanceFixtures, unittest
     def _durable_state(self, store: FinancialOwner) -> dict[str, object]:
         """Byte-level identity of everything durable the owner can have written.
 
-        WAL (XI.2 record in docs/CORE_REDESIGN.md): the database is the image a crash recovery reads, the
+        WAL: the database is the image a crash recovery reads, the
         main file plus every committed -wal frame, taken through a read-only connection that never checkpoints.
         The main file's bytes and the -wal/-shm names depend on which connection closed last, not on any commit."""
 

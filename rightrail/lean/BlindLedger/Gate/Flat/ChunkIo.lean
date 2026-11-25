@@ -513,23 +513,53 @@ structure RS where
   rq : Bytes
 
 /-- Authority record `b` may follow `a` (layout `Worker.encAuth`: pin 64 ‖ epoch u32 ‖ head 64 ‖ day u32 ‖ cp 64 ‖
-    floor u64): both are 208 bytes, under the same key-set pin, and neither the key-set epoch nor the grant floor is lower. -/
+    floor u64 ‖ rs 64 ‖ rsv u32): both are `authLen` bytes, under the same key-set pin; neither the key-set epoch, the
+    grant floor nor the rule-set version is lower; at the same rule-set version the rule-set digest is the same; and the
+    rule-set version is zero exactly when the digest is zero (a record of version zero names no digest). -/
 def authFollows (a b : Bytes) : Bool :=
-  a.length == 208 && b.length == 208 && a.take 64 == b.take 64 &&
-    beNat ((a.drop 64).take 4) ≤ beNat ((b.drop 64).take 4) && beNat (a.drop 200) ≤ beNat (b.drop 200)
+  a.length == authLen && b.length == authLen && a.take 64 == b.take 64 &&
+    beNat ((a.drop 64).take 4) ≤ beNat ((b.drop 64).take 4) &&
+    beNat ((a.drop 200).take 8) ≤ beNat ((b.drop 200).take 8) &&
+    beNat ((a.drop 272).take 4) ≤ beNat ((b.drop 272).take 4) &&
+    (beNat ((a.drop 272).take 4) != beNat ((b.drop 272).take 4) || (a.drop 208).take 64 == (b.drop 208).take 64) &&
+    (beNat ((b.drop 272).take 4) == 0 || (b.drop 208).take 64 != zeroDigest) &&
+    (beNat ((b.drop 272).take 4) != 0 || (b.drop 208).take 64 == zeroDigest)
 
-theorem authFollows_iff {a b : Bytes} : authFollows a b = true ↔ a.length = 208 ∧ b.length = 208 ∧
+theorem authFollows_iff {a b : Bytes} : authFollows a b = true ↔ a.length = authLen ∧ b.length = authLen ∧
     a.take 64 = b.take 64 ∧ beNat ((a.drop 64).take 4) ≤ beNat ((b.drop 64).take 4) ∧
-    beNat (a.drop 200) ≤ beNat (b.drop 200) := by
-  simp [authFollows, and_assoc]
+    beNat ((a.drop 200).take 8) ≤ beNat ((b.drop 200).take 8) ∧
+    beNat ((a.drop 272).take 4) ≤ beNat ((b.drop 272).take 4) ∧
+    (beNat ((a.drop 272).take 4) = beNat ((b.drop 272).take 4) → (a.drop 208).take 64 = (b.drop 208).take 64) ∧
+    (0 < beNat ((b.drop 272).take 4) → (b.drop 208).take 64 ≠ zeroDigest) ∧
+    (beNat ((b.drop 272).take 4) = 0 → (b.drop 208).take 64 = zeroDigest) := by
+  simp only [authFollows, Bool.and_eq_true, Bool.or_eq_true, beq_iff_eq, bne_iff_ne, ne_eq, decide_eq_true_eq,
+    and_assoc]
+  constructor
+  · rintro ⟨h1, h2, h3, h4, h5, h6, h7, h8, h9⟩
+    refine ⟨h1, h2, h3, h4, h5, h6, fun e => h7.resolve_left (fun n => n e), fun p => h8.resolve_left (by omega),
+      fun z => h9.resolve_left (fun n => n z)⟩
+  · rintro ⟨h1, h2, h3, h4, h5, h6, h7, h8, h9⟩
+    refine ⟨h1, h2, h3, h4, h5, h6, ?_, ?_, ?_⟩
+    · by_cases e : beNat ((a.drop 272).take 4) = beNat ((b.drop 272).take 4)
+      · exact Or.inr (h7 e)
+      · exact Or.inl e
+    · by_cases z : beNat ((b.drop 272).take 4) = 0
+      · exact Or.inl z
+      · exact Or.inr (h8 (by omega))
+    · by_cases z : beNat ((b.drop 272).take 4) = 0
+      · exact Or.inr (h9 z)
+      · exact Or.inl z
 
-/-- Records that each follow the one before keep the first record's key-set pin, and its key-set epoch and grant floor
-    are a lower bound of every later one. -/
+/-- Records that each follow the one before keep the first record's key-set pin; its key-set epoch, grant floor and
+    rule-set version are a lower bound of every later one; and a later record at its rule-set version has its digest. -/
 theorem authFollows_trans {a b c : Bytes} (h1 : authFollows a b = true) (h2 : authFollows b c = true) :
     authFollows a c = true := by
-  obtain ⟨a1, -, a3, a4, a5⟩ := authFollows_iff.mp h1
-  obtain ⟨-, b2, b3, b4, b5⟩ := authFollows_iff.mp h2
-  exact authFollows_iff.mpr ⟨a1, b2, a3.trans b3, Nat.le_trans a4 b4, Nat.le_trans a5 b5⟩
+  obtain ⟨a1, -, a3, a4, a5, a6, a7, -, -⟩ := authFollows_iff.mp h1
+  obtain ⟨-, b2, b3, b4, b5, b6, b7, b8, b9⟩ := authFollows_iff.mp h2
+  refine authFollows_iff.mpr ⟨a1, b2, a3.trans b3, Nat.le_trans a4 b4, Nat.le_trans a5 b5, Nat.le_trans a6 b6,
+    fun e => ?_, b8, b9⟩
+  have e1 : beNat ((a.drop 272).take 4) = beNat ((b.drop 272).take 4) := by omega
+  exact (a7 e1).trans (b7 (by omega))
 
 /-- `replayFrame` on RAM: frame `x` (its metadata bytes `m3`) on `S`, of shard `shard` and starting bucket count `nb0`.
     Where the chunk's slots do not fit, the directory is rebuilt as the writer does (`regrowIo` over the log `fd`).  `S`
@@ -738,6 +768,8 @@ def openStore (dir : String) (hd : Bytes) (bt : Nat) (check : Option String) : I
   let pend ← match pr with
     | .ok p => pure p
     | .error why => return ← fail why
+  -- this engine runs no rule set and writes rule-set version 0: a store whose record names one is not opened
+  unless (S.au :: pend.toList.map (·.2.1)).all (fun a => beNat ((a.drop 272).take 4) == 0) do return ← fail "CORRUPT"
   if let some chk := check then
     IO.FS.withFile ⟨chk⟩ .append fun h => h.putStrLn s!"load frames {bt + if pend.isSome then 1 else 0} replayed {bt}"
   try

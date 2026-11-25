@@ -26,6 +26,11 @@ open BlindLedger.Gate.Rules BlindLedger.Gate.Rules.Fast
 open BlindLedger.Gate.OnepIndex (leb unleb capD)
 open Std (HashMap HashSet)
 
+/-- The width of the shard's authority record (`Worker.encAuth`): pin 64, epoch 4, ratchet head 64, day 4,
+    checkpoint 64, floor 8, rule-set digest 64, rule-set version 4.  The only definition of it: both engines, the answer
+    format and the store log use this. -/
+def authLen : Nat := 276
+
 /-! ## Codec: minimal LEB128 (`OnepIndex.leb`) -/
 
 def unlebN : Nat → Bytes → Option (List Nat × Bytes)
@@ -228,23 +233,20 @@ def SetIdx.addRows (H : Bytes → Bytes) (x : SetIdx) (adds : List Line) : SetId
 
 /-! ## Feeds (not history: fixed per snapshot, read by id) -/
 
-/-- The five reference snapshots by id, with their presence and usability fixed when the snapshot is installed. -/
+/-- The four reference snapshots by id, with their presence and usability fixed when the snapshot is installed. -/
 structure Feeds where
   dmfSome : Bool
   pdSome : Bool
   exclSome : Bool
   spanSome : Bool
-  eligSome : Bool
   dmfOk : Bool
   pdOk : Bool
   exclOk : Bool
   spanOk : Bool
-  eligOk : Bool
   dmf : Nat → List Death
   pdeath : Nat → List Death
   excl : Nat → List Exclusion
   span : Nat → List Span
-  elig : Nat → List Elig
 
 /-- What a frame carries besides the lines: today, the redone payments, the feeds. -/
 structure FCtx where
@@ -265,9 +267,7 @@ def FCtxInv (fc : FCtx) (c : Ctx) : Prop :=
   (∀ i, fc.feeds.dmf i = (entries c.dmf).filter (·.id == i)) ∧
   (∀ i, fc.feeds.pdeath i = (entries c.providerDeaths).filter (·.id == i)) ∧
   (∀ i, fc.feeds.excl i = (entries c.exclusions).filter (·.id == i)) ∧
-  (∀ i, fc.feeds.span i = (entries c.enrollment).filter (·.member == i)) ∧ fc.byp = c.byp ∧ fc.lim = c.lim ∧
-  fc.feeds.eligSome = c.eligibility.isSome ∧ fc.feeds.eligOk = usable c.today 7 okElig c.eligibility ∧
-  (∀ i, fc.feeds.elig i = (entries c.eligibility).filter (·.member == i))
+  (∀ i, fc.feeds.span i = (entries c.enrollment).filter (·.member == i)) ∧ fc.byp = c.byp ∧ fc.lim = c.lim
 
 /-- The facts the decider may use of one id. -/
 def facts {α : Type} (xs : List α) : List α := xs.take capN
@@ -348,10 +348,9 @@ def localIx (hr hu : Head) (fe : Fetched) (rr ur : List Posting) (fc : FCtx) (b 
     relN := rr.length, unrN := ur.length, rel := (rr.map (·.row)).toArray, unr := (ur.map (·.row)).toArray,
     relPost := postMap rr fe.rel, unrPost := postMap ur fe.unr, looseKeys := ∅,
     dmfSome := fd.dmfSome, pdSome := fd.pdSome, exclSome := fd.exclSome, spanSome := fd.spanSome,
-    eligSome := fd.eligSome,
-    dmfOk := fd.dmfOk, pdOk := fd.pdOk, exclOk := fd.exclOk, spanOk := fd.spanOk, eligOk := fd.eligOk,
+    dmfOk := fd.dmfOk, pdOk := fd.pdOk, exclOk := fd.exclOk, spanOk := fd.spanOk,
     dmf := idMap fd.dmf (members b), pdeath := idMap fd.pdeath (parties b), excl := idMap fd.excl (parties b),
-    span := idMap fd.span (spanIds b ur), elig := idMap fd.elig (members b) }
+    span := idMap fd.span (spanIds b ur) }
 
 /-! ## Caps: what a line may not decide on -/
 
@@ -360,7 +359,7 @@ def idCapped (fe : Fetched) : Bool := fe.rel.any fun ke => ke.1.head? == some 4 
 
 /-- One of the line's own feed reads is cut short. -/
 def feedCapped (fd : Feeds) (l : Line) : Bool :=
-  feedOver (fd.dmf l.member) || feedOver (fd.span l.member) || feedOver (fd.elig l.member) ||
+  feedOver (fd.dmf l.member) || feedOver (fd.span l.member) ||
     [l.payee, l.rendering].any fun i => feedOver (fd.pdeath i) || feedOver (fd.excl i)
 
 /-- The row count a read of key `k` (entry `e`) gives the cap: its core's (`core`) when the core holds more than
@@ -420,11 +419,11 @@ def factWork {α : Type} (g : Nat → List α) (ids : List Nat) : Nat := (ids.ma
 
 def work (fe : Fetched) (fd : Feeds) (b : List Line) : Nat :=
   entryWork fe.rel + entryWork fe.unr + factWork fd.dmf (members b) + factWork fd.span (spanIds b (localRows fe.unr)) +
-    factWork fd.pdeath (parties b) + factWork fd.excl (parties b) + factWork fd.elig (members b)
+    factWork fd.pdeath (parties b) + factWork fd.excl (parties b)
 
-/-- Per line: 3 keys in each set, at most one round-2 id key and one span read per fetched unresolved posting, 7 feed
+/-- Per line: 3 keys in each set, at most one round-2 id key and one span read per fetched unresolved posting, 6 feed
     ids; each read at most `1 + capN` units.  No term depends on the history. -/
-def workC : Nat := (13 + 6 * capN) * (1 + capN)
+def workC : Nat := (12 + 6 * capN) * (1 + capN)
 
 /-! ## CHAIN/v1 -/
 

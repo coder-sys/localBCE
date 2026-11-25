@@ -4,19 +4,19 @@
 rows after it (``pinInput`` in ``lean/BlindLedger/Gate/Rules/Spec.lean``); the
 author declares COUNT.  Each ``anchor ?`` becomes the state digest (``stateDigest``
 in ``lean/BlindLedger/Gate/Spec.lean``) of the latest released and unresolved snaps.  No rule is evaluated here; the
-Lean runner decides and compares every line.  The generator of the retired ``demo_zz.vectors`` was deleted (git keeps
-it); ``demo_zz_v2.vectors`` is that file with one fixed ``elig`` row per member inserted.
+Lean runner decides and compares every line.  The generator of ``tests/gate_rules/demo_zz.vectors`` was deleted
+(git keeps it); the file is kept as written.
 """
 
 import hashlib
 import sys
 
-KINDS = ("dmf", "pdeath", "excl", "span", "released", "unresolved", "elig")  # kind = position + 1: elig is kind 7
+KINDS = ("dmf", "pdeath", "excl", "span", "released", "unresolved")
 FLOWS = ("FFS_CYCLE", "FFS_CLAIM", "CAP_820")
 ID, PAY = 129, 261
 LINE = (ID, PAY, 1, ID, ID, ID, 4, ID, 4, 8)
 WIDTHS = {"dmf": (ID, 4), "pdeath": (ID, 4), "excl": (ID, 4, 4), "span": (ID, ID, 4, 4), "released": LINE,
-          "unresolved": LINE, "elig": (ID, ID, 1, 4, 4)}
+          "unresolved": LINE}
 
 
 def row(kind, fields):

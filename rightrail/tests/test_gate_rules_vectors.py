@@ -15,16 +15,16 @@ EXE = os.path.join(LEAN, ".lake", "build", "bin", "gate_rules.exe" if os.name ==
 # The files the runner embeds (`RulesMain.source`): every compiled-in file; proof-only imports (Theorems, FastEq, ...) are checked by PROOFS.
 SOURCES = [f"BlindLedger/{p}.lean" for p in ("Gate/Rules/Spec", "Gate/Rules/Fast", "Gate/Rules/Run", "Gate/Rules/RulesMain", "Gate/Rules/RulesShip", "Gate/Engine/OneProc",
            "Gate/OnepIndex", "Gate/Anchor", "Gate/Spec", "Sha3", "Sha3Fast", "Sha3Quick", "Sha3Lanes", "Gate/Engine3/Sha3Fused", "Gate/MlDsa87", "Gate/Payer", "Gate/Producer",
-           "Gate/Verify", "Gate/Batch", "Gate/Flat/Model", "Gate/Flat/Io",
+           "Gate/Verify", "Gate/Batch", "Gate/PublishSpec", "Gate/Cosign/Codec", "Gate/Cosign/Chain", "Gate/Cosign/Verify", "Gate/Cosign/Link", "Gate/Cosign/Install", "Gate/Flat/Model", "Gate/Flat/Io",
            "Gate/Flat/Bin", "Gate/Flat/Chunk", "Gate/Flat/Store", "Gate/Flat/ChunkIo", "Gate/Flat/Worker",
            "Gate/Authority", "Gate/Flat/StoreLog", "Gate/Flat/StoreTombs", "Gate/Frame/Fast", "Gate/Frame/Spec", "Gate/Keyset",
-           "Gate/Rules/Request", "Gate/SnapshotV2")] + ["lakefile.toml", "lean-toolchain"]
+           "Gate/Rules/Request", "Gate/SnapshotV2", "Gate/CauseRelease", "Gate/AuthorityLaws", "Gate/ParseLaws",
+           "Gate/CheckpointTheorems", "Gate/Rules/Bypass", "Gate/Rules/DecideLayer", "Gate/Rules/ExactDuplicate")] + ["lakefile.toml", "lean-toolchain"]
 # The twin's equality proof and the Spec's theorems; the runner does not import them, so only this test notices a stale proof.
 PROOFS = ["BlindLedger.Gate.Rules.FastEq", "BlindLedger.Gate.Rules.Theorems", "BlindLedger.Sha3FastEq", "BlindLedger.Gate.Theorems",
           "BlindLedger.Gate.Flat.Theorems", "BlindLedger.Gate.Flat.ChunkTheorems", "BlindLedger.Gate.Flat.StoreTheorems",
           "BlindLedger.Gate.AnchorTheorems", "BlindLedger.Gate.ProducerTheorems", "BlindLedger.Gate.Flat.StoreTombs",
-          "BlindLedger.Gate.Flat.PayTheorems", "BlindLedger.Gate.Flat.RowsBudget", "BlindLedger.Gate.Flat.PayNumbering",
-          "BlindLedger.Gate.Flat.DecideRows"]
+          "BlindLedger.Gate.Cosign.InstallTheorems", "BlindLedger.Gate.Cosign.Theorems"]
 
 
 def runner_source_line(exe=EXE):
@@ -82,7 +82,7 @@ class GateRulesVectors(unittest.TestCase):
         self.assertEqual(run.returncode, 0, "the FastEq or Theorems proofs are stale; run `lake build` in lean/\n" + run.stdout[-1500:])
 
     def test_vectors_pass(self):
-        for name in ("rules_v2.vectors", "demo_zz_v2.vectors", "shards_v1.vectors"):
+        for name in ("rules_v1.vectors", "demo_zz.vectors", "shards_v1.vectors"):
             with self.subTest(name):
                 run = subprocess.run([EXE, os.path.join(ROOT, "tests", "gate_rules", name)],
                                      capture_output=True, text=True, timeout=600)
@@ -143,7 +143,7 @@ class GateRulesVectors(unittest.TestCase):
         self.assertNotEqual(a, b)
 
     def test_reads_are_the_read_set_bytes(self):
-        """`RULES_READS` is recomputed here: u32 today || pins || u32 |P| || P, P the READ-SET/v5 bytes over the declared
+        """`RULES_READS` is recomputed here: u32 today || pins || u32 |P| || P, P the READ-SET/v2 bytes over the declared
         sets' STATE/v1 digest, then the first commit's (kind absent, a redo in the order read, two commits)."""
         frame = ["today 20270315", "snap released 20270315 0 ?", "snap unresolved 20270315 0 ?",
                  "snap dmf 20270301 2 ?", "dmf 9002 20261120", "dmf 9001 20270110",
@@ -164,8 +164,7 @@ class GateRulesVectors(unittest.TestCase):
         kinds = [("dmf", 1, "DMF", 20270301, [("9002", "20261120"), ("9001", "20270110")]),
                  ("pdeath", 2, "PROVIDER-DEATH", 20270301, [("7701", "20270120")]),
                  ("excl", 3, "EXCLUSION", 20270310, [("7802", "20260101", "20270131"), ("504", "20260101", "99991231")]),
-                 ("span", 4, "ENROLLMENT", None, None),
-                 ("elig", 7, "ELIGIBILITY", None, None)]
+                 ("span", 4, "ENROLLMENT", None, None)]
         pins, slots = b"", b""
         for name, k, tag, asof, rows in kinds:
             if rows is None:
@@ -177,7 +176,7 @@ class GateRulesVectors(unittest.TestCase):
         genesis = hashlib.sha3_512(b"RR/GATE/STATE/v1\0" + hashed("RR/GATE/RELEASED/v1", 5, 20270315, []) +
                                    hashed("RR/GATE/UNRESOLVED/v1", 6, 20270315, [])).digest()
         for i, (redo, base) in enumerate([([], genesis), ([12, 11], bytes.fromhex(digests[0]))]):
-            pre = b"RR/GATE/READ-SET/v5\0" + slots + be4(len(redo)) + b"".join(
+            pre = b"RR/GATE/READ-SET/v2\0" + slots + be4(len(redo)) + b"".join(
                 r.to_bytes(gate_rules_data.PAY, "big") for r in redo) + base
             self.assertEqual(reads[i], (be4(20270315) + pins + be4(len(pre)) + pre).hex(), f"commit {i}")
 

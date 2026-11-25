@@ -85,17 +85,14 @@ structure Ix where
   pdSome : Bool
   exclSome : Bool
   spanSome : Bool
-  eligSome : Bool
   dmfOk : Bool
   pdOk : Bool
   exclOk : Bool
   spanOk : Bool
-  eligOk : Bool
   dmf : HashMap Nat (List Death)
   pdeath : HashMap Nat (List Death)
   excl : HashMap Nat (List Exclusion)
   span : HashMap Nat (List Span)
-  elig : HashMap Nat (List Elig)
 
 /-- One pass over each set and snapshot: O(n) expected, n the rows read. -/
 def Ix.build (c : Ctx) (b : List Line) : Ix :=
@@ -111,13 +108,11 @@ def Ix.build (c : Ctx) (b : List Line) : Ix :=
     relPost := (posts ra).1, unrPost := (posts ua).1,
     looseKeys := HashSet.ofList ((ra.drop rv.entries.length ++ ua.drop uv.entries.length).map exactKey),
     dmfSome := c.dmf.isSome, pdSome := c.providerDeaths.isSome, exclSome := c.exclusions.isSome,
-    spanSome := c.enrollment.isSome, eligSome := c.eligibility.isSome,
+    spanSome := c.enrollment.isSome,
     dmfOk := usable c.today 90 okDeath c.dmf, pdOk := usable c.today 90 okDeath c.providerDeaths,
     exclOk := usable c.today 31 okExclusion c.exclusions, spanOk := usable c.today 7 okSpan c.enrollment,
-    eligOk := usable c.today 7 okElig c.eligibility,
     dmf := group (·.id) (entries c.dmf), pdeath := group (·.id) (entries c.providerDeaths),
-    excl := group (·.id) (entries c.exclusions), span := group (·.member) (entries c.enrollment),
-    elig := group (·.member) (entries c.eligibility) }
+    excl := group (·.id) (entries c.exclusions), span := group (·.member) (entries c.enrollment) }
 
 /-! ## Queries: each equals the Spec function of the same name (`FastEq`). -/
 
@@ -139,12 +134,6 @@ def Ix.providerDead (x : Ix) (l : Line) : Bool :=
 def Ix.excluded (x : Ix) (l : Line) : Bool :=
   let inForce (e : Exclusion) := e.start ≤ l.date && l.date ≤ e.stop
   (x.excl.getD l.payee []).any inForce || (x.excl.getD l.rendering []).any inForce
-
-def Ix.aidEligible (x : Ix) (l : Line) : Bool :=
-  (x.elig.getD l.member []).any fun e => eligCovers l e && allowedAid.contains e.aid
-
-def Ix.levelEligible (x : Ix) (l : Line) : Bool :=
-  (x.elig.getD l.member []).any fun e => eligCovers l e && allowedAid.contains e.aid && e.level == 1
 
 def Ix.overlap (x : Ix) (l : Line) : Bool :=
   let first := l.date / 100 * 100 + 1
@@ -199,12 +188,8 @@ def Ix.fires (x : Ix) (s : HashSet Key) (l : Line) : Reason → Bool
   | .STALE_RELEASED => !x.relChained
   | .STALE_UNRESOLVED => !x.unrChained
   | .POSTING_CAP => false
-  | .BENEFIT_LEVEL_MISSING => x.eligOk && validDate l.date && x.aidEligible l && !x.levelEligible l
-  | .BENEFIT_LEVEL_MISSING_UNVERIFIED =>
-      x.eligSome && !x.eligOk && validDate l.date && x.aidEligible l && !x.levelEligible l
-  | .PROGRAM_NOT_ELIGIBLE => x.eligOk && validDate l.date && !x.aidEligible l
-  | .PROGRAM_NOT_ELIGIBLE_UNVERIFIED => x.eligSome && !x.eligOk && validDate l.date && !x.aidEligible l
-  | .STALE_ELIGIBILITY => !x.eligOk
+  | .BENEFIT_LEVEL_MISSING | .BENEFIT_LEVEL_MISSING_UNVERIFIED | .PROGRAM_NOT_ELIGIBLE | .PROGRAM_NOT_ELIGIBLE_UNVERIFIED
+  | .STALE_ELIGIBILITY => false
 
 def Ix.counterparts (x : Ix) (l : Line) : List Nat :=
   hits x.rel x.relPost (keys l) (fun _ => true) ++
@@ -280,6 +265,11 @@ def pushRow (acc : ByteArray) : List (Nat × Nat) → Option ByteArray
   | [] => some acc
   | (w, n) :: fs => do pushRow (← pushBe acc w n) fs
 
+section
+/-- Lean 4.36 would pick the order-package `BEq UInt8` for the `==` below, which rests on `Classical.choice`; the axiom
+    pin of `setsDigestF_carry_eq` allows only `propext` and `Quot.sound`.  This is the plain decidable-equality `BEq`. -/
+local instance (priority := high) uint8BEq : BEq UInt8 := instBEqOfDecidableEq
+
 /-- List byte order (`List.le`) from byte `i` on: first differing byte, a proper prefix first. -/
 def leFrom (a b : ByteArray) (i : Nat) : Bool :=
   if h : i < a.size then
@@ -288,6 +278,7 @@ def leFrom (a b : ByteArray) (i : Nat) : Bool :=
     else false
   else true
 termination_by a.size - i
+end
 
 def baLe (a b : ByteArray) : Bool := leFrom a b 0
 

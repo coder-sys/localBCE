@@ -254,7 +254,7 @@ def apply_cash_file(owner, commands, context):
 
 
 def refusal(error):
-    """The fixed class of a refused cash file, never its input or error text (docs/CORE_REDESIGN.md "Cash-file refusals")."""
+    """The fixed class of a refused cash file, never its input or error text (ARCHITECTURE.md "Cash-file refusals")."""
     if type(error) is CashFileError and str(error) in REFUSALS:
         return str(error)
     for kind, code in ((FinancialBusyError, "cash_file_busy"), (FinancialRevisionError, "cash_file_stale"), (FinancialConflictError, "cash_file_conflict")):

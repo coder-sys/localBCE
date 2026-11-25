@@ -66,6 +66,11 @@ def main (args : List String) : IO UInt32 := do
   chk "wrong shard" (!VStore.holds (VStore.preOf k 4 1) s5 0 5)
   chk "wrong set" (!VStore.holds (VStore.preOf k 3 0) s5 0 5)
   chk "short" (!VStore.holds pre (s5.extract 0 319) 0 5)
+  -- a record tagged the earlier way (a leaf of the row, then a tag over the leaf and the link bytes) does not pass
+  let old := hD "VTAG" [k, putN ByteArray.empty 3 4, putN ByteArray.empty 1 1, putN ByteArray.empty 5 8,
+    hD "ROW" [(row 1).extract 0 245], (row 1).extract 245 256]
+  chk "earlier tag refused" (old.size == 64 && !VStore.holds pre (row 1 ++ old) 0 5)
+  IO.println s!"tag {BlindLedger.Gate.Rules.Run.hexOf (s5.extract 256 320)}"
   let mut flips := 0
   for i in [0:320] do
     if !VStore.holds pre (s5.set! i (s5[i]! ^^^ 1)) 0 5 then flips := flips + 1

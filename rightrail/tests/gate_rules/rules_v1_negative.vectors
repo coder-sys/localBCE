@@ -1,0 +1,219 @@
+# Gate rules v1 negative and edge vectors (see conformance/GATE_RULES_V1.md).  Synthetic IDs, no PHI.
+# This file must FAIL: malformed lines print RULES_VECTOR_MALFORMED, and a case whose expected answer is wrong prints
+# RULES_GOT with the decision the gate really made.  The independent checker must print exactly what gate_rules prints.
+# Pins (?) are filled by tools/gate_rules_data.py pin.
+today 20270315
+snap released 20270315 0 139c11d0c7e51ce29e17f4847cffe19627faf14b37c0c703692cdecc518e2c5f9c913e757d75ab5e668b3365c0eae2f084e2658529d9f09686445677605652b4
+snap unresolved 20270315 0 f13bedf365fc4133b5d2324c727354fc9f06a6e3b14420e0f40f83e305409b212553cf4353d7d4c7f08a9f03bf1efdc691b06edc0cc8195de4a970d30768ddd6
+snap dmf 20270301 1 55a2873cd6a4a372aa1a2253be387c27582bcdb632054ae32b6d9d4afc2ea3805313ca8323b9a0185d41835453ea7d979d61e1805ba404d01a82e929c808ca53
+dmf 9001 20270110
+snap pdeath 20270301 1 e61974fe9abbed49ea72aa76d51abbd98b1176ee812d8a6ad5ebe3883b28f816845dee20bad0802f9f70b50117e4517b845cc89e2b38000f7ff74ba39d6c766e
+pdeath 7701 20270120
+snap excl 20270310 1 025b58355405a4a8db851bdd9a943dec86764c8d5030c44b4ef0b39d87112cfcab1a8a501ea90e256f92c036d77b073a1998ce6b0ee46a3a538b7a0192428bd2
+excl 7801 20260101 99991231
+snap span 20270314 3 a5c769cbae3eab07bbea7449c89997830cf00046f3feb287c213f08e170cdb65bb83faa692463f7d806f109aa250fbc8892ceb7541f839befa42675c78474da0
+span 1001 501 20260101 20271231
+span 1002 501 20260101 20271231
+span 1002 502 20260101 20271231
+
+# Malformed lines: each is reported and changes nothing
+case bad_numeral
+line 1 FFS_CLAIM 10x1 7001 7001 20270305 99213 1 12500
+line 1 FFS_CLAIM +1001 7001 7001 20270305 99213 1 12500
+line 1 FFS_CLAIM 1_001 7001 7001 20270305 99213 1 12500
+line 1 FFS_CLAIM -1 7001 7001 20270305 99213 1 12500
+case bad_field_count
+line 2 FFS_CLAIM 1001 7001 7001 20270305 99213 1
+line 2 FFS_CLAIM 1001 7001 7001 20270305 99213 1 12500 ALLOW
+line 2 FFS_CLAIM 1001 7001 7001 20270305 99213 1 12500 ALLOW - with=1 extra
+case bad_flow
+line 3 ffs_claim 1001 7001 7001 20270305 99213 1 12500
+line 3 SDP 1001 7001 7001 20270305 99213 1 12500
+case bad_id_pay
+line 4: FFS_CLAIM 1001 7001 7001 20270305 99213 1 12500
+line :4 FFS_CLAIM 1001 7001 7001 20270305 99213 1 12500
+line 4:5:6 FFS_CLAIM 1001 7001 7001 20270305 99213 1 12500
+
+# One malformed directive per case
+case bad_directive_1
+frobnicate 1
+case bad_directive_2
+today 2027-03-15
+case bad_directive_3
+today
+case bad_directive_4
+commit now
+case bad_directive_5
+case
+case bad_directive_6
+case a b
+case bad_directive_7
+snap dmf 20270301 many 00
+case bad_directive_8
+end x
+case bad_directive_9
+pay 5
+case bad_directive_10
+pay x ALLOW
+case bad_directive_11
+redo -1
+case bad_directive_12
+anchor ABCDEF
+case bad_directive_13
+anchor 0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF
+case bad_directive_14
+	today 20270315
+
+# Boundary dates with a deliberately wrong expectation (ALLOW -): RULES_GOT shows the real answer; one date per case
+# boundary_20270315 is correct and prints nothing
+case boundary_20270315
+line 10 FFS_CLAIM 1001 7001 7001 20270315 99213 1 12500 ALLOW -
+commit
+case boundary_20270316
+line 11 FFS_CLAIM 1001 7001 7001 20270316 99213 1 12500 ALLOW -
+commit
+case boundary_20270229
+line 12 FFS_CLAIM 1001 7001 7001 20270229 99213 1 12500 ALLOW -
+commit
+case boundary_20270431
+line 13 FFS_CLAIM 1001 7001 7001 20270431 99213 1 12500 ALLOW -
+commit
+case boundary_20280229
+line 14 FFS_CLAIM 1001 7001 7001 20280229 99213 1 12500 ALLOW -
+commit
+case boundary_20270000
+line 15 FFS_CLAIM 1001 7001 7001 20270000 99213 1 12500 ALLOW -
+commit
+case boundary_20271301
+line 16 FFS_CLAIM 1001 7001 7001 20271301 99213 1 12500 ALLOW -
+commit
+case boundary_20000229
+line 17 FFS_CLAIM 1001 7001 7001 20000229 99213 1 12500 ALLOW -
+commit
+case boundary_19000229
+line 18 FFS_CLAIM 1001 7001 7001 19000229 99213 1 12500 ALLOW -
+commit
+case boundary_00010101
+line 19 FFS_CLAIM 1001 7001 7001 00010101 99213 1 12500 ALLOW -
+commit
+
+# A date of death on the service date is not before it; one day earlier is
+case death_boundary
+line 20 FFS_CLAIM 9001 7001 7001 20270110 99213 1 12500 ALLOW -
+line 21 FFS_CLAIM 9001 7001 7001 20270111 99213 1 12500 ALLOW -
+commit
+
+# Expectations that match nothing: an empty with=, an unknown reason, a wrong outcome (one per case)
+case expect_empty_with
+line 30 FFS_CLAIM 1001 7001 7001 20270305 99213 1 12500
+commit
+line 31 FFS_CLAIM 1001 7001 7001 20270305 99213 1 12500 HOLD ALREADY_DECIDED,FFS_DUPLICATE_LINE with=
+commit
+case expect_unknown_reason
+line 32 FFS_CLAIM 1001 7001 7001 20270306 99213 1 12500 HOLD NOT_A_RULE
+commit
+case expect_wrong_outcome
+line 33 FFS_CLAIM 1002 7001 7001 20270306 99213 1 12500 HOLD -
+commit
+
+# Duplicate ids in one batch: canonical order decides; the later copy is ALREADY_DECIDED
+case duplicate_ids
+line 40 FFS_CLAIM 1001 7001 7001 20270305 99213 1 12500 ALLOW -
+line 40 FFS_CLAIM 1002 7001 7001 20270305 99213 1 12500 ALLOW -
+line 40:41 FFS_CLAIM 1002 7002 7002 20270305 99214 1 12500 ALLOW -
+commit
+
+# Leading zeros are accepted and printed without them; expectation text is built from the parsed line
+case leading_zeros
+line 0050 FFS_CLAIM 01001 07001 07001 020270305 099213 001 012500 ALLOW -
+pay 050 ALLOW
+pay 0051 HUMAN_REVIEW
+commit
+
+# Values too wide for the pin: the whole payment is held, in no set (one wide value per case)
+case unfit_amount
+line 60 FFS_CLAIM 1001 7001 7001 20270305 99213 1 18446744073709551616
+line 61:60 FFS_CLAIM 1001 7001 7001 20270306 99213 1 100
+pay 60 HUMAN_REVIEW
+commit
+case unfit_date
+line 62 FFS_CLAIM 1001 7001 7001 4294967296 99213 1 100
+pay 62 ALLOW
+commit
+case unfit_units
+line 63 FFS_CLAIM 1001 7001 7001 20270305 99213 4294967296 100
+pay 63 ALLOW
+commit
+
+# Pay expectations: a wrong one is reported; a payment with no line is HUMAN_REVIEW
+case pay_wrong
+line 70 FFS_CLAIM 9001 7001 7001 20270305 99213 1 100
+pay 70 ALLOW
+commit
+case pay_no_line
+pay 72 ALLOW
+commit
+
+# Snapshot age: 90 days is the DMF limit, 91 is stale; a death after the snapshot date, a bad pin and a dropped snapshot
+# dmf_age_90 is correct and prints nothing
+case dmf_age_90
+snap dmf 20261215 1 fa8f9488d6e9296c990338afebd4f257ad3ccf4adcecc006b3900424b1abf92a668b222422bc97d965c34b6910f81eabfa85de39b0d400598e917ebdd34b8172
+dmf 1001 20261201
+line 80 FFS_CLAIM 1001 7001 7001 20270305 99213 1 100 HOLD MEMBER_DECEASED
+commit
+case dmf_age_91
+snap dmf 20261214 1 6173fd45f7ff7518661dd21813f2d8cb73bbe233aa13c27953034848fb6122ee16cce446fb489f410aa67232c9470724b41e26c60e82e7e826f5f68dedb5a90a
+dmf 1001 20261201
+line 81 FFS_CLAIM 1001 7001 7001 20270305 99213 1 100 HOLD MEMBER_DECEASED
+commit
+case dmf_death_after_snapshot
+snap dmf 20270301 1 4e1e29dc17179810b2cbea19e7ad77a4332e1662b46959ca857dc3393ab636be2aaa803dd0f4a0f67a7d6af14bb607736ec207249c6a7116873098ea609189f6
+dmf 9001 20270302
+line 82 FFS_CLAIM 1001 7001 7001 20270305 99213 1 100 ALLOW -
+commit
+case dmf_bad_pin
+snap dmf 20270301 1 00
+dmf 9001 20270110
+line 83 FFS_CLAIM 9001 7001 7001 20270305 99213 1 100 ALLOW -
+commit
+case dmf_dropped
+drop dmf
+line 84 FFS_CLAIM 9001 7001 7001 20270305 99213 1 100 ALLOW -
+commit
+case dmf_count_short
+snap dmf 20270301 2 ba82a29d7ba32e06b16faf852f1d1cb14f7a64f434456144c75d0c8aa2318be0727a9554c788b0a0d9cb4dcf9f4b7fc08d37d5c01f098ff622f6c0b4b8304304
+dmf 9001 20270110
+line 85 FFS_CLAIM 9001 7001 7001 20270305 99213 1 100 ALLOW -
+commit
+snap dmf 20270301 1 55a2873cd6a4a372aa1a2253be387c27582bcdb632054ae32b6d9d4afc2ea3805313ca8323b9a0185d41835453ea7d979d61e1805ba404d01a82e929c808ca53
+dmf 9001 20270110
+
+# Capitation: a member with two overlapping plans holds; a member not in the plan holds
+case cap_overlap
+line 90 CAP_820 1002 501 501 20270301 0 1 5000 ALLOW -
+commit
+case cap_other_plan
+line 91 CAP_820 1001 502 502 20270301 0 1 5000 ALLOW -
+commit
+
+# today unset makes every date future and every snapshot stale
+case today_unset
+today 0
+line 92 FFS_CLAIM 1001 7001 7001 20270305 99213 1 100 ALLOW -
+commit
+today 20270315
+
+# commit UNANCHORED with no anchor is not a refusal; an anchor that does not match refuses a real commit
+case unanchored_without_anchor
+line 95 FFS_CLAIM 1001 7001 7001 20270305 99213 1 100
+commit UNANCHORED
+case anchor_mismatch
+anchor 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+line 96 FFS_CLAIM 1001 7001 7001 20270305 99213 1 100 ALLOW -
+commit
+case anchor_unanchored_commit
+anchor 11111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111
+line 98 FFS_CLAIM 1001 7001 7001 20270305 99213 1 100
+commit UNANCHORED
+
+end 99

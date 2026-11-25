@@ -2346,7 +2346,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
 
     def test_writes_continue_past_the_continuity_package_cap(self) -> None:
         # Writes no longer re-check the whole-history package: past its 8 MiB cap the package export
-        # refuses, while writes and the segmented history export (docs/CORE_REDESIGN.md) continue.
+        # refuses, while writes and the segmented history export (ARCHITECTURE.md "History segments") continue.
         scope = {
             "state_id": "s" * 128,
             "deployment_id": "d" * 128,
@@ -5225,7 +5225,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertEqual(resend("p3", None, ":bank")["status"], "DUPLICATE")
         self._assert_verified(store)
 
-    # Lean paid sum (docs/CORE_REDESIGN.md): Lean derives paid-so-far from the payment rows and links it receives.
+    # Lean paid sum (ARCHITECTURE.md "Lean paid sum"): Lean derives paid-so-far from the payment rows and links it receives.
 
     @staticmethod
     @contextmanager

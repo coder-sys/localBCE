@@ -60,11 +60,15 @@ tests: nothing in `app/` or `tools/` builds a producer or calls `decide`, and a 
   batches counts for the batch that needed it). A wrong or missing program is refused before anything is decided, never retried.
 - **Combined history engine** (`conformance/ENGINE_V3.md`, `lean/BlindLedger/Gate/Engine3/`): `gate_hist3`
   and `gate_verify3` are built and tested by `tests/test_engine3_*.py`. They are not pinned and no product code calls them;
+  they read bypasses, cause records, the request's contest byte and exact repeats through the definitions `gate_engine` uses
+  (`Run.approvals`, `Run.causeLeaf`, `Run.answering`); an exact repeat under a key whose core holds more than 1,024 rows is
+  decided as contested there, since only the core's first 1,024 rows are chained;
   the chunk-store engine `gate_engine3` was retired (2026-11-06). Every theorem statement is proved (`tests/lean_sorry_allowlist.txt` is empty).
-- **A decision's input names everything it was decided on (`INPUT/v5`).** Lean computes each token's input fingerprint over the
-  payment request, the signed chain head, the four reference-snapshot pins (deaths, provider deaths, exclusions, enrollment),
-  today's date, the grant id, the bypass id, the key-set digest and the engine release; each variable-length part
-  carries its length, so two different sets of parts never share an encoding (`inputV5_inj`, up to the hash). The engine
+- **A decision's input names everything it was decided on (`INPUT/v7`).** Lean computes each token's input fingerprint over the
+  batch context (`CONTEXT/v1`, hashed once a batch: today's date, the signed chain head, the reference feeds with their pins,
+  the redone payments, the key-set pin, the grant floor, the signed grant, key set and key-set steps, the signed bypasses
+  and the engine release), the payment request and the root of its lines; each variable-length part carries its length, so
+  two different sets of parts never share an encoding (`contextPre_inj`, `inputV7Pre_inj`, up to the hash). The engine
   computes it and Python copies it; a frame with requests but no grant or release is refused. The producer store keeps
   the exact frame of each sealed batch (`record(batch_id)`), written in the same transaction as the batch. Replaying a batch
   from its record at publish time (`publishOk`) is not built yet: `publishOk` still checks signature, chain, token set and
@@ -76,8 +80,10 @@ tests: nothing in `app/` or `tools/` builds a producer or calls `decide`, and a 
   one for the same payment and request, one signed for another request (`WRONG_REQUEST`), one for a payment not in the batch, or one for a redo payment) is refused alone with a
   `RULES_BYPASS` line naming the cause, and the rest of the batch is decided; only the first 64 bypasses of a batch are read; two bypasses for one payment and request are both refused (duplicates are detected only among the first 64 entries, `Rules.maxBypasses`) and
   the payment stays held; a stale bypass, signed for another request, never blocks the one for this request. An admitted bypass releases its held payment even if the payment's facts have since cleared, and the
-  leaf then carries the bypass id. Token leaves (`TOKEN/v2`) carry the authority and the bypass id, and the payer pays only on ALLOW with TRANSFER
-  authority (`verifyToken_transfer`). A request the grant does not cover is held alone, for SCOPE, and its lines are not decided
+  leaf then carries the bypass id. Token leaves (`TOKEN/v3`) carry the authority and the bypass id, and the payer pays only on ALLOW with TRANSFER
+  authority (`verifyToken_transfer`). A payment that exactly repeats a paid line, its sender not contesting it, is answered at once (`ANSWERED`):
+  its leaf names the earlier payments and lines, it joins neither the released nor the unresolved set, and the payer never pays it (`answered_never_paid`). An exact retry of a batch the shard already answered gets the earlier list back (the
+  store keeps it with the batch, and the batch's signed row records that it did); for a batch answered before the store kept that list, the list is rebuilt once from the shard's stored frames, checked against the signed token, and stored. Such older batches never gain the record, by design; a rebuilt list is always checked against the signed root. A batch whose signed row records a list that is now missing is refused as `store_tampered`, never rebuilt, and its rows are kept as evidence. Each batch row also pledges the root of the set of retry keys, so a retries row deleted or rekeyed is `store_tampered` when its exact retry arrives, never decided again. A request the grant does not cover is held alone, for SCOPE, and its lines are not decided
   (HUMAN_REVIEW if its flow has no rules); a flow with no lines keeps the rules' outcome under a HOLD grant; a bypass needs a
   grant entry with TRANSFER authority for its payment. The `APPROVAL/v1` format is deleted. Not covered: separation from the raiser and from the
   authors of the payment's lines (the decide request carries no author identity, so Lean cannot check it); the payer verifying a
@@ -112,21 +118,12 @@ tests: nothing in `app/` or `tools/` builds a producer or calls `decide`, and a 
   never fall, but only tests call it, and publishing (`publishOk`) does not replay the chain. Tested, not proved: the pin checks at open and
   per batch, the replay, and the floor file.
 - **Signed payment-window facts (Lean decides, not yet called):** a check consumes k-of-n signed facts (`allow_signed`); on
-  the history index no line is ALLOW without them, whatever the index holds (`allow_signed_idx`). The signed path reads
-  no eligibility, so today every line on it is HUMAN_REVIEW on `STALE_ELIGIBILITY`; its ALLOW theorems hold vacuously and
-  no signed-path vector exercises an ALLOW until the path is extended.
-- **G2 eligibility is a gate rule (synthetic, not legally verified):** localBCE's aid code and benefit level gate reads a
-  pinned eligibility snapshot (kind 7) and adds five reasons, `BENEFIT_LEVEL_MISSING`, `PROGRAM_NOT_ELIGIBLE` (HOLD) and
-  their `_UNVERIFIED` twins and `STALE_ELIGIBILITY` (review, bypassable), at answer bits 24-28: 29 reasons, and no
-  existing bit moved. A HOLD rests only on a usable snapshot (at most 7 days old, a placeholder) and a valid service
-  date. No eligibility producer exists and the request frame does not carry the feed yet, so the engine reads none and
-  every engine line, every former ALLOW included, is HUMAN_REVIEW on `STALE_ELIGIBILITY`.
+  the history index no line is ALLOW without them, whatever the index holds (`allow_signed_idx`).
 - **Resident rules worker:** equals the `gate_rules` test program step for step until a lost or wrong store poisons it (HOLD); pinned.
 - **Multi-key approval (Lean decides; the gate engine admits signed key-set steps, only re-initialisation is not yet called):** key-set changes (`KEYSET/v2`) and snapshot reads (`SNAPSHOT/v3`)
   need a quorum of distinct employees; revocation is permanent; a clock wound back cannot revive expired keys
   (`inband_reinit_keys_live`).
-- **Conformance:** byte-level specs and must-reject vectors for gate rules v2 (v1 plus G2; v1 retired), `SEGMENT/v1`,
-  provider `contentDigest` v1.
+- **Conformance:** byte-level specs and must-reject vectors for gate rules v1, `SEGMENT/v1`, provider `contentDigest` v1.
 - **Bypass only per verified payment** (I.2): built in the rules worker only (see the grant and bypass entry above;
   `fail_closed_unless_bypass`, `bypass_attributed`, `bypass_no_window`). No product code outside the worker releases a
   payment the gate did not allow.
@@ -136,20 +133,33 @@ tests: nothing in `app/` or `tools/` builds a producer or calls `decide`, and a 
   equal to the specification's for that payment on a batch no posting cap touches (a payment with a capped line is
   HOLD). The host sends each payment's request bytes; Lean decodes them, derives the rule lines and prints every leaf
   field (tenant, program, flow, payment, member, payee, amount, period, lines root). The signing path copies those fields
-  and no caller supplies a leaf or payment field. The host checks the leaf's tenant against the shard's. The independent publish check does not re-run the
+  and no caller supplies a leaf or payment field. The proof of the leaves, unresolved records and approval notes a commit
+  writes (`Flat.commit_leaves`) holds under the hypotheses `IdxInv` (the history indexes are faithful) and `Uncapped`
+  (no posting cap touches the batch). In any batch, the leaf of a payment with a capped line is proved not ALLOW and
+  free of approval notes; an uncapped payment in a batch where another payment is capped is covered by tests only, not by a proof. The host checks the leaf's tenant against the shard's. The independent publish check does not re-run the
   decision, because the batch's facts and date are not committed. Byte frames, claim and offset rules proved; offsets
   capped.
 - **Pins:** the worker, `gate_verify` and `gate_engine` hashes are in `tools/tcb_report.txt`, byte-matched by a fresh build.
 - **Payer fork evidence:** a recorded fork (two different signed checkpoints at one position) keeps its tenant's evidence;
   `release_after_fork` proves no token of the forked shard in any epoch, and none in either side's epoch, is released. A payer store from before the counter column or the per-tenant fork table is refused
   (`store_version`), never migrated.
-- **Payer key authority:** Lean INSTALL gives each certificate its role, and the store keeps every certificate that changes a
-  decision (INSTALLED, EQUIVOCATES, FENCE_ONLY), with no count limit. A STORE or RELEASE frame carries at most four
-  certificates and three forks, whatever the store's age: the witnesses of its tenant, shard and epoch, which decide as the
-  whole history does (`select_decides`, `forks_witness`, `install_classifies`, `resign_noop`, `select_dedup`; the SQL mirrors
-  `select` and `selectForks` clause for clause, checked on a 10,000-certificate, 5,000-fork store). A store from before roles
-  is refused (`store_version`), as is one whose forks lack their shard; neither is migrated. A tenant's root key is pinned at its first kept certificate; another
-  root is refused (`root_changed`, naming the tenant).
+- **Payer key authority:** Lean LINK answers each authority link (GENESIS, EXTENDS, CONFLICTS, STALE or SAME) and Lean
+  INSTALL each certificate (INSTALLED, EQUIVOCATES, UNFIT or SAME); the store keeps every link, recorded link conflict and
+  recorded certificate, with no count limit. A STORE or RELEASE frame carries the head link, at most one link conflict, at
+  most three certificates with the links they name, and at most three forks, whatever the store's age: the witnesses of its
+  tenant, shard and epoch, which decide as the whole history does (`select_decides`, `forks_witness`, `install_classifies`,
+  `resign_noop`; the SQL is written to select what `select`, `selectFence`, `selectConflict`, `selectInstall` and
+  `selectForks` select, and a test compares the store's answers with an independent reader's; for INSTALL the proof `installOutcome_install` assumes the
+  carried witnesses agree with the state on the epoch and its fit, and nothing proved discharges that for the SQL). A store from before the link chain or roles is refused (`store_version`), as is one whose forks lack their shard;
+  neither is migrated. A tenant's genesis link is pinned by configuration; a link that is neither a new genesis under that
+  pin nor a successor of the held chain is refused (`link_refused`, naming the tenant), and at open the head's chain must
+  start at that pin, else `link_refused`. A certificate of a rotated generation, at or below the epoch the rotation
+  closes, that arrives after the rotation is refused (`cert_refused: BELOW_FENCE`) and writes no row. Shard counts fit only
+  against certificates of the tenant's current chain: one above a rotation's closing epoch, or one of a replaced chain, is
+  kept as evidence but decides no fit, so a new genesis starts with no counts (`fits_neighbours`, `rotation_disowns`,
+  `genesis_fits`). No built component produces the agency cosignature yet; it follows custody (below). Open: equivocation evidence depends
+  on arrival order: an UNFIT certificate, though validly signed, is not held, and a link refused for a reused or installed
+  key leaves no conflict record.
 - **Rollback counter:** `CHECKPOINT/v3` carries the shard's counter, and the producer's counter rule (first seal arms it, a
   reopen resumes one lost increment, any other gap or a store deleted under a counter that has counted is refused) runs
   against a test counter only; no TPM adapter exists yet.
@@ -166,7 +176,13 @@ tests: nothing in `app/` or `tools/` builds a producer or calls `decide`, and a 
   834, exclusion-list and provider-death rows into the frame's feeds; a claim that cannot be sent whole is set aside with
   its cause and cents; an exact resend returns the tokens already sealed.
 - **Readers:** the four X12 readers (834, 820, 835, 837) and the exclusion-list reader keep names and ids as received, read
-  as a stream, and set aside bad rows with a cause; 834 and 837 feed the claim path, the rest are not connected.
+  as a stream, and set aside bad rows with a cause; 834 and 837 feed the claim path, the rest are not connected. A
+  death-file reader and a visit-verification reader are written and tested on their own; neither is connected, and
+  the death-file reader holds the whole file in memory. The fee-for-service fact record byte codecs are specified in
+  Lean (`lean/BlindLedger/Gate/FactCodec.lean`); nothing calls them yet.
+- **Signed rule sets** (`conformance/RULESET_V1.md`) are written and proved in Lean but not live: the gate does not yet
+  decide under a signed rule set. The gate's step for them (`gateStep`) is written and proved to change no decision
+  under a pack-1 rule set (`live_pack1`) for a batch whose every line is in the rule set's date range, but no gate executable calls it yet.
 - **Federal share of a recovered overpayment** is owed per collection on the CMS-64 for the quarter collected (42 CFR
   433.320(a)(2), 433.316(h), 433.318); the independent checker refuses a store holding an authorized offset without its action.
 - **Staff cause table:** every hold, refusal and set-aside the gate, its host and the file readers can give (285) has one
@@ -177,8 +193,12 @@ tests: nothing in `app/` or `tools/` builds a producer or calls `decide`, and a 
 
 The bars: engine plus checker at most 40 µs CPU per line; 200,000 lines/s on 8 cores; per-line cost at 3M history at most
 1.05x of 0.3M; at most 18 B per line plus 256 MB per process. This is the one place they are written. Measured whole path
-on 2,000 lines, 2026-11-02: batch 2,000 at 688 lines/s synthetic and 618 realistic; batch 100 at 270 and 357 lines/s. No
-300k-history figure is current. Speed work continues as its own lane.
+on 2,000 lines, 2026-11-02: batch 2,000 at 688 lines/s synthetic and 618 realistic; batch 100 at 270 and 357 lines/s. Measured at volume
+on 2026-11-21 (one core, clean claims, 1,000 claims a batch): 10,265 lines at 595 lines/s and 100,157 lines at 311 lines/s,
+of which the batches alone ran at about 450 lines/s, flat from the first tenth of the run to the last; the whole-path
+peak memory was 541 MB and the store 3.4 kB per line at 100k. Without a restart the resident checker reaches its 512 MiB
+limit after 14 checkpoints and the run stops; after the 835 report stopped scanning for each claim's end, the same 100,157-line run took 251 s, 399 lines/s whole path, and the report step fell from 80 s to 1.3 s; a 300,000-line run was stopped by the memory guard, so no 300k-history
+figure is current. Speed work continues as its own lane.
 
 ## Standing design
 
@@ -187,14 +207,16 @@ on 2,000 lines, 2026-11-02: batch 2,000 at 688 lines/s synthetic and 618 realist
   the store that runs today: one store for the gate and the ledger, without the row cap, is decided and in progress,
   not built.
 - **Lean decides:** the pinned worker derives paid-so-far from linked payments; the checker re-checks it. Stray bytes fail closed.
-- **Gate (Blind Ledger's end-state function):** its decision rules (R1-R5 and G2, 29 reason codes), `CHECKPOINT/v3`, `TOKEN/v2` and the payer's `verifyToken` in
+- **Gate (Blind Ledger's end-state function):** its five decision rules (R1-R5), `CHECKPOINT/v3`, `TOKEN/v3` and the payer's `verifyToken` in
   Lean; `gate_verify` checks every checkpoint's ML-DSA-87 (post-quantum) signature, tested against NIST vectors and AWS-LC.
 - **Trusted-code check** (`tools/tcb_report.txt`, rerun `tools/tcb_pin.ps1`): every constant a pinned executable reaches
-  is proof-backed except Lean's `Init` runtime, the arena reservations (`reserveArena`), the worker's frame loop (`serveWorker`),
+  is proof-backed except Lean's `Init` runtime, the worker's frame loop (`serveWorker`),
   the six C file calls of the history store (`pgOpen`, `pgRead`, `pgWrite`, `pgSync`, `pgTrunc`, `pgClose`) and the placeholder `lcProof`.
 
 ## Open items
 
+- **Certificate timing:** STORE and RELEASE do not check that a certificate is in time for its chain (availability only; RELEASE already refuses below the head fence).
+- **Key reuse and disowned certificates:** the key-reuse check reads certificates of disowned generations, so the holder of a compromised key can delay a rotation (availability only).
 - **Gate restart:** the moved-file check misses an A->B->A swap; fork and POSIX in-place
   replace untested; network paths refused.
 - **Correction size:** a result (`BLFCRES3`) embeds its input and the wire limit is 8 MiB, so a correction input over about 4 MiB is refused.
@@ -216,14 +238,21 @@ on 2,000 lines, 2026-11-02: batch 2,000 at 688 lines/s synthetic and 618 realist
 - **Carried:** the staff role header is not a login; no cancel command for stale corrections; receipt `delivery_status`
   shows the newest action, not the verdict; core over size target (owner 6,687/~3,000, checker 4,511/~1,800 lines);
   test restore uses the system clock; published items cannot be re-stated.
-- **Scorecard friction:** all 20 rows of the synthetic scorecard read "Case OPEN" and 19 stay open, though only one hospital
-  has a problem; restore to the test copy is enabled only after the shortfall is 0, so a replacement operator cannot take
-  over unfinished work; the reason for a decision is not stored yet.
+- **Scorecard friction:** the staff queue shows only the hospital with a problem as open; the 19 paid hospitals read as
+  settled, and restore to the test copy works at any point, including while a shortfall is open (both are tested). What
+  remains: the Owner's case status for a paid hospital with no report recorded is "actioned", not "resolved", so the
+  scorecard still counts those 19 as unresolved; and the reason for a decision is not stored, because the determination
+  record has no reason field and adding one changes the stored record, its digest and the Continuity package.
 - **Constitution amendments of 2026-11-14:** release by cause (I.2) and exact duplicates answered at once (I.4) are in the
-  Constitution but not built; today the gate holds an exact duplicate and releases per payment (two signers, 64 per batch).
+  Constitution. The gate now reads a cause record (kind 3) and answers an exact duplicate at once; the staff screen for them is not built.
 - **Acknowledger not stored:** `ACTION_ACKNOWLEDGED` has no actor, so "a decider may not acknowledge" is unchecked.
 
-Next: speed and proofs as planned (the speed bars, the proved rules interpreter, custody and the agency cosign), then the staff
-loop (a queue of held work with owner and deadline, re-decision when a fact arrives, release by cause, exact duplicates
-answered at once, a screen per cause); alongside them, decision records with their read sets and a trusted known-time clock,
-one store for the gate and the ledger with facts kept under two times, and rules as signed data under one proved interpreter.
+Next: the first jobs (target §2): the audit folder, then the system and vendor at fault. In order: rules as signed
+data under one proved interpreter; one store for the gate and the ledger with facts kept under two times; readers for
+files the state already exports, including sources beyond claims and records other systems keep (the replay difference report, `tools/replay_diff.py
+--deployment <folder> --keyset-pin <hex>`, already decides a state's claims from the deployment's public inputs into a
+store of its own and never touches the signed store; only the genesis key set is pinned, so the folder's later key-set steps and period are the state's word, the grant's window is the only staleness check, a feed older than the engine accepts or with no usable row refuses the run, and an 835 not read whole refuses it too; the exclusion list's kind and day and the death list's sender, scope and sequence are the state's word); the eligibility determination record and notice check; alongside them, decision records with their
+read sets and a trusted known-time clock. Speed: one measurement at replay volume (millions of lines), then a fixed
+share of the work toward the speed bars. Custody and the agency cosign follow. Then the staff loop (a queue of held
+work with owner and deadline, re-decision when a fact arrives, release by cause, exact duplicates answered at once, a
+screen per cause).

@@ -93,8 +93,8 @@ class LeieReaderTest(unittest.TestCase):
         data = HEAD + row(last="", bus="") + row(typ="") + "a,b\n" + "\n" + row()
         r = read_leie(data.encode(), **KW)
         self.assertEqual([(q.field, q.cause) for q in r.quarantined],
-                         [(None, "no_name"), (None, "no_exclusion_type"), (None, "column_count"), (None, "blank_record")])
-        self.assertEqual(len(r.rows), 1)
+                         [(None, "no_name"), (None, "no_exclusion_type"), (None, "column_count")])  # the blank line is skipped, no finding
+        self.assertEqual([x.exclusion_type for x in r.rows], [None, "1128a1"])  # the row with no type is kept: it is still an exclusion
 
     def test_exclusion_type_shape(self):
         types = ["1128a1", "1128b14", "1128Aa", "1156", "1160", "BRCH SA", "1128c1", "1128a", "1999", "x1128a1"]
@@ -154,8 +154,9 @@ class LeieReaderTest(unittest.TestCase):
         self.assertEqual(KINDS, ("full", "exclusions", "reinstatements"))
 
     def test_header_only_and_no_coverage(self):
-        r = read_leie(HEAD.encode(), **KW)
-        self.assertEqual((r.rows, r.quarantined, r.findings, r.coverage), ([], [], [], ("synthetic test file", "2026-10-31", "full")))
+        for data in (HEAD, HEAD + "\n  \n"):  # a full list with no row at all has lost its rows: refused, so the exclusion feed is absent
+            r = read_leie(data.encode(), **KW)
+            self.assertEqual(([(q.field, q.cause) for q in r.quarantined], r.rows, r.coverage), ([(None, "empty_file")], [], None))
         for kind in ("exclusions", "reinstatements"):  # an empty month is a normal supplement
             self.assertEqual(read_leie(HEAD.encode(), kind=kind, **KW).coverage.kind, kind)
         for data in (HEAD + row(last="", bus=""), HEAD + row()[:-1]):  # records present, none readable

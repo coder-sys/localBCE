@@ -39,7 +39,7 @@ def slotAt (t : @& ByteArray) (j : @& Nat) : UInt32 :=
     ((t.get! (o + 3)).toUInt32 <<< 24)
 
 /-- Slot `j` set, in place when the array is not shared.  Out of range changes nothing. -/
-@[extern c inline "({ lean_object* a_ = #1; if (!lean_is_exclusive(a_)) a_ = lean_copy_byte_array(a_); if (lean_is_scalar(#2) && 4 * lean_unbox(#2) + 4 <= lean_sarray_size(a_)) *(uint32_t*)(lean_sarray_cptr(a_) + 4 * lean_unbox(#2)) = #3; a_; })"]
+@[extern c inline "({ lean_object* a_ = #1; if (!lean_is_exclusive(a_)) a_ = lean_copy_sarray(a_, lean_sarray_capacity(a_)); if (lean_is_scalar(#2) && 4 * lean_unbox(#2) + 4 <= lean_sarray_size(a_)) *(uint32_t*)(lean_sarray_cptr(a_) + 4 * lean_unbox(#2)) = #3; a_; })"]
 def slotSet (t : ByteArray) (j : @& Nat) (v : UInt32) : ByteArray :=
   let o := 4 * j
   (((t.set! o v.toUInt8).set! (o + 1) (v >>> 8).toUInt8).set! (o + 2) (v >>> 16).toUInt8).set! (o + 3)

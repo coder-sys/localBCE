@@ -10,7 +10,7 @@ import BlindLedger.Gate.Rules.DecideLayer
 import BlindLedger.Gate.ParseLaws
 import BlindLedger.Gate.BatchTheorems
 import BlindLedger.Gate.Engine.FrameLaws
-import BlindLedger.Gate.PublishFastEq
+import BlindLedger.Gate.InstallFastEq
 import BlindLedger.Gate.Keyset
 import BlindLedger.Gate.AuthorityLaws
 import BlindLedger.Gate.Rules.Bypass
@@ -24,24 +24,40 @@ import BlindLedger.Gate.Flat.ChunkIoWin
 import BlindLedger.Gate.Consume
 import BlindLedger.Gate.Flat.Signed
 import BlindLedger.Gate.Flat.PayTheorems
-import BlindLedger.Gate.Flat.RowsBudget
-import BlindLedger.Gate.Flat.PayNumbering
 import BlindLedger.Gate.Custody
 import BlindLedger.Gate.Rules.EmitLaws
 import BlindLedger.Gate.Engine3.Frame3
 import BlindLedger.Gate.Engine3.AdmitB
+import BlindLedger.Gate.Engine3.RuleGate
 import BlindLedger.Gate.WitnessTheorems
 import BlindLedger.Gate.FactRegistry
 import BlindLedger.Gate.FactCodec
 import BlindLedger.Gate.Obligations.Agree
 import BlindLedger.Gate.Obligations.RequestMap
+import BlindLedger.Gate.Obligations.Check
+import BlindLedger.Gate.Obligations.EngineLog
+import BlindLedger.Gate.Obligations.CheckedLog
+import BlindLedger.Gate.Obligations.EngineLogProof
+import BlindLedger.Gate.Obligations.RunDigestEq
+import BlindLedger.Gate.Obligations.Format.Fast
+import BlindLedger.Gate.Obligations.Format.Fold
 import BlindLedger.Gate.Cosign.CodecLaws
 import BlindLedger.Gate.Cosign.Theorems
+import BlindLedger.Gate.FactStore
+import BlindLedger.Gate.FactFrame
+import BlindLedger.Gate.FactAdmit
+import BlindLedger.Gate.Cosign.LinkLaws
+import BlindLedger.Gate.Cosign.InstallTheorems
+import BlindLedger.Gate.CosignatureTheorems
+import BlindLedger.Gate.RuleSet.Spec
+import BlindLedger.Gate.FactBelief
 #print axioms BlindLedger.Gate.verifyToken_iff
 #print axioms BlindLedger.Gate.verifyToken_epoch_ge_fence
-#print axioms BlindLedger.Gate.raiseFence_ge
-#print axioms BlindLedger.Gate.raiseFence_self
+#print axioms BlindLedger.Gate.Cosign.le_raiseFence
+#print axioms BlindLedger.Gate.Cosign.raiseFence_self
 #print axioms BlindLedger.Gate.installCert_raises_fence
+#print axioms BlindLedger.Gate.installLink_raises_fence
+#print axioms BlindLedger.Gate.installLink_coherent
 #print axioms BlindLedger.Gate.coherent_empty
 #print axioms BlindLedger.Gate.installCert_coherent
 #print axioms BlindLedger.Gate.storeCheckpoint_coherent
@@ -52,7 +68,7 @@ import BlindLedger.Gate.Cosign.Theorems
 #print axioms BlindLedger.Gate.verifyToken_route
 #print axioms BlindLedger.Gate.verifyToken_grant_tenant
 #print axioms BlindLedger.Gate.verifyToken_foreign_grant
-#print axioms BlindLedger.Gate.installCert_shardCount
+#print axioms BlindLedger.Gate.installCert_countAt
 #print axioms BlindLedger.Gate.storeCheckpoint_keeps
 #print axioms BlindLedger.Gate.release_keeps
 #print axioms BlindLedger.Gate.send_keeps
@@ -108,12 +124,12 @@ import BlindLedger.Gate.Cosign.Theorems
 #print axioms BlindLedger.Gate.load_ok
 #print axioms BlindLedger.Gate.step_ok
 #print axioms BlindLedger.Gate.natBE_beNat
-#print axioms BlindLedger.Gate.realCrypto_cert_not_root
 #print axioms BlindLedger.Gate.accepts_cert_not_root
-#print axioms BlindLedger.Gate.checkpoint_header_ne_keycert_body
 #print axioms BlindLedger.Gate.installCert_fence
-#print axioms BlindLedger.Gate.installCert_equivocation_signed
-#print axioms BlindLedger.Gate.installCert_certs
+#print axioms BlindLedger.Gate.installCert_equivocates
+#print axioms BlindLedger.Gate.Cosign.installCert_adds
+#print axioms BlindLedger.Gate.Steps.apart
+#print axioms BlindLedger.Gate.installLink_keeps_cosigned
 #print axioms BlindLedger.Gate.storeCheckpoint_signed
 #print axioms BlindLedger.Gate.storeCheckpoint_not_root
 #print axioms BlindLedger.Gate.pCheckpointFields_wf
@@ -185,6 +201,11 @@ import BlindLedger.Gate.Cosign.Theorems
 #print axioms BlindLedger.Gate.Keyset.inband_reinit_keys_live
 #print axioms BlindLedger.Gate.Keyset.reinit_never_unrevokes
 #print axioms BlindLedger.Gate.Keyset.refused_run_persists_nothing
+#print axioms BlindLedger.Gate.Keyset.body_inj
+#print axioms BlindLedger.Gate.Keyset.rolesOk_spec
+#print axioms BlindLedger.Gate.Keyset.no_dual_role
+#print axioms BlindLedger.Gate.Keyset.policy_signers
+#print axioms BlindLedger.Gate.Keyset.policy_not_roster
 #print axioms BlindLedger.Gate.SnapshotV2.decode_encode
 #print axioms BlindLedger.Gate.SnapshotV2.decodeMan_encode
 #print axioms BlindLedger.Gate.SnapshotV2.sigMsg_pre_inj
@@ -195,9 +216,11 @@ import BlindLedger.Gate.Cosign.Theorems
 #print axioms BlindLedger.Gate.SnapshotV2.attachChain_refuses
 #print axioms BlindLedger.Gate.SnapshotV2.attachChain_live
 #print axioms BlindLedger.Gate.publishFrameB_eq
-#print axioms BlindLedger.Gate.decodeKeyCert_signed
 #print axioms BlindLedger.Gate.accepts_eq
 #print axioms BlindLedger.Gate.publishOkTreeB_eq
+#print axioms BlindLedger.Gate.decodeB_eq
+#print axioms BlindLedger.Gate.decodeLinkB_eq
+#print axioms BlindLedger.Gate.answerOf_eq
 #print axioms BlindLedger.Gate.SnapshotV2.attachChain_binds
 #print axioms BlindLedger.Gate.Scoped.self_never_satisfies
 #print axioms BlindLedger.Gate.Scoped.other_kind_not_counts
@@ -327,54 +350,21 @@ import BlindLedger.Gate.Cosign.Theorems
 #print axioms BlindLedger.Gate.Flat.ChunkIo.readHits_pure
 #print axioms BlindLedger.Gate.Rules.Run.leafOutcome_allow
 #print axioms BlindLedger.Gate.Rules.Run.natStr_eq
-#print axioms BlindLedger.Gate.Rules.may_sound
-#print axioms BlindLedger.Gate.Rules.decideAll_may
-#print axioms BlindLedger.Gate.Rules.budget
-#print axioms BlindLedger.Gate.Rules.pay_budget
-#print axioms BlindLedger.Gate.Rules.fail_closed_eligibility
-#print axioms BlindLedger.Gate.Rules.g2_review
-#print axioms BlindLedger.Gate.Rules.g2_exclusive
-#print axioms BlindLedger.Gate.Rules.g2_hold_usable
-#print axioms BlindLedger.Gate.Rules.g2_allow
 #print axioms BlindLedger.Gate.Flat.pay_line
 #print axioms BlindLedger.Gate.Flat.leafReasons_codes
 #print axioms BlindLedger.Gate.Flat.pay_capped
+#print axioms BlindLedger.Gate.Flat.answer_eq
+#print axioms BlindLedger.Gate.Flat.answer_cap
+#print axioms BlindLedger.Gate.Rules.Run.decideBatchX_run
+#print axioms BlindLedger.Gate.Rules.Run.answering_pays
+#print axioms BlindLedger.Gate.Rules.Run.answering_eq
+#print axioms BlindLedger.Gate.Rules.Run.unread_contested
+#print axioms BlindLedger.Gate.Rules.Run.answering_unread
+#print axioms BlindLedger.Gate.Rules.Run.dup_held
+#print axioms BlindLedger.Gate.Rules.Run.isCause_of_decode
+#print axioms BlindLedger.Gate.Rules.Run.isCause_of_bypass
+#print axioms BlindLedger.Gate.Rules.Run.admit_kinds
 #print axioms BlindLedger.Gate.Flat.pay_line_part
-#print axioms BlindLedger.Gate.Flat.leafReasons_le
-#print axioms BlindLedger.Gate.Flat.pay_codes_le
-#print axioms BlindLedger.Gate.Flat.pay_codes_le_part
-#print axioms BlindLedger.Gate.Flat.feedBits_inv
-#print axioms BlindLedger.Gate.Flat.ix_may_sound
-#print axioms BlindLedger.Gate.Flat.decideFetched_may
-#print axioms BlindLedger.Gate.Flat.pay_codes_le_all
-#print axioms BlindLedger.Gate.Flat.leafReasons_filter
-#print axioms BlindLedger.Gate.Flat.leafReasons_group
-#print axioms BlindLedger.Gate.Flat.Rows.layout_mask_may
-#print axioms BlindLedger.Gate.Flat.Rows.cut_mask_may
-#print axioms BlindLedger.Gate.Flat.Rows.rows_leaf_may
-#print axioms BlindLedger.Gate.Flat.Rows.rows_leaf_le
-#print axioms BlindLedger.Gate.Flat.Rows.leafBits_testBit
-#print axioms BlindLedger.Gate.Flat.Rows.leafBits_lt
-#print axioms BlindLedger.Gate.Flat.Rows.leafIn_reasons
-#print axioms BlindLedger.Gate.Flat.Rows.leafIn_bits_may
-#print axioms BlindLedger.Gate.Flat.Rows.has_fold_iff
-#print axioms BlindLedger.Gate.Flat.Rows.payFlags_snd
-#print axioms BlindLedger.Gate.Flat.Rows.payFlagsC_snd
-#print axioms BlindLedger.Gate.Flat.Rows.payFlags_msk
-#print axioms BlindLedger.Gate.Flat.Rows.payFlagsC_msk
-#print axioms BlindLedger.Gate.Flat.Rows.payFlags_leaf
-#print axioms BlindLedger.Gate.Flat.PayNum.payIdx_spec
-#print axioms BlindLedger.Gate.Flat.PayNum.payIdxC_spec
-#print axioms BlindLedger.Gate.Flat.PayNum.numFrom_lt
-#print axioms BlindLedger.Gate.Flat.PayNum.lines_agree
-#print axioms BlindLedger.Gate.Flat.PayNum.payLines_pidx
-#print axioms BlindLedger.Gate.Flat.PayNum.payLinesV_pidx
-#print axioms BlindLedger.Gate.Flat.PayNum.payIdx_lines
-#print axioms BlindLedger.Gate.Flat.PayNum.payIdxC_lines
-#print axioms BlindLedger.Gate.Flat.PayNum.admB_sizes
-#print axioms BlindLedger.Gate.Flat.PayNum.payIdx_lines_admB
-#print axioms BlindLedger.Gate.Flat.PayNum.payIdxC_lines_admB
-#print axioms BlindLedger.Gate.Flat.PayNum.assemble_pay
 #print axioms BlindLedger.Gate.Flat.feedsOf_inv
 #print axioms BlindLedger.Gate.Flat.allow_fresh
 #print axioms BlindLedger.Gate.Flat.decideAll_allow_fresh
@@ -384,12 +374,18 @@ import BlindLedger.Gate.Cosign.Theorems
 #print axioms BlindLedger.Gate.Flat.linesOf_pay
 #print axioms BlindLedger.Gate.Flat.lines_req
 #print axioms BlindLedger.Gate.Flat.pay_req
+#print axioms BlindLedger.Gate.Flat.commit_leaves
+#print axioms BlindLedger.Gate.Flat.contested_mem
+#print axioms BlindLedger.Gate.Flat.causeLeaf_cases
+#print axioms BlindLedger.Gate.Flat.unbypassable_pay
+#print axioms BlindLedger.Gate.Flat.leaf_capped
+#print axioms BlindLedger.Gate.Flat.approvals_id
+#print axioms BlindLedger.Gate.Rules.Run.answering_earlierBody
 #print axioms BlindLedger.Gate.custodyStep_behind
 #print axioms BlindLedger.Gate.custodyStep_proceeds
 #print axioms BlindLedger.Gate.seal_crash_resumes
 #print axioms BlindLedger.Gate.Flat.contextPre_inj
-#print axioms BlindLedger.Gate.Flat.paymentPre_inj
-#print axioms BlindLedger.Gate.Flat.inputV6Pre_inj
+#print axioms BlindLedger.Gate.Flat.inputV7Pre_inj
 #print axioms BlindLedger.Gate.Flat.batchInputPre_inj
 #print axioms BlindLedger.Gate.custodyStep_unwritten
 #print axioms BlindLedger.Gate.custodyStep_catchUp_unwritten
@@ -439,18 +435,14 @@ import BlindLedger.Gate.Cosign.Theorems
 #print axioms BlindLedger.Gate.Frame.encodeReq_decodeReq
 #print axioms BlindLedger.Gate.Frame.decodeReq_wf
 #print axioms BlindLedger.Gate.Frame.decodeReq_length
+#print axioms BlindLedger.Gate.Frame.framePre_inj
+#print axioms BlindLedger.Gate.Frame.frameDigest_binds
+#print axioms BlindLedger.Gate.Frame.Fast.frameDigestB_eq
 #print axioms BlindLedger.Gate.Frame.wide_local
 #print axioms BlindLedger.Gate.Frame.records_perm
 #print axioms BlindLedger.Gate.Frame.record_binds
 #print axioms BlindLedger.Gate.Frame.rows_of_records
 #print axioms BlindLedger.Gate.Frame.answer_encodes
-#print axioms BlindLedger.Gate.Rules.idx_dense
-#print axioms BlindLedger.Gate.Rules.reasons_len_le
-#print axioms BlindLedger.Gate.Rules.idx_len
-#print axioms BlindLedger.Gate.Rules.reasons_list_nodup
-#print axioms BlindLedger.Gate.Frame.maskOf_testBit_idx
-#print axioms BlindLedger.Gate.Frame.unmask_maskOf
-#print axioms BlindLedger.Gate.Frame.maskOf_lt
 #print axioms BlindLedger.Gate.Flat.StoreLog.load_binds
 #print axioms BlindLedger.Gate.Flat.StoreLog.crash_repair
 #print axioms BlindLedger.Gate.Flat.StoreLog.crash_old_loads
@@ -485,6 +477,7 @@ import BlindLedger.Gate.Cosign.Theorems
 #print axioms BlindLedger.Gate.FactRegistry.idle_never_fresher
 #print axioms BlindLedger.Gate.FactRegistry.lateUntil_open
 #print axioms BlindLedger.Gate.FactRegistry.lateUntil_cut
+#print axioms BlindLedger.Gate.FactRegistry.lateUntil_lt
 #print axioms BlindLedger.Gate.FactRegistry.no_ends_when_stale
 #print axioms BlindLedger.Gate.FactCodec.Fact.dec_enc
 #print axioms BlindLedger.Gate.FactCodec.Fact.enc_length
@@ -509,6 +502,7 @@ import BlindLedger.Gate.Cosign.Theorems
 #print axioms BlindLedger.Gate.FactCodec.Fact.enc_dec
 #print axioms BlindLedger.Gate.FactCodec.Receipt.enc_dec
 #print axioms BlindLedger.Gate.FactRegistry.dayBefore_lt
+#print axioms BlindLedger.Gate.FactRegistry.le_dayBefore
 #print axioms BlindLedger.Gate.FactRegistry.stale_age_persists
 #print axioms BlindLedger.Gate.FactRegistry.stale_gap_persists
 #print axioms BlindLedger.Gate.FactRegistry.dayBefore_valid
@@ -544,11 +538,43 @@ import BlindLedger.Gate.Cosign.Theorems
 #print axioms BlindLedger.Gate.Obligations.parts_wf
 #print axioms BlindLedger.Gate.Obligations.obligC_ok
 #print axioms BlindLedger.Gate.Obligations.cashC_ok
+#print axioms BlindLedger.Gate.Obligations.markC_ok
 #print axioms BlindLedger.Gate.Obligations.claimC_ok
 #print axioms BlindLedger.Gate.Obligations.supportC_ok
 #print axioms BlindLedger.Gate.Obligations.reportC_ok
 #print axioms BlindLedger.Gate.Obligations.fundC_ok
 #print axioms BlindLedger.Gate.Obligations.ackC_ok
+#print axioms BlindLedger.Gate.Obligations.Format.stateC_ok
+#print axioms BlindLedger.Gate.Obligations.Format.caseC_ok
+#print axioms BlindLedger.Gate.Obligations.Format.actionC_ok
+#print axioms BlindLedger.Gate.Obligations.Format.actionC_status
+#print axioms BlindLedger.Gate.Obligations.Format.foldStep_cash_repeat
+#print axioms BlindLedger.Gate.Obligations.Format.foldOf_writes
+#print axioms BlindLedger.Gate.Obligations.Format.foldOf_iff
+#print axioms BlindLedger.Gate.Obligations.Format.foldStep_asserted_mono
+#print axioms BlindLedger.Gate.Obligations.Format.foldStep_cash_new
+#print axioms BlindLedger.Gate.Obligations.Format.foldStep_create_repeat
+#print axioms BlindLedger.Gate.Obligations.Format.cmdC_ok
+#print axioms BlindLedger.Gate.Obligations.Format.markC_ok
+#print axioms BlindLedger.Gate.Obligations.Format.obligC_ok
+#print axioms BlindLedger.Gate.Obligations.Format.cashC_ok
+#print axioms BlindLedger.Gate.Obligations.Format.claimC_ok
+#print axioms BlindLedger.Gate.Obligations.Format.supportC_ok
+#print axioms BlindLedger.Gate.Obligations.Format.reportC_ok
+#print axioms BlindLedger.Gate.Obligations.Format.fundC_ok
+#print axioms BlindLedger.Gate.Obligations.Format.ackC_ok
+#print axioms BlindLedger.Gate.Obligations.Format.foldC_ok
+#print axioms BlindLedger.Gate.Obligations.Format.layout_fits
+#print axioms BlindLedger.Gate.Obligations.Format.encFB_eq
+#print axioms BlindLedger.Gate.Obligations.Format.decFB_eq
+#print axioms BlindLedger.Gate.Obligations.Format.decExactB_eq
+#print axioms BlindLedger.Gate.Obligations.RecCodec.encB_eq
+#print axioms BlindLedger.Gate.Obligations.Format.encFBc_eq
+#print axioms BlindLedger.Gate.Obligations.RecCodec.write_eq
+#print axioms BlindLedger.Gate.Obligations.RecCodec.write_dec
+#print axioms BlindLedger.Gate.Obligations.Format.Twin.dec_eq
+#print axioms BlindLedger.Gate.Obligations.Format.rdNB_eq_rdNT
+#print axioms BlindLedger.Gate.Obligations.Format.rdBlkB_eq_rdBlkT
 #print axioms BlindLedger.Gate.Obligations.source_free_identity
 #print axioms BlindLedger.Gate.Obligations.in_force_latest
 #print axioms BlindLedger.Gate.Obligations.ident_spec
@@ -564,6 +590,58 @@ import BlindLedger.Gate.Cosign.Theorems
 #print axioms BlindLedger.Gate.Obligations.element_fixed_agree
 #print axioms BlindLedger.Gate.Obligations.payment_request_faithful
 #print axioms BlindLedger.Gate.Obligations.state_row_roundtrip
+#print axioms BlindLedger.Gate.Obligations.alias_ne_recorded
+#print axioms BlindLedger.Gate.Obligations.fitB_iff
+#print axioms BlindLedger.Gate.Obligations.Plan.bytes_spec
+#print axioms BlindLedger.Gate.Obligations.rowOf_agree
+#print axioms BlindLedger.Gate.Obligations.pack_class_admitted
+#print axioms BlindLedger.Gate.Obligations.legacy_satisfies_no_class
+#print axioms BlindLedger.Gate.Obligations.dispatch_needs_class
+#print axioms BlindLedger.Gate.Obligations.command_duplicate_writes_nothing
+#print axioms BlindLedger.Gate.Obligations.command_conflict_writes_nothing
+#print axioms BlindLedger.Gate.Obligations.command_reads_local
+#print axioms BlindLedger.Gate.Obligations.no_size_refusal
+#print axioms BlindLedger.Gate.Obligations.command_once
+#print axioms BlindLedger.Gate.Obligations.core_marks
+#print axioms BlindLedger.Gate.Obligations.legacy_marker_stable
+#print axioms BlindLedger.Gate.Obligations.legacy_cited
+#print axioms BlindLedger.Gate.Obligations.state_row_is_evaluate
+#print axioms BlindLedger.Gate.Obligations.record_width
+#print axioms BlindLedger.Gate.Obligations.near_fit
+#print axioms BlindLedger.Gate.Obligations.encFull_near
+#print axioms BlindLedger.Gate.Obligations.core_near
+#print axioms BlindLedger.Gate.Obligations.rows_fit
+#print axioms BlindLedger.Gate.Obligations.encF_append
+#print axioms BlindLedger.Gate.Obligations.fit_split
+#print axioms BlindLedger.Gate.Obligations.unwrap_full
+#print axioms BlindLedger.Gate.Obligations.texts_run
+#print axioms BlindLedger.Gate.Obligations.element_rebuild
+#print axioms BlindLedger.Gate.Obligations.opening_rebuild
+#print axioms BlindLedger.Gate.Obligations.hit_without_row_refused
+#print axioms BlindLedger.Gate.Obligations.unread_writes_nothing
+#print axioms BlindLedger.Gate.Obligations.core_time
+#print axioms BlindLedger.Gate.Obligations.admitted_in_time
+#print axioms BlindLedger.Gate.Obligations.findRec_hit
+#print axioms BlindLedger.Gate.Obligations.findRec_absent
+#print axioms BlindLedger.Gate.Obligations.apply_inv
+#print axioms BlindLedger.Gate.Obligations.hit_is_record
+#print axioms BlindLedger.Gate.Obligations.no_hit_no_record
+#print axioms BlindLedger.Gate.Obligations.unknown_obligation_has_no_row
+#print axioms BlindLedger.Gate.Obligations.command_rebuild
+#print axioms BlindLedger.Gate.Obligations.checkLog_good_le
+#print axioms BlindLedger.Gate.Obligations.decodeInput_eq
+#print axioms BlindLedger.Gate.Obligations.noCommand_none
+#print axioms BlindLedger.Gate.Obligations.torn_end_one_command
+#print axioms BlindLedger.Gate.Obligations.engine_log_chain
+#print axioms BlindLedger.Gate.Obligations.written_loads
+#print axioms BlindLedger.Gate.Obligations.accepted_log_loads
+#print axioms BlindLedger.Gate.Obligations.engine_log_checks
+#print axioms BlindLedger.Gate.Obligations.checkLog_resume
+#print axioms BlindLedger.Gate.Obligations.marked_damage_not_cut
+#print axioms BlindLedger.Gate.Obligations.digest_damage_not_cut
+#print axioms BlindLedger.Gate.Obligations.whole_last_command_not_cut
+#print axioms BlindLedger.Gate.Obligations.digOf_eq
+#print axioms BlindLedger.Gate.Obligations.digAt_eq
 #print axioms BlindLedger.Gate.Cosign.decode_too_long
 #print axioms BlindLedger.Gate.Cosign.encode_decode
 #print axioms BlindLedger.Gate.Cosign.decode_encode
@@ -594,3 +672,157 @@ import BlindLedger.Gate.Cosign.Theorems
 #print axioms BlindLedger.Gate.Cosign.inTime_head
 #print axioms BlindLedger.Gate.Cosign.stale_any_crypto
 #print axioms BlindLedger.Gate.Cosign.body_ne_checkpoint_header
+#print axioms BlindLedger.Gate.FactStore.entC_ok
+#print axioms BlindLedger.Gate.FactStore.sumC_ok
+#print axioms BlindLedger.Gate.FactStore.moneyC_ok
+#print axioms BlindLedger.Gate.FactStore.tailC_ok
+#print axioms BlindLedger.Gate.FactStore.FRec.dec_enc
+#print axioms BlindLedger.Gate.FactStore.FRec.enc_dec
+#print axioms BlindLedger.Gate.FactStore.FRec.dec_wf
+#print axioms BlindLedger.Gate.FactStore.FRec.dec_length
+#print axioms BlindLedger.Gate.FactStore.run_append
+#print axioms BlindLedger.Gate.FactStore.Proj.put_writerOf
+#print axioms BlindLedger.Gate.FactStore.Proj.load_sound
+#print axioms BlindLedger.Gate.FactStore.Proj.projection
+#print axioms BlindLedger.Gate.FactStore.parseFacts_file
+#print axioms BlindLedger.Gate.FactStore.facts_projection
+#print axioms BlindLedger.Gate.FactStore.loadFacts_sound
+#print axioms BlindLedger.Gate.FactStore.parseLinks_file
+#print axioms BlindLedger.Gate.FactStore.links_projection
+#print axioms BlindLedger.Gate.FactFrame.decodeReq_enc
+#print axioms BlindLedger.Gate.FactFrame.decodeReq_dec
+#print axioms BlindLedger.Gate.FactFrame.decodeReq_wf
+#print axioms BlindLedger.Gate.FactFrame.decodeReq_digest
+#print axioms BlindLedger.Gate.FactFrame.decodeReq_rows
+#print axioms BlindLedger.Gate.FactFrame.encodeReq_length
+#print axioms BlindLedger.Gate.FactFrame.Ans.dec_enc
+#print axioms BlindLedger.Gate.FactFrame.Ans.enc_dec
+#print axioms BlindLedger.Gate.FactFrame.Ans.dec_wf
+#print axioms BlindLedger.Gate.FactFrame.Ans.enc_length
+#print axioms BlindLedger.Gate.FactFrame.rrdf_retry
+#print axioms BlindLedger.Gate.FactFrame.rrdf_conflict
+#print axioms BlindLedger.Gate.FactFrame.rrdf_not_next
+#print axioms BlindLedger.Gate.FactFrame.replay_ok
+#print axioms BlindLedger.Gate.FactFrame.rrdf_log
+#print axioms BlindLedger.Gate.FactFrame.refsAfter_rs
+#print axioms BlindLedger.Gate.FactFrame.sha_eq
+#print axioms BlindLedger.Gate.RefSet.rs_order
+#print axioms BlindLedger.Gate.RefSet.rs_shard
+#print axioms BlindLedger.Gate.Cosign.decodeLink_too_long
+#print axioms BlindLedger.Gate.Cosign.encode_decodeLink
+#print axioms BlindLedger.Gate.Cosign.decodeLink_encode
+#print axioms BlindLedger.Gate.Cosign.decodeLink_iff
+#print axioms BlindLedger.Gate.Cosign.decodeLink_total
+#print axioms BlindLedger.Gate.Cosign.body_injective
+#print axioms BlindLedger.Gate.Cosign.link_encode_length
+#print axioms BlindLedger.Gate.Cosign.link_mlDsa87_decodes
+#print axioms BlindLedger.Gate.Cosign.installLink_noop
+#print axioms BlindLedger.Gate.Cosign.installLink_keeps
+#print axioms BlindLedger.Gate.Cosign.installLink_fence
+#print axioms BlindLedger.Gate.Cosign.installLink_keys
+#print axioms BlindLedger.Gate.Cosign.installLink_certs_only_by_key
+#print axioms BlindLedger.Gate.Cosign.installLink_genesis
+#print axioms BlindLedger.Gate.Cosign.genesis_retires
+#print axioms BlindLedger.Gate.Cosign.installLink_extends
+#print axioms BlindLedger.Gate.Cosign.installLink_chains
+#print axioms BlindLedger.Gate.Cosign.conflict_blocks
+#print axioms BlindLedger.Gate.Cosign.installLink_links
+#print axioms BlindLedger.Gate.Cosign.installCert_same
+#print axioms BlindLedger.Gate.Cosign.installCert_noop
+#print axioms BlindLedger.Gate.Cosign.installCert_belowFence_iff
+#print axioms BlindLedger.Gate.Cosign.installCert_belowFence_noop
+#print axioms BlindLedger.Gate.Cosign.installCert_keeps
+#print axioms BlindLedger.Gate.Cosign.installCert_verified
+#print axioms BlindLedger.Gate.Cosign.installCert_equivocation
+#print axioms BlindLedger.Gate.Cosign.Apart.empty
+#print axioms BlindLedger.Gate.Cosign.installCert_apart
+#print axioms BlindLedger.Gate.Cosign.installLink_apart
+#print axioms BlindLedger.Gate.storeCheckpoint_cases
+#print axioms BlindLedger.Gate.storeCheckpoint_cosigned
+#print axioms BlindLedger.Gate.storeCheckpoint_keeps_cosigned
+#print axioms BlindLedger.Gate.installCert_keeps_cosigned
+#print axioms BlindLedger.Gate.Steps.cosigned
+#print axioms BlindLedger.Gate.verifyToken_cosigned
+#print axioms BlindLedger.Gate.storeCheckpoint_fork_iff
+#print axioms BlindLedger.Gate.storeCheckpoint_fork_needs_no_cosign
+#print axioms BlindLedger.Gate.accepts_cosigned
+#print axioms BlindLedger.Gate.publishOk_cosigned
+#print axioms BlindLedger.Gate.Cosign.succeeds_closed
+#print axioms BlindLedger.Gate.Cosign.installLink_closed
+#print axioms BlindLedger.Gate.Cosign.ClosedInRange.empty
+#print axioms BlindLedger.Gate.Cosign.installLink_closedInRange
+#print axioms BlindLedger.Gate.Cosign.installCert_closedInRange
+#print axioms BlindLedger.Gate.vcosignMsg_apart
+#print axioms BlindLedger.Gate.Cosign.installCert_unrecorded
+#print axioms BlindLedger.Gate.Cosign.fits_chainless
+#print axioms BlindLedger.Gate.Cosign.judge_owned
+#print axioms BlindLedger.Gate.Cosign.rotation_disowns
+#print axioms BlindLedger.Gate.Cosign.CountsAgree.empty
+#print axioms BlindLedger.Gate.Cosign.installLink_countsAgree
+#print axioms BlindLedger.Gate.Cosign.installCert_countsAgree
+#print axioms BlindLedger.Gate.Cosign.genesis_disowns
+#print axioms BlindLedger.Gate.Cosign.genesis_fits
+#print axioms BlindLedger.Gate.Cosign.fits_neighbours
+#print axioms BlindLedger.Gate.installOutcome_install
+#print axioms BlindLedger.Gate.RuleSet.evalC_eq
+#print axioms BlindLedger.Gate.RuleSet.evalC_le
+#print axioms BlindLedger.Gate.RuleSet.run_bounded
+#print axioms BlindLedger.Gate.RuleSet.dataFires_core
+#print axioms BlindLedger.Gate.RuleSet.dataFires_pack1
+#print axioms BlindLedger.Gate.RuleSet.pack1_fires
+#print axioms BlindLedger.Gate.RuleSet.pack1_decideBatch
+#print axioms BlindLedger.Gate.RuleSet.allow_clear_any
+#print axioms BlindLedger.Gate.RuleSet.decode_canonical
+#print axioms BlindLedger.Gate.RuleSet.admit_signed
+#print axioms BlindLedger.Gate.RuleSet.admit_unsigned
+#print axioms BlindLedger.Gate.RuleSet.admitW_notBefore
+#print axioms BlindLedger.Gate.RuleSet.admit_policy
+#print axioms BlindLedger.Gate.RuleSet.admit_roster_only
+#print axioms BlindLedger.Gate.RuleSet.reachable_signed
+#print axioms BlindLedger.Gate.RuleSet.admit_enrollAge
+#print axioms BlindLedger.Gate.RuleSet.enroll_stale_allow
+#print axioms BlindLedger.Gate.RuleSet.enroll_stale_hold
+#print axioms BlindLedger.Gate.RuleSet.select_mem
+#print axioms BlindLedger.Gate.RuleSet.select_unique
+#print axioms BlindLedger.Gate.RuleSet.select_iff
+#print axioms BlindLedger.Gate.RuleSet.replay_congr
+#print axioms BlindLedger.Gate.RuleSet.replay_later
+#print axioms BlindLedger.Gate.RuleSet.runnable_spec
+#print axioms BlindLedger.Gate.RuleSet.live_pack1
+#print axioms BlindLedger.Gate.RuleSet.dataFires_v1
+#print axioms BlindLedger.Gate.RuleSet.pack2_pne
+#print axioms BlindLedger.Gate.RuleSet.pack2_stale
+#print axioms BlindLedger.Gate.RuleSet.pack2_no_asof
+#print axioms BlindLedger.Gate.RuleSet.pack2_unlisted
+#print axioms BlindLedger.Gate.RuleSet.elig_reason_class
+#print axioms BlindLedger.Gate.RuleSet.admitW_backed
+#print axioms BlindLedger.Gate.RuleSet.elig_guard_hold
+#print axioms BlindLedger.Gate.RuleSet.elig_guard_review
+#print axioms BlindLedger.Gate.RuleSet.eval3_sound
+#print axioms BlindLedger.Gate.RuleSet.evalAt_read
+#print axioms BlindLedger.Gate.RuleSet.elig_guard_narrow
+#print axioms BlindLedger.Gate.RuleSet.gateStep_cur
+#print axioms BlindLedger.Gate.RuleSet.gateStep_head
+#print axioms BlindLedger.Gate.RuleSet.gateStep_held
+#print axioms BlindLedger.Gate.RuleSet.gateStep_late
+#print axioms BlindLedger.Gate.RuleSet.gateStep_ok
+#print axioms BlindLedger.Gate.Engine3.RuleGate.after_eq
+#print axioms BlindLedger.Gate.Engine3.RuleGate.after_late
+#print axioms BlindLedger.Gate.Engine3.RuleGate.after_held
+#print axioms BlindLedger.Gate.Engine3.RuleGate.after_floor
+#print axioms BlindLedger.Gate.Engine3.RuleGate.passedBy_worker
+#print axioms BlindLedger.Gate.FactBelief.belief_local
+#print axioms BlindLedger.Gate.FactBelief.belief0_local
+#print axioms BlindLedger.Gate.FactBelief.belief0_ignores_day_and_refhi
+#print axioms BlindLedger.Gate.FactBelief.belief_ignores_later
+#print axioms BlindLedger.Gate.FactBelief.stale_no_result
+#print axioms BlindLedger.Gate.FactBelief.ref_lag
+#print axioms BlindLedger.Gate.FactBelief.ref_lag_belief0
+#print axioms BlindLedger.Gate.FactBelief.belief_definite_fresh
+#print axioms BlindLedger.Gate.FactBelief.quar_not_absent
+#print axioms BlindLedger.Gate.FactBelief.marker_lift
+#print axioms BlindLedger.Gate.FactBelief.conflict_kept
+#print axioms BlindLedger.Gate.FactBelief.stmts_silent
+#print axioms BlindLedger.Gate.FactBelief.full_ends_not_voids
+#print axioms BlindLedger.Gate.FactBelief.late_never_overrides
+#print axioms BlindLedger.Gate.FactBelief.belief_ignores_later_confirm

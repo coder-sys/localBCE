@@ -13,6 +13,16 @@ open Std (HashMap)
 def crashAt(name : String) : IO Unit := do
   if (← IO.getEnv "RR_E3_CRASH") == some name then IO.Process.exit 99
 
+/-- Test hook: with `RR_E3_CRASH` naming `name` (one name, or several separated by commas), the first time this process reaches `name` it
+    throws (an open that fails part way, as an IO error would make it).  The names that have fired are kept, so each point fires once on its own. -/
+initialize hookFired : IO.Ref (List String) ← IO.mkRef []
+
+def failOnceAt (name : String) : IO Unit := do
+  let names := ((← IO.getEnv "RR_E3_CRASH").getD "").splitOn ","
+  if names.contains name && !(← hookFired.get).contains name then
+    hookFired.modify (name :: ·)
+    throw (IO.userError s!"test hook {name}")
+
 def patchAns (a head root : ByteArray) : ByteArray :=
   let h := headAt a
   let o := a.copySlice 0 (ByteArray.emptyWithCapacity a.size) 0 h false
@@ -32,8 +42,15 @@ def splitFrame (f : FrameRef) (raw : ByteArray) : Option (ByteArray × ByteArray
 def readFrame (log : UInt32) (f : FrameRef) : IO (Option (ByteArray × ByteArray × Trailer × ByteArray)) :=
   return splitFrame f (← Io.pgRead log f.off.toUInt64 f.len.toUSize)
 
+/-- A fact frame (`RRDF`, `FactFrame.decodeReq`); a decision frame is `RRDQ`. -/
+def isFact (bs : ByteArray) : Bool := bs.extract 0 4 == ⟨FactFrame.magicReq.toArray⟩
+
+/-- FRAME_V1's refusal answer, with the request's shard, batch and digest when its header reads. -/
 def refusal (bs : ByteArray) (wd : Word) : ByteArray :=
-  ⟨(Frame.refusal wd ((Frame.decodeHdr (bs.extract 0 Frame.hdrBytes).toList).toOption.map (·.1))).toArray⟩
+  let h := (bs.extract 0 Frame.hdrBytes).toList
+  let hd := if isFact bs then (FactFrame.decodeHdr h).toOption.map fun (s, b, d, _) => ⟨s, b, d⟩
+    else (Frame.decodeHdr h).toOption.map (·.1)
+  ⟨(Frame.refusal wd hd).toArray⟩
 
 /-! ## Memory diagnostic (bench only)
 
@@ -60,7 +77,7 @@ def memMark (i : Nat) (m0 : Nat) : IO Nat := do
     skipped); none unless the walk ends at the answer's last byte. -/
 def ansAdds (a : ByteArray) : Option ByteArray := Id.run do
   -- after the head, root, hold, grant id and authority record
-  let mut p := headAt a + 128 + 16 + 64 + 208
+  let mut p := headAt a + 128 + 16 + 64 + authLen
   let blob (p : Nat) : Option Nat := if p + 2 ≤ a.size && p + 2 + getN a p 2 ≤ a.size then some (p + 2 + getN a p 2) else none
   if a.size < p + 4 then return none
   let nn := getN a p 4
@@ -71,10 +88,13 @@ def ansAdds (a : ByteArray) : Option ByteArray := Id.run do
   if a.size < p + 4 then return none
   let nl := getN a p 4
   p := p + 4
-  -- a leaf: outcome, reasons and authority, the bypass flag (1: its id follows), the input
+  -- a leaf: outcome, reasons and authority, the flag (1: a bypass id follows; 2: the earlier lines' blob), the input
   for _ in [0:nl] do
-    if a.size < p + 11 || a.get! (p + 10) > 1 then return none
-    p := p + 11 + (if a.get! (p + 10) == 1 then 64 else 0) + 64
+    if a.size < p + 11 || a.get! (p + 10) > 2 then return none
+    if a.get! (p + 10) == 2 then
+      let some q := blob (p + 11) | return none
+      p := q + 64
+    else p := p + 11 + (if a.get! (p + 10) == 1 then 64 else 0) + 64
   if a.size < p + 4 then return none
   let na := getN a p 4
   p := p + 4
@@ -85,16 +105,17 @@ def ansAdds (a : ByteArray) : Option ByteArray := Id.run do
     p := q
   return if p == a.size then some out else none
 
-/-- The refusal of a store written before commit 4b56a94c, whose logged `rq` is the request frame digest, not the batch
-    identity.  Such a store is not migrated (synthetic stores only, ENGINE_V3.md section 24). -/
-def staleFormat : String := "STORE_FORMAT logged before the batch identity (4b56a94c); no migration"
-
 /-- A logged frame's own checks, which need no state: its request bytes have the identity `rq`, its answer hashes to `an`,
-    the authority record and the rows the answer adds to `bd`; then those rows, released and unresolved.  The error names the check that failed. -/
+    the authority record and the rows the answer adds to `bd`; then those rows, released and unresolved.  A fact frame adds no
+    rows: its `rq` is its header digest and its `bd` a batch's with no rows.  The error names the check that failed. -/
 def frameRows (rqb anb : ByteArray) (t : Trailer) : Except String (List Line × List Line) := do
-  let .ok (q, dg) := Frame.Fast.decodeReqFast rqb | throw "LOG"
+  if isFact rqb then
+    let .ok (_, dg) := FactFrame.decodeReq FactFrame.sha rqb.toList | throw "LOG"
+    if dg.toByteArray != t.rq || ansBind anb != t.an then throw s!"rq {dg.toByteArray != t.rq} an {ansBind anb != t.an}"
+    if batchDigestFast t.au ([], []) != t.bd then throw "bd"
+    return ([], [])
+  let .ok (q, _) := Frame.Fast.decodeReqFast rqb | throw "LOG"
   let ib := (Frame.Fast.identFast rqb q).1
-  if ib != t.rq && dg == t.rq then throw staleFormat
   if ib != t.rq || ansBind anb != t.an then throw s!"rq {ib != t.rq} an {ansBind anb != t.an}"
   let some (fr, fu) := (ansAdds anb).bind Rules.Run.parseAdds | throw "adds"
   if batchDigestFast t.au (fr, fu) != t.bd then throw "bd"

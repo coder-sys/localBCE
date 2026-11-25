@@ -1,12 +1,14 @@
 import BlindLedger.Gate.Anchor
 import BlindLedger.Gate.Authority
+import BlindLedger.Gate.CauseRelease
 import BlindLedger.Gate.Rules.Fast
 import BlindLedger.Gate.Rules.Request
+import BlindLedger.Gate.Rules.ExactDuplicate
 import BlindLedger.Sha3Fast
 import BlindLedger.Sha3Quick
 import BlindLedger.Sha3
 
-/-! The vector runner (runs per gate batch; emits `RULES_READS`, `reads`): decides with `Fast.decideBatchFIn` (= `decideBatchIn`, `FastEq.decideBatchFIn_eq`; no reversed re-run, order independence `Theorems.decideBatchIn_perm`) and pins with `Fast.pinBytes` (`pin_run_eq`). Lines marked `-- FAST` differ from the pre-twin runner. -/
+/-! The vector runner (runs per gate batch; emits `RULES_READS`, `ReadManifest.run_reads_eq`): decides with `Fast.decideBatchFIn` (= `decideBatchIn`, `FastEq.decideBatchFIn_eq`; no reversed re-run, order independence `Theorems.decideBatchIn_perm`) and pins with `Fast.pinBytes` (`pin_run_eq`). Lines marked `-- FAST` differ from the pre-twin runner. -/
 
 namespace BlindLedger.Gate.Rules.Run
 
@@ -16,7 +18,7 @@ open BlindLedger.Gate.Rules
     one per line: `case NAME` clears the batch, the totals, the lines earlier commits
     released or left unresolved and the gate's checkpoints; `today D`;
     `snap KIND ASOF COUNT PIN` (re)declares a snapshot (`dmf`, `pdeath`,
-    `excl`, `span`, `elig` with rows `MEMBER AID LEVEL START STOP`) or the `released` or `unresolved` set (rows `ID[:PAY] FLOW
+    `excl`, `span`) or the `released` or `unresolved` set (rows `ID[:PAY] FLOW
     M PAYEE REND DATE PROC UNITS CENTS`, PAY defaulting to ID; it also drops
     the lines earlier commits added to that set), whose rows are the
     following lines starting with KIND.  PIN is the SHA3-512 hex of
@@ -45,9 +47,6 @@ def name {α : Type} [Repr α] (x : α) : String := ((reprStr x).splitOn ".").ge
 def parse {α : Type} [Repr α] (all : List α) (s : String) : Option α := all.find? (name · == s)
 
 #guard (reasons.map name).zip ((reasons.map name).drop 1) |>.all fun (a, b) => decide (a < b)
-
--- G2's allowed aid codes are the identifiers of localBCE's (rust-engine/src/main.rs:235).
-#guard allowedAid == ["13", "23", "53", "103", "104"].map aidId
 
 -- Every unverified or stale reason is a review reason: `review`'s `| _ => false` cannot silently make one a HOLD.
 #guard reasons.all fun r => review r || !((name r).endsWith "_UNVERIFIED" || (name r).startsWith "STALE_")
@@ -119,13 +118,12 @@ def emptyPin (kind : String) (a : Nat) : Option String :=
   (Fast.pinBytes s!"RR/GATE/{kind.toUpper}/v1" (if kind == "released" then 5 else 6) Line.fields
     (⟨a, 0, []⟩ : Snapshot Line)).map fun b => hexOf (BlindLedger.Semantic.sha3_512Quick b)
 
-/-- The seven pinned inputs with their checked pins, and the five kinds' `readPin`s, once per declaration.  -- FAST -/
+/-- The six pinned inputs with their checked pins, and the four kinds' `readPin`s, once per declaration.  -- FAST -/
 structure Pinned where
   dmf : Option (Snapshot Death × List UInt8)
   pdeath : Option (Snapshot Death × List UInt8)
   excl : Option (Snapshot Exclusion × List UInt8)
   span : Option (Snapshot Span × List UInt8)
-  elig : Option (Snapshot Elig × List UInt8)
   released : Option (Snapshot Line × List UInt8)
   unresolved : Option (Snapshot Line × List UInt8)
   kinds : Option (List (List UInt8 × List UInt8))
@@ -176,7 +174,7 @@ structure St where
       release (64 bytes); `bypass HEX`: one APPROVAL/v2 bypass per held payment (any bytes: `admit` refuses a bad one alone); `floor N`: the grant serial
       floor the host asserts (it may raise the stored floor, never lower it); `kfloor N`: the key-set epoch the host asserts
       (the highest any shard of the tenant has admitted: a head below it is refused); `keyset HEX` and `kstep DAY HEX`: the
-      key-set chain the batch head is admitted from.  A batch with requests commits to them (`Gate.inputV6`, `Frame.ident`). -/
+      key-set chain the batch head is admitted from.  A batch with requests commits to them (`Gate.inputV7`, `Frame.ident`). -/
   grant : Option (List UInt8) := none
   release : Option (List UInt8) := none
   byps : List (List UInt8) := []
@@ -210,7 +208,7 @@ def parseLine : List String → Option Line
       ← nat? r, ← nat? d, ← nat? c, ← nat? u, ← nat? a⟩
   | _ => none
 
-/-- `req HEX`: one DECIDE-REQUEST/v1 (`Gate.decodeRequest`), and the lines Lean reads from it.  Refused when it does not
+/-- `req HEX`: one DECIDE-REQUEST/v2 (`Gate.decodeRequest`), and the lines Lean reads from it.  Refused when it does not
     decode or a ruled line does not map (`linesOf`), when the batch has `line` lines, when its payment is already in the
     batch, or when its tenant or program is not the batch's first request's. -/
 def reqOf (x : ByteArray) : Option Req := do
@@ -236,7 +234,7 @@ def death (r : List String) : Option Death := match r.mapM nat? with
 def grow (o : Option (Snapshot Line)) (xs : List Line) : Option (Snapshot Line) :=
   o.map fun s => { s with count := s.count + xs.length, entries := s.entries ++ xs }
 
-/-- One kind's SNAPSHOT/v1 pin (zero if none; refused if zero) and READ-*/v2 slot (one slot of `reads`). -/
+/-- One kind's SNAPSHOT/v1 pin (zero if none; refused if zero) and READ-*/v2 slot (`ReadManifest.kindOf`). -/
 def readPin {α : Type} (d : String) (k : Nat) (f : α → List (Nat × Nat)) :
     Option (Snapshot α × List UInt8) → Option (List UInt8 × List UInt8)
   | none => some (Gate.zeroDigest, [0])
@@ -254,15 +252,11 @@ def St.pin (st : St) : Pinned :=
   let span := snapshot st "span" (fun r => match r.mapM nat? with
     | some [m, p, a, b] => some ⟨m, p, a, b⟩
     | _ => none) "RR/GATE/SNAPSHOT/v1" 4 Span.fields
-  let elig := snapshot st "elig" (fun r => match r.mapM nat? with
-    | some [m, a, v, s, t] => some ⟨m, a, v, s, t⟩
-    | _ => none) "RR/GATE/SNAPSHOT/v1" 7 Elig.fields
-  { dmf, pdeath, excl, span, elig,
+  { dmf, pdeath, excl, span,
     released := snapshot st "released" parseLine "RR/GATE/RELEASED/v1" 5 Line.fields
     unresolved := snapshot st "unresolved" parseLine "RR/GATE/UNRESOLVED/v1" 6 Line.fields
     kinds := do pure [← readPin "RR/GATE/READ-DMF/v2" 1 Death.fields dmf, ← readPin "RR/GATE/READ-PROVIDER-DEATH/v2" 2 Death.fields pdeath,
-      ← readPin "RR/GATE/READ-EXCLUSION/v2" 3 Exclusion.fields excl, ← readPin "RR/GATE/READ-ENROLLMENT/v2" 4 Span.fields span,
-      ← readPin "RR/GATE/READ-ELIGIBILITY/v2" 7 Elig.fields elig] }
+      ← readPin "RR/GATE/READ-EXCLUSION/v2" 3 Exclusion.fields excl, ← readPin "RR/GATE/READ-ENROLLMENT/v2" 4 Span.fields span] }
 
 /-- The digest of the four reference-snapshot pins (death, provider death, exclusion, enrollment), each its declared
     64-byte pin (zero for a snapshot the frame did not declare or whose rows do not match their pin), in that order. -/
@@ -322,7 +316,6 @@ def St.ctx (st : St) (p : Pinned) : Ctx where
   providerDeaths := p.pdeath.map (·.1)
   exclusions := p.excl.map (·.1)
   enrollment := p.span.map (·.1)
-  eligibility := p.elig.map (·.1)
   released := grow (p.released.map (·.1)) st.extra
   unresolved := grow (p.unresolved.map (·.1)) st.held
   releasedPrior := st.rprior
@@ -480,13 +473,15 @@ def effFloor (stored : Nat) : Option Nat → Option Nat
   | some n => if n < stored then none else some n
 
 /-- The authority a request frame admits: the grant, the admitted bypasses, the ratchet and key-set digest the batch head
-    gives, and the `RULES_BYPASS` lines of the bypasses not admitted (`-` for the payment of bytes that are no bypass). -/
+    gives, the `RULES_BYPASS` lines of the bypasses not admitted (`-` for the payment of bytes that are no bypass) and the
+    `RULES_CAUSE -` lines of the cause records not admitted, and the admitted cause records (`CauseRelease.admit`). -/
 structure Admitted where
   grant : Authority.Grant
   byps : List Authority.Bypass
   ratchet : Keyset.Ratchet
   ksDigest : Bytes
   notes : List String
+  causes : List CauseRelease.Release
 
 /-- The leaf of a request no grant entry covers: reason SCOPE, no authority; HOLD for a ruled flow, HUMAN_REVIEW for one
     with no rules (the token format requires it).  Only this request's row is held; the rest of the frame proceeds, and
@@ -494,14 +489,71 @@ structure Admitted where
 def uncovered (g : Authority.Grant) (e : Req) : Pay :=
   ⟨e.q, if e.r.flow.ruled then .HOLD else .HUMAN_REVIEW, "SCOPE", .OBSERVE, g.id, Gate.zeroDigest⟩
 
-/-- The bypasses of one batch that are read; each later one is refused alone (TOO_MANY) without a signature check. -/
+/-! ## Exact repeats of paid lines (`ExactDuplicate`, Constitution I.4) -/
+
+/-- Big-endian bytes of `n` before `acc`, without leading zeros. -/
+def beBytes (n : Nat) (acc : Bytes) : Bytes :=
+  if _h : n = 0 then acc else beBytes (n / 256) ((n % 256).toUInt8 :: acc)
+termination_by n
+decreasing_by omega
+
+/-- The bytes `x` of an identifier number `idNat x`: its big-endian bytes after the leading 1. -/
+def idBytes (n : Nat) : Bytes := (beBytes n []).drop 1
+
+/-- An `RR/GATE/EARLIER/v1` entry from `ExactDuplicate.earlier`'s (line id, earlier payment, earlier line id): the
+    identifiers line id, earlier program, earlier payment id and earlier line id (a payment number is the identifier
+    number of its program's and payment id's identifier fields, `payNat`). -/
+def earlierEntry (e : Nat × Nat × Nat) : Bytes := identField (idBytes e.1) ++ idBytes e.2.1 ++ identField (idBytes e.2.2)
+
+/-- Payment `p`'s earlier list as an answer leaf carries it: a two-byte count and the entries, ascending by line id;
+    none when it would name one line id twice or not fit a leaf. -/
+def earlierBody (c : Ctx) (ds : List Decision) (p : Nat) : Option Bytes :=
+  let es := ((Rules.earlier c ds p).map fun e => (idBytes e.1, e)).mergeSort fun a b => !lexLt b.1 a.1
+  let body := natBE 2 es.length ++ (es.map (earlierEntry ·.2)).flatten
+  if ascending (es.map (·.1)) && body.length < 65536 then some body else none
+
+/-- What `ExactDuplicate` reads for one batch: its context, the payments decided as if contested and the decisions. -/
+structure Answering where
+  c : Ctx
+  k : List Nat
+  ds : List Decision
+  /-- The payments answered. -/
+  pays : Std.HashSet Nat
+
+/-- `ExactDuplicate`'s inputs for a batch with decisions `ds` whose senders contest `k`.  Only a line held for an exact
+    repeat can have a twin (`ExactDuplicate.twin_reason`), and a twin shares its exact key
+    (`ExactDuplicate.sameLine_exactKey`), so only those decisions are read and the released set is read as the rows
+    under their exact keys, each key's rows in set order (`rowsFor`; none when they cannot all be read).  A payment
+    already decided (`ALREADY_DECIDED`: its own released lines are no earlier payment), one with a line under a key whose
+    rows cannot all be read, and one whose earlier list would name one line id twice or not fit a leaf are decided as if
+    contested. -/
+def answering (c : Ctx) (rowsFor : Key → Option (List Line)) (k : List Nat) (ds : List Decision) : Answering :=
+  let decided := Std.HashSet.ofList ((ds.filter (·.reasons.contains .ALREADY_DECIDED)).map (·.line.pay))
+  let ds := ds.filter fun d => d.reasons.contains .FFS_DUPLICATE_LINE || d.reasons.contains .CAP_MEMBER_MONTH_DUPLICATE
+  let got := (ds.map (exactKey ·.line)).eraseDups.map fun key => (key, rowsFor key)
+  let rows := got.flatMap (·.2.getD [])
+  let cut := got.filterMap fun (key, r) => if r.isNone then some key else none
+  let c := { c with released := none, releasedPrior := ⟨0, rows.length, rows⟩ }
+  let ps := (ds.map (·.line.pay)).eraseDups
+  let k := k ++ ps.filter fun p => decided.contains p ||
+    (earlierBody c ds p).isNone || ds.any fun d => d.line.pay == p && cut.contains (exactKey d.line)
+  ⟨c, k, ds, Std.HashSet.ofList (ps.filter (Rules.answered c k ds))⟩
+
+/-- The approvals of one batch that are read, bypasses and cause records together; each later one is refused alone
+    (TOO_MANY) without a signature check. -/
 def maxBypasses : Nat := 64
+
+/-- Approval bytes are a cause record when they begin with the approval tag and kind byte 3; any other bytes are read
+    as a bypass. -/
+def isCause (x : Bytes) : Bool := (Authority.tag ++ natBE 1 CauseRelease.kindByte).isPrefixOf x
 
 /-- Admits the batch head from the stored ratchet `rat` and genesis `pin` (an epoch below the frame's `kfloor` is
     STALE_KEYSET), then the grant (against the batch's
     tenant, the first request's, and the floor), then each bypass, alone: the bytes are no bypass or are not signed
     (the cause of `Authority.admitBypassR`), it is past the first `maxBypasses` (TOO_MANY), two admitted ones name one payment for one request (both DUPLICATE), the payment is not a
     request of the frame (NOT_IN_BATCH), is re-decided (REDO), or its covering entry does not let it transfer (SCOPE).
+    A cause record (`isCause`) among the approvals read is admitted alone by `CauseRelease.admit` (`RULES_CAUSE - why`
+    when it is not); one past them is `RULES_CAUSE - TOO_MANY`.  `approvals` judges each admitted record's listed payments.
     A refused bypass releases nothing and the rest of the frame is decided.  `error why`: the frame is refused (`RULES_GRANT_HOLD why`). -/
 def admit (verify : Bytes → Bytes → Bytes → Bool) (pin : Bytes) (rat : Keyset.Ratchet) (stored : Nat) (st : St) :
     Except String Admitted :=
@@ -519,7 +571,10 @@ def admit (verify : Bytes → Bytes → Bytes → Bool) (pin : Bytes) (rat : Key
         | .ok g =>
           let xfer (b : Authority.Bypass) : Bool := st.reqs.any fun e => e.r.programId == b.program && e.r.paymentId == b.payment &&
             (Authority.entryFor g e.r.programId e.r.flow).any (·.authority == .TRANSFER)
-          let signed := (st.byps.take maxBypasses).map fun x => (x, Authority.admitBypassR verify H e0.r.tenantId x)
+          let read := st.byps.take maxBypasses
+          let late := st.byps.drop maxBypasses
+          let recs := (read.filter isCause).map (CauseRelease.admit verify H e0.r.tenantId)
+          let signed := (read.filter (!isCause ·)).map fun x => (x, Authority.admitBypassR verify H e0.r.tenantId x)
           let once (b : Authority.Bypass) : Bool := (signed.filter fun (_, r) => match r with
             | .ok c => c.program == b.program && c.payment == b.payment && c.request == b.request
             | .error _ => false).length == 1
@@ -531,12 +586,17 @@ def admit (verify : Bytes → Bytes → Bytes → Bool) (pin : Bytes) (rat : Key
           let rs := signed.map fun (x, r) => match r with
             | .ok b => (some (payNat b.program b.payment), judge b)
             | .error w => (((Authority.decode x).bind bypKey).map fun (p, q) => payNat p q, Except.error (name w))
-          let rs := rs ++ (st.byps.drop maxBypasses).map fun x =>
+          let rs := rs ++ (late.filter (!isCause ·)).map fun x =>
             (((Authority.decode x).bind bypKey).map fun (p, q) => payNat p q, Except.error "TOO_MANY")
           .ok ⟨g, rs.filterMap (·.2.toOption), rat', Keyset.digestOf H.ks,
-            rs.filterMap fun (n, b) => match b with
+            rs.filterMap (fun (n, b) => match b with
               | .ok _ => none
-              | .error why => some s!"RULES_BYPASS {(n.map natStr).getD "-"} {why}"⟩
+              | .error why => some s!"RULES_BYPASS {(n.map natStr).getD "-"} {why}") ++
+            recs.filterMap (fun r => match r with
+              | .ok _ => none
+              | .error why => some s!"RULES_CAUSE - {name why}") ++
+            (late.filter isCause).map (fun _ => "RULES_CAUSE - TOO_MANY"),
+            recs.filterMap (·.toOption)⟩
   | _, _, _ => .error "MISSING"
 
 /-- The admitted bypasses `emit` reads for request `e`: those for its payment that were signed for this very request.  A valid
@@ -561,6 +621,57 @@ def bypNotes (hsh : Bytes → Bytes) (bps : List Authority.Bypass) (reqs : List 
   bps.filterMap fun b => (reqs.find? fun e => e.r.programId == b.program && e.r.paymentId == b.payment).bind fun e =>
     if b.request != hsh e.x.toList then some s!"RULES_BYPASS {natStr e.q} WRONG_REQUEST"
     else if !byd e.q then some s!"RULES_BYPASS {natStr e.q} NOT_HELD" else none
+
+/-! ### Release by cause (`CauseRelease`; docs/RIGHTRAIL_FULL_STACK_TARGET.md §6) -/
+
+/-- Request `e` as a cause record's judgement sees it: the digest of its bytes, its flow, amount and lines' service dates,
+    whether the grant entry covering it has TRANSFER authority, and whether the batch decides it again. -/
+def seenOf (hsh : Bytes → Bytes) (g : Authority.Grant) (redo : List Nat) (e : Req) : CauseRelease.Seen :=
+  ⟨e.q, e.r.programId, e.r.paymentId, hsh e.x.toList, e.r.flow, e.r.amountCents, e.ls.map (·.date),
+    (Authority.entryFor g e.r.programId e.r.flow).any (·.authority == .TRANSFER), redo.contains e.q⟩
+
+/-- A batch's approvals as the rules take them: `Ctx.byp` (`CauseRelease.merge` of the admitted bypasses' pairs, `bypOf`, and
+    every admitted record's, `CauseRelease.pairs`), the admitted bypasses whose pair stands or that gave none, each payment
+    whose record pair stands with that record's id, and the notes known before the rules run. -/
+structure Approvals where
+  byp : List (Nat × Nat)
+  byps : List Authority.Bypass
+  ids : List (Nat × Bytes)
+  notes : List String
+
+/-- With no admitted record, `byp` is `bypOf` (a frame carries each payment once, so `merge` keeps every bypass pair), `byps`
+    is `bps` and there are no notes.  A listed payment of the batch that `CauseRelease.judge` refuses is
+    `RULES_CAUSE <payment> <why>`; a payment named by more than one pair is `DUPLICATE` for each approval that named it. -/
+def approvals (hsh : Bytes → Bytes) (g : Authority.Grant) (bps : List Authority.Bypass) (rs : List CauseRelease.Release)
+    (reqs : List Req) (redo : List Nat) : Approvals :=
+  let ss := if rs.isEmpty then [] else reqs.map (seenOf hsh g redo)
+  let paired (b : Authority.Bypass) : Bool :=
+    reqs.any fun e => e.q == payNat b.program b.payment && b.request == hsh e.x.toList
+  let named := bypOf hsh bps reqs ++ rs.flatMap (CauseRelease.pairs · ss)
+  let dup (q : Nat) : Bool := named.countP (·.1 == q) != 1
+  let judged := rs.flatMap fun r => ss.filterMap fun s => (CauseRelease.listed r.doc s).map fun en =>
+    (r.id, s.q, CauseRelease.judge r.doc s en)
+  let dropped := bps.filter fun b => paired b && dup (payNat b.program b.payment)
+  ⟨CauseRelease.merge named, bps.filter fun b => !(paired b && dup (payNat b.program b.payment)),
+    judged.filterMap (fun (id, q, j) => match j with
+      | .ok _ => if dup q then none else some (q, id)
+      | .error _ => none),
+    dropped.map (fun b => s!"RULES_BYPASS {natStr (payNat b.program b.payment)} DUPLICATE") ++
+    judged.filterMap (fun (_, q, j) => match j with
+      | .ok _ => if dup q then some s!"RULES_CAUSE {natStr q} DUPLICATE" else none
+      | .error why => some s!"RULES_CAUSE {natStr q} {name why}")⟩
+
+/-- `RULES_CAUSE <payment> NOT_HELD` for each payment whose record pair stands but that the rules did not release (not held,
+    held for another cause as well, or already released). -/
+def causeNotes (a : Approvals) (byd : Nat → Bool) : List String :=
+  a.ids.filterMap fun (q, _) => if byd q then none else some s!"RULES_CAUSE {natStr q} NOT_HELD"
+
+/-- A payment's leaf with release by cause: one that the rules released by its record's pair is ALLOW with the record's id
+    in the bypass field, as `emitWith` gives a bypass's; any other leaf is as given. -/
+def causeLeaf (a : Approvals) (byd unf : Nat → Bool) (p : Pay) : Pay :=
+  match a.ids.lookup p.q with
+  | some id => if !unf p.q && byd p.q && id != Gate.zeroDigest then { p with outcome := .ALLOW, bypass := id } else p
+  | none => p
 
 /-- A token says ALLOW only for a payment with no unfit line whose every decided line is ALLOW. -/
 theorem leafOutcome_allow {c : Ctx} {ds : List Decision} {u : Nat → Bool} {p : Nat}
@@ -607,11 +718,11 @@ def uniq (ids : List Nat) : List Nat :=
   (ids.foldl (fun (s, r) i => if s.contains i then (s, r) else (s.insert i, i :: r))
     ((∅ : Std.HashSet Nat), ([] : List Nat))).2.reverse
 
-/-- `RULES_READS`: u32 today ‖ the five SNAPSHOT/v1 pins ‖ u32 |P| ‖ P, P the READ-SET/v5 bytes over `base` (the five
-    READ-*/v2 slots of `kinds`), redo in the order read. -/
+/-- `RULES_READS`: u32 today ‖ the four SNAPSHOT/v1 pins ‖ u32 |P| ‖ P, P the READ-SET/v2 bytes over `base`, redo in
+    the order read (`ReadManifest.run_reads_eq`). -/
 def reads (p : Pinned) (c : Ctx) (base : List UInt8) : Option (List UInt8) := do
   let ks ← p.kinds
-  let pre := "RR/GATE/READ-SET/v5".toUTF8.toList ++ [0] ++ (ks.map (·.2)).flatten ++ (← be 4 c.redo.length) ++
+  let pre := "RR/GATE/READ-SET/v2".toUTF8.toList ++ [0] ++ (ks.map (·.2)).flatten ++ (← be 4 c.redo.length) ++
     (← c.redo.mapM (be payWidth)).flatten ++ base
   pure ((← be 4 c.today) ++ (ks.map (·.1)).flatten ++ (← be 4 pre.length) ++ pre)
 
@@ -630,9 +741,15 @@ def commit (st : St) (unanchored : Bool) (show_ : Bool := false) : St × List St
   let b := lines
   let x := Fast.Ix.build c b                            -- FAST
   let r := x.runIn [] b                                 -- FAST: = decideBatchIn c [] b
+  -- `ExactDuplicate.decideBatchX` with no payment contested: an answered payment's lines join neither set
+  let ax := answering c (fun key => some ((releasedSet c).filter (exactKey · == key))) [] r.decisions
+  let unrX := (r.unresolved.entries.drop x.unrN).filter fun l => !ax.pays.contains l.pay
+  let unresolved : Snapshot Line := ⟨r.unresolved.asOf, r.unresolved.count - (r.unresolved.entries.length - x.unrN - unrX.length),
+    r.unresolved.entries.take x.unrN ++ unrX⟩
   let exp := st.batch.toList.filterMap (·.2)
   let got := r.decisions.map render ++ quarantined all
-  let bad := st.pays.filter fun (q, o) => name (if (unfit all).contains q then .HOLD else x.payOutcome r.decisions q) != o
+  let bad := st.pays.filter fun (q, o) =>
+    name (Rules.answerLeaf ax.c ax.k ax.ds (unfit all).contains (x.payOutcome r.decisions q) q) != o
   let (ok, n, msg) :=
     if exp.isEmpty then (true, 0, [])                   -- FAST: no reversed re-run
     else if exp.length == all.length && sorted exp == sorted got then (true, all.length, [])
@@ -640,7 +757,7 @@ def commit (st : St) (unanchored : Bool) (show_ : Bool := false) : St × List St
   let ok := ok && bad.isEmpty && !unanchored
   let msg := msg ++ bad.map (fun (q, o) => s!"RULES_PAY {q} expected={o}") ++
     (if unanchored then ["RULES_ANCHORED commit"] else [])
-  let fresh := (r.released.entries.drop x.relN, r.unresolved.entries.drop x.unrN)
+  let fresh := (r.released.entries.drop x.relN, unrX)
   let adds := do pure (((← fresh.1.mapM (rowBytesFast 1)) ++ (← fresh.2.mapM (rowBytesFast 2))).foldl (· ++ ·) ByteArray.empty)
   -- The checkpoint extended; before the first, the declared sets (pins from declaration) or the empty priors.
   let pinOf (o : Option (Snapshot Line × List UInt8)) (d : String) (k : Nat) (s : Snapshot Line) :=
@@ -649,13 +766,13 @@ def commit (st : St) (unanchored : Bool) (show_ : Bool := false) : St × List St
     pure (Gate.stateDigest (fun x => hB ⟨x.toArray⟩) (← pinOf p.released "RR/GATE/RELEASED/v1" 5 c.releasedPrior)
       (← pinOf p.unresolved "RR/GATE/UNRESOLVED/v1" 6 c.unresolvedPrior))
   let shown := if !show_ then [] else got.map ("RULES_LINE " ++ ·) ++
-    (Fast.setsDigestF hB r.released r.unresolved).toList.map (fun d => s!"RULES_DIGEST {hexOf d.toByteArray}") ++
+    (Fast.setsDigestF hB r.released unresolved).toList.map (fun d => s!"RULES_DIGEST {hexOf d.toByteArray}") ++
     adds.toList.map (fun b => s!"RULES_ADDS {hexOf b}") ++
     (base.bind (reads p c)).toList.map fun b => s!"RULES_READS {hexOf b.toByteArray}"
   ({ st with pinned := some p, anchor := none, sealed := true,
              extra := st.extra ++ fresh.1,                            -- FAST: `run_relN`
              held := st.held ++ fresh.2,
-             rprior := r.released, uprior := r.unresolved, batch := #[], redo := [], pays := [],
+             rprior := r.released, uprior := unresolved, batch := #[], redo := [], pays := [],
              done := st.done ++ r.decisions ++ heldDecisions all, checked := st.checked + (if ok then n + st.pays.length else 0),
              failed := st.failed + (if ok then 0 else 1) },
    shown ++ if ok then [] else "RULES_VECTOR_MISMATCH commit" :: msg)
@@ -714,7 +831,7 @@ def step (st : St) : List String → Option (St × List String)
       reasons.map fun r => s!"REPORT {name r} {by_ (·.reasons.contains r)}")
   | ["end", n] => do pure ({ st with expected := some (← nat? n) }, [])
   | k :: fs => do
-    guard (["dmf", "pdeath", "excl", "span", "elig", "released", "unresolved"].contains k)
+    guard (["dmf", "pdeath", "excl", "span", "released", "unresolved"].contains k)
     pure ({ st with rows := st.rows.push (k, fs), pinned := none }, [])
   | [] => none
 

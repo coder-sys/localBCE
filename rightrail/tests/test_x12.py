@@ -87,14 +87,17 @@ class EnvelopeTests(unittest.TestCase):
 
     def test_truncated_last_segment_and_missing_closers(self):
         data = file_of([BODY])
-        parsed = x12.parse(data[:data.rindex(b"IEA") + 3])
-        self.assertEqual(parsed.sets, ())
+        parsed = x12.parse(data[:data.rindex(b"IEA") + 3])  # cut in its last line: the set its SE closed is whole and kept
+        self.assertEqual((len(parsed.sets), parsed.refused), (1, ""))
         self.assertEqual(self.causes(parsed), [("segment", "unterminated_segment"), ("interchange", "iea_missing")])
-        self.assertEqual(parsed.refused, "iea_missing")  # nothing was read, so the file says why
         parsed = x12.parse(data[:data.index(b"SE*")])
         self.assertEqual(parsed.sets, ())
         self.assertEqual(self.causes(parsed), [("set", "set_unclosed"), ("group", "group_unclosed"), ("interchange", "iea_missing")])
-        self.assertEqual(parsed.refused, "iea_missing")
+        self.assertEqual(parsed.refused, "iea_missing")  # nothing was read, so the file says why
+        two = file_of([], groups=[[BODY], [BODY, BODY[:2]]])
+        parsed = x12.parse(two[:two.rindex(b"SE*")])  # a closed group, a closed set in the open group, and the set the file ends in
+        self.assertEqual(([s.offset for s in parsed.sets], parsed.refused), ([two.index(b"ST*"), two.index(b"ST*", two.index(b"GE*"))], ""))
+        self.assertEqual(self.causes(parsed), [("set", "set_unclosed"), ("group", "group_unclosed"), ("interchange", "iea_missing")])
         parsed = x12.parse(file_of([BODY]) + data[:data.index(b"SE*")].replace(b"000000001", b"000000002"))
         self.assertEqual((len(parsed.sets), parsed.refused), (1, ""))
 

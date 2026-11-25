@@ -12,11 +12,15 @@ def source : String := Run.hexOf (BlindLedger.Semantic.sha3_512Fast (String.join
   include_str "../../Sha3.lean", include_str "../../Sha3Fast.lean", include_str "../../Sha3Quick.lean",
   include_str "../../Sha3Lanes.lean", include_str "../Engine3/Sha3Fused.lean",
   include_str "../MlDsa87.lean", include_str "../Payer.lean", include_str "../Producer.lean", include_str "../Verify.lean", include_str "../Batch.lean",
+  include_str "../PublishSpec.lean", include_str "../Cosign/Codec.lean", include_str "../Cosign/Chain.lean", include_str "../Cosign/Verify.lean",
+  include_str "../Cosign/Link.lean", include_str "../Cosign/Install.lean",
   include_str "../Flat/Model.lean",
   include_str "../Flat/Io.lean", include_str "../Flat/Bin.lean", include_str "../Flat/Chunk.lean",
   include_str "../Flat/Store.lean", include_str "../Flat/ChunkIo.lean", include_str "../Flat/Worker.lean",
   include_str "../Authority.lean", include_str "../Flat/StoreLog.lean", include_str "../Flat/StoreTombs.lean", include_str "../Frame/Fast.lean",
   include_str "../Frame/Spec.lean", include_str "../Keyset.lean", include_str "Request.lean", include_str "../SnapshotV2.lean",
+  include_str "../CauseRelease.lean", include_str "../AuthorityLaws.lean", include_str "../ParseLaws.lean",
+  include_str "../CheckpointTheorems.lean", include_str "Bypass.lean", include_str "DecideLayer.lean", include_str "ExactDuplicate.lean",
   include_str "../../../lakefile.toml",
   include_str "../../../lean-toolchain"]).crlfToLf.toUTF8)
 

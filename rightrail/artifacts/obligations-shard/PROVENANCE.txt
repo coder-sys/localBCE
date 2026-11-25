@@ -1,0 +1,40 @@
+obligations_shard.exe: the obligations shard, which applies commands, writes their records and checks the records
+
+Lean/Lake executable `obligations_shard` (root BlindLedger.Gate.Obligations.Main).
+Built from the `lean/` sources of commit 5f72b168 (the previous pin, 314da136..., was built from commit 0d272557;
+it moved because its closure imports `Gate/FactCodec.lean`, where the fact admission work, merged with trunk at
+b8c91a71, added the receipt's reference rows hash field and linear-time field readers)
+with Lean 4 v4.36.0 on Windows x86-64, by `lake build obligations_shard` under the guarded runner.
+Size 8,910,848 bytes. SHA-256 3829cbfacd9523376c8751fae6c16fdaa8238628dd1ea5c4bf8a80159110a004
+(`obligations_shard.sha256`). The executable itself is not committed; `tests/test_obligations_shard.py`
+fails when the built program is missing or is not this build.
+Same bytes: two fresh `git archive 5f72b168 lean` stage builds (C:\Users\neers\rrb\le\stage-fm-a2 and -b2; guard suffixes
+fm-stagea2, fm-stageb2; `lake build obligations_shard`, 134 jobs, exit 0) and the in-tree build (fm-b5, 444 jobs) are
+byte-identical.
+Reproduced on the merge of fact-speed-20261117 with release-cause-20261116 (branch train-20261118, lean tree of commit
+e630eed6): the in-tree build (tr-b1) and two fresh `git archive e630eed6 lean` stage builds (C:/Users/neers/rrb/le/
+stage-tr18-a and -b; guard suffixes tr18-stagea, tr18-stageb; 251 jobs each, exit 0) give these same bytes.
+Reproduced again after the train merged trunk 5d69f760 and cert-install-20261118 (lean tree of commit 2ca0b3bd): the
+in-tree build (tr-ci-b1) and two fresh `git archive 2ca0b3bd lean` stage builds (C:/Users/neers/rrb/le/stage-tr18c-a and -b;
+guard suffixes tr18c-stagea, tr18c-stageb; 253 jobs each, exit 0) give these same bytes.
+
+Modes:
+- `run FRAMES LOG ANSWERS DISPATCH [READ_BYTES READS]`: open LOG for this run alone (a second run exits 75 and writes nothing,
+  and leaves the answers of the run that holds the log); remove an earlier ANSWERS; read the log READ_BYTES at a time (16 MiB; from 1 byte to 1 GiB),
+  failing with nothing written when READS reads (65,536) do not reach its end; check it; cut an end after the last commit point (a run-end or
+  repair record) where the last command's own records run past the end of the log into `LOG.cut-<record>` and write a repair
+  record; a log changed at or before its last commit point or before its end, or whose last command is whole and wrong, is
+  refused with `CORRUPT` and left as it is), apply the commands of FRAMES in order to a shard that can dispatch when DISPATCH is
+  1, append their records, sync the log, read back and check only the records from the last good one on, from the checker's
+  state there, and only then write a run-end record (it holds the SHA3-512 of the run's bytes, chained to the digest of the run-end record before it, which a later check recomputes) and sync it (unless the log already ends at a run-end record; a repair record does not count), write one
+  answer for each command to a synced temporary file, close the log and rename the file to ANSWERS (when the check fails the
+  run's records are set aside in `LOG.cut-<record>` and cut off and no answer is written; when the log cannot be closed no
+  answer file is left and the exit code is 1).
+- `check LOG`: check a log from its records alone.
+- `bench PACK ITEM ID N LOG`: apply one obligation's commands once for each of N obligations and report the
+  reads, writes and time. This mode does not run the check.
+
+Any later change under `lean/` voids this claim until a guarded rebuild pins the program again.
+This is local build evidence, not release qualification. The program is in `tools/tcb_report.txt`.
+
+Re-pin (2026-11-22, branch lean436-20261122): moved from 2be2c5c3... to 3829cbfacd9523376c8751fae6c16fdaa8238628dd1ea5c4bf8a80159110a004 (same size) because its closure imports `Financial/Worker.lean`, where the worker now decodes frames in place. Decisions unchanged. Built in-tree under the guard (`l436-b1`); no fresh-stage byte match was run for this re-pin.

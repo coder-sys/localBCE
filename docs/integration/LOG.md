@@ -478,3 +478,37 @@
   fixed Lean (bbd0e947's rule logic) and the 2026-11-21 decisions D1, D2 and
   D4 are superseded. The work moved to a colleague's x64 machine (31.5 GiB),
   where a baseline build of e5d0f36b is running.
+- 2026-11-24: on the colleague's x64 machine, unmodified trunk e5d0f36b was
+  baselined (TRUNK_MOVE_PLAN.md has the numbers). lake build fails on 17
+  stale RuleSet axiom pins (515 of 516); the 21 executables and side
+  projects build. pytest with every program built: 10 failures left, traced
+  to SQLite (the trunk wants 3.53.1; fixed by swapping that DLL into a
+  private CPython 3.14.4), two trunk test defects (an order-dependent test
+  and a JSON depth only CPython 3.11 refuses) and a timing test that is
+  unstable on this laptop. The browser tests were not run (owner: no Node.js
+  or Playwright download). The maintainer's five answers were checked
+  against the tree and hold. The two test fixes are a local commit on
+  rightrail-main 95066ed4 for the owner to push as a pull request.
+- 2026-11-24: owner decisions. The 14 localBCE commits under rightrail/ on
+  the fc89f9e5 base are dropped from the tree after a commit-by-commit
+  review (kept only as reference: c7ad3c65's FLAT_V1 wording fix, to be
+  rechecked and sent upstream, and bbd0e947's eligibility cases for the
+  rule-set v2 pack; the six reason-bound proofs are not re-ported while
+  trunk has 29 reasons against a cap of 32). "The public-repo question is
+  settled: RightRail's code may be imported into localBCE and pushed."
+- 2026-11-24: TRUNK_MOVE_PLAN.md step M1, owner: "Go ahead with M1 as
+  approved". On new branch codex/rightrail-trunk-e5d0f36b, rightrail/ is
+  the tree of e5d0f36b byte for byte (tree 86fdbe4e, 769 files; no
+  history). RIGHTRAIL_IMPORTED_FROM.md rewritten; the self-check script
+  names the new commit. Check set on this machine, reds reported to the
+  owner before the commit: scan_secrets flags the PEM header literal at
+  rightrail/tests/test_privacy_artifact_scan.py:188 (earlier imports split
+  it; this import is byte-identical); scripts/tests has 1 error
+  (test_elig_snapshot imports gate_rules_v2_ref.py, which the import
+  removes; M4 retargets or parks the builder); tests has 1 error (pypdf not
+  installed); cargo check, test and build and the workflow YAML parse could
+  not run (no Rust, no PyYAML here); the self-check's one FAIL is "default
+  config", from this machine's python3 alias (the config values are
+  right). Pass: validate_ops_scaffold, the review-queue check, the
+  rightrail bloat budget test. The maintainer's axiom-pin fix follows as
+  its own commit, taken from trunk merge 69dec25d.

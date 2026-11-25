@@ -73,7 +73,7 @@ def Trailer.encode (t : Trailer) : ByteArray :=
   let b := put64n (put64n (put64n b t.nx) t.bOpen) t.bSeal
   putEvents b t ++ t.au ++ t.rq ++ t.an ++ t.replaced ++ t.prev ++ t.bd ++ t.root ++ t.head
 
-def trailerLen : Nat := (domB "STORE/FRAME4").size + 4 + 8 + 20 + 20 + 24 + 79 + 208 + 7 * 64
+def trailerLen : Nat := (domB "STORE/FRAME4").size + 4 + 8 + 20 + 20 + 24 + 79 + authLen + 7 * 64
 
 def getHead (b : ByteArray) (o : Nat) : Head := ⟨getN b o 4, getN b (o + 4) 8, getN b (o + 12) 8⟩
 
@@ -97,9 +97,11 @@ def Trailer.decode (b : ByteArray) : Option Trailer := do
   let rec' ← getFlag b (o + 74)
   let p := o + 79
   pure ⟨getN b d 4, getN b (d + 4) 8, getHead b (d + 12), getHead b (d + 32), getN b (d + 52) 8, getN b (d + 60) 8,
-    getN b (d + 68) 8, sl, inst.map (·, leaf), rec', b.extract p (p + 208), b.extract (p + 208) (p + 272),
-    b.extract (p + 272) (p + 336), b.extract (p + 336) (p + 400), b.extract (p + 400) (p + 464),
-    b.extract (p + 464) (p + 528), b.extract (p + 528) (p + 592), b.extract (p + 592) (p + 656)⟩
+    getN b (d + 68) 8, sl, inst.map (·, leaf), rec', b.extract p (p + authLen),
+    b.extract (p + authLen) (p + authLen + 64), b.extract (p + authLen + 64) (p + authLen + 128),
+    b.extract (p + authLen + 128) (p + authLen + 192), b.extract (p + authLen + 192) (p + authLen + 256),
+    b.extract (p + authLen + 256) (p + authLen + 320), b.extract (p + authLen + 320) (p + authLen + 384),
+    b.extract (p + authLen + 384) (p + authLen + 448)⟩
 
 /-- The state root: the chunk tree's root, the two heads, the next install number, the key digest `ks`, the window
     starts, the sealing chunk, and the authority record and the digests the trailer carries. -/
@@ -241,7 +243,7 @@ local macro "lenx" : tactic =>
 /-- A trailer whose digests and record have their wire sizes decodes, and the decoded trailer encodes to the same bytes
     (numbers are read back modulo their field widths).  The install leaf must be 64 bytes, as the writer emits it. -/
 theorem Trailer.decode_encode (t : Trailer) (hleaf : ∀ x, t.installEv = some x → x.2.size = 64)
-    (h : t.au.size = 208 ∧ t.rq.size = 64 ∧ t.an.size = 64 ∧ t.replaced.size = 64 ∧
+    (h : t.au.size = authLen ∧ t.rq.size = 64 ∧ t.an.size = 64 ∧ t.replaced.size = 64 ∧
     t.prev.size = 64 ∧ t.bd.size = 64 ∧ t.root.size = 64 ∧ t.head.size = 64) :
     ∃ t', Trailer.decode t.encode = some t' ∧ t'.encode = t.encode := by
   obtain ⟨hau, hrq, han, hrp, hpv, hbd, hrt, hhd⟩ := h
@@ -306,49 +308,50 @@ theorem Trailer.decode_encode (t : Trailer) (hleaf : ∀ x, t.installEv = some x
       lN t.hr.count 8 ++ lN t.hr.n 8 ++ lN t.hu.asOf 4 ++ lN t.hu.count 8 ++ lN t.hu.n 8 ++ lN t.nx 8 ++
       lN t.bOpen 8 ++ lN t.bSeal 8 ++ evL t.sealEv ++ evL (t.installEv.map Prod.fst) ++ (installLeaf t.installEv).toList)
       (by pfx) (by lenx)
-  have x0 : t.encode.extract ((domB "STORE/FRAME4").size + 155) ((domB "STORE/FRAME4").size + 363) = t.au :=
+  have x0 : t.encode.extract ((domB "STORE/FRAME4").size + 155) ((domB "STORE/FRAME4").size + 155 + authLen) = t.au :=
     extract_pre (pre := (domB "STORE/FRAME4").toList ++ lN t.shard 4 ++ lN t.batches 8 ++ lN t.hr.asOf 4 ++
       lN t.hr.count 8 ++ lN t.hr.n 8 ++ lN t.hu.asOf 4 ++ lN t.hu.count 8 ++ lN t.hu.n 8 ++ lN t.nx 8 ++
       lN t.bOpen 8 ++ lN t.bSeal 8 ++ evL t.sealEv ++ evL (t.installEv.map Prod.fst) ++ (installLeaf t.installEv).toList ++
       evL t.reclaimEv) (by pfx) (by lenx) (by lenx)
-  have x1 : t.encode.extract ((domB "STORE/FRAME4").size + 363) ((domB "STORE/FRAME4").size + 427) = t.rq :=
+  have x1 : t.encode.extract ((domB "STORE/FRAME4").size + 155 + authLen) ((domB "STORE/FRAME4").size + 155 + authLen + 64) = t.rq :=
     extract_pre (pre := (domB "STORE/FRAME4").toList ++ lN t.shard 4 ++ lN t.batches 8 ++ lN t.hr.asOf 4 ++
       lN t.hr.count 8 ++ lN t.hr.n 8 ++ lN t.hu.asOf 4 ++ lN t.hu.count 8 ++ lN t.hu.n 8 ++ lN t.nx 8 ++
       lN t.bOpen 8 ++ lN t.bSeal 8 ++ evL t.sealEv ++ evL (t.installEv.map Prod.fst) ++ (installLeaf t.installEv).toList ++
       evL t.reclaimEv ++ t.au.toList) (by pfx) (by lenx) (by lenx)
-  have x2 : t.encode.extract ((domB "STORE/FRAME4").size + 427) ((domB "STORE/FRAME4").size + 491) = t.an :=
+  have x2 : t.encode.extract ((domB "STORE/FRAME4").size + 155 + authLen + 64) ((domB "STORE/FRAME4").size + 155 + authLen + 128) = t.an :=
     extract_pre (pre := (domB "STORE/FRAME4").toList ++ lN t.shard 4 ++ lN t.batches 8 ++ lN t.hr.asOf 4 ++
       lN t.hr.count 8 ++ lN t.hr.n 8 ++ lN t.hu.asOf 4 ++ lN t.hu.count 8 ++ lN t.hu.n 8 ++ lN t.nx 8 ++
       lN t.bOpen 8 ++ lN t.bSeal 8 ++ evL t.sealEv ++ evL (t.installEv.map Prod.fst) ++ (installLeaf t.installEv).toList ++
       evL t.reclaimEv ++ t.au.toList ++ t.rq.toList) (by pfx) (by lenx) (by lenx)
-  have x3 : t.encode.extract ((domB "STORE/FRAME4").size + 491) ((domB "STORE/FRAME4").size + 555) = t.replaced :=
+  have x3 : t.encode.extract ((domB "STORE/FRAME4").size + 155 + authLen + 128) ((domB "STORE/FRAME4").size + 155 + authLen + 192) = t.replaced :=
     extract_pre (pre := (domB "STORE/FRAME4").toList ++ lN t.shard 4 ++ lN t.batches 8 ++ lN t.hr.asOf 4 ++
       lN t.hr.count 8 ++ lN t.hr.n 8 ++ lN t.hu.asOf 4 ++ lN t.hu.count 8 ++ lN t.hu.n 8 ++ lN t.nx 8 ++
       lN t.bOpen 8 ++ lN t.bSeal 8 ++ evL t.sealEv ++ evL (t.installEv.map Prod.fst) ++ (installLeaf t.installEv).toList ++
       evL t.reclaimEv ++ t.au.toList ++ t.rq.toList ++ t.an.toList) (by pfx) (by lenx) (by lenx)
-  have x4 : t.encode.extract ((domB "STORE/FRAME4").size + 555) ((domB "STORE/FRAME4").size + 619) = t.prev :=
+  have x4 : t.encode.extract ((domB "STORE/FRAME4").size + 155 + authLen + 192) ((domB "STORE/FRAME4").size + 155 + authLen + 256) = t.prev :=
     extract_pre (pre := (domB "STORE/FRAME4").toList ++ lN t.shard 4 ++ lN t.batches 8 ++ lN t.hr.asOf 4 ++
       lN t.hr.count 8 ++ lN t.hr.n 8 ++ lN t.hu.asOf 4 ++ lN t.hu.count 8 ++ lN t.hu.n 8 ++ lN t.nx 8 ++
       lN t.bOpen 8 ++ lN t.bSeal 8 ++ evL t.sealEv ++ evL (t.installEv.map Prod.fst) ++ (installLeaf t.installEv).toList ++
       evL t.reclaimEv ++ t.au.toList ++ t.rq.toList ++ t.an.toList ++ t.replaced.toList) (by pfx) (by lenx) (by lenx)
-  have x5 : t.encode.extract ((domB "STORE/FRAME4").size + 619) ((domB "STORE/FRAME4").size + 683) = t.bd :=
+  have x5 : t.encode.extract ((domB "STORE/FRAME4").size + 155 + authLen + 256) ((domB "STORE/FRAME4").size + 155 + authLen + 320) = t.bd :=
     extract_pre (pre := (domB "STORE/FRAME4").toList ++ lN t.shard 4 ++ lN t.batches 8 ++ lN t.hr.asOf 4 ++
       lN t.hr.count 8 ++ lN t.hr.n 8 ++ lN t.hu.asOf 4 ++ lN t.hu.count 8 ++ lN t.hu.n 8 ++ lN t.nx 8 ++
       lN t.bOpen 8 ++ lN t.bSeal 8 ++ evL t.sealEv ++ evL (t.installEv.map Prod.fst) ++ (installLeaf t.installEv).toList ++
       evL t.reclaimEv ++ t.au.toList ++ t.rq.toList ++ t.an.toList ++ t.replaced.toList ++ t.prev.toList)
       (by pfx) (by lenx) (by lenx)
-  have x6 : t.encode.extract ((domB "STORE/FRAME4").size + 683) ((domB "STORE/FRAME4").size + 747) = t.root :=
+  have x6 : t.encode.extract ((domB "STORE/FRAME4").size + 155 + authLen + 320) ((domB "STORE/FRAME4").size + 155 + authLen + 384) = t.root :=
     extract_pre (pre := (domB "STORE/FRAME4").toList ++ lN t.shard 4 ++ lN t.batches 8 ++ lN t.hr.asOf 4 ++
       lN t.hr.count 8 ++ lN t.hr.n 8 ++ lN t.hu.asOf 4 ++ lN t.hu.count 8 ++ lN t.hu.n 8 ++ lN t.nx 8 ++
       lN t.bOpen 8 ++ lN t.bSeal 8 ++ evL t.sealEv ++ evL (t.installEv.map Prod.fst) ++ (installLeaf t.installEv).toList ++
       evL t.reclaimEv ++ t.au.toList ++ t.rq.toList ++ t.an.toList ++ t.replaced.toList ++ t.prev.toList ++
       t.bd.toList) (by pfx) (by lenx) (by lenx)
-  have x7 : t.encode.extract ((domB "STORE/FRAME4").size + 747) ((domB "STORE/FRAME4").size + 811) = t.head :=
+  have x7 : t.encode.extract ((domB "STORE/FRAME4").size + 155 + authLen + 384) ((domB "STORE/FRAME4").size + 155 + authLen + 448) = t.head :=
     extract_pre (pre := (domB "STORE/FRAME4").toList ++ lN t.shard 4 ++ lN t.batches 8 ++ lN t.hr.asOf 4 ++
       lN t.hr.count 8 ++ lN t.hr.n 8 ++ lN t.hu.asOf 4 ++ lN t.hu.count 8 ++ lN t.hu.n 8 ++ lN t.nx 8 ++
       lN t.bOpen 8 ++ lN t.bSeal 8 ++ evL t.sealEv ++ evL (t.installEv.map Prod.fst) ++ (installLeaf t.installEv).toList ++
       evL t.reclaimEv ++ t.au.toList ++ t.rq.toList ++ t.an.toList ++ t.replaced.toList ++ t.prev.toList ++
       t.bd.toList ++ t.root.toList) (by pfx) (by lenx) (by lenx)
+  simp only [Nat.add_assoc] at x0 x1 x2 x3 x4 x5 x6 x7
   have hg : (((t.installEv.map Prod.fst).map (· % 256 ^ 4)).isSome || (installLeaf t.installEv).data.all (· == 0)) = true := by
     cases t.installEv with
     | some x => rfl

@@ -2,6 +2,7 @@
 files is refused on load with `flat_corrupt`; a changed request or answer byte of an earlier frame is not read on load, and the checker
 catches it (tests/test_engine3_verify.py)."""
 
+import hashlib
 import os
 import shutil
 import struct
@@ -12,9 +13,11 @@ import unittest.mock
 from pathlib import Path
 
 from tests import engine3_compare as ec
+from tests import test_engine3_verify as tv
 
 D = 24  # the trailer's domain; then shard u32
-P = D + 76 + 79  # the authority record; rq at P + 208, replaced at P + 336, prev at P + 400
+P = D + 76 + 79  # the authority record (A bytes); then rq, an, replaced, prev, bd, root and head, 64 bytes each
+A = ec.chain.AUTH
 PREV = 82 + 8  # the request's previous head: header, today, asOf
 
 
@@ -33,6 +36,52 @@ def frames(log: bytes):
         out.append((pos, rq, an, pos + 16 + rq + an))
         pos += 16 + rq + an + tr
     return out
+
+
+def hd(name: str, *parts: bytes) -> bytes:
+    """SHA3-512 under the domain `RR/GATE/<name>/v1` (Engine3 `hD`)."""
+    return hashlib.sha3_512(b"RR/GATE/" + name.encode() + b"/v1\x00" + b"".join(parts)).digest()
+
+
+def bound(t: bytes, key: bytes) -> tuple:
+    """The root and head a committed trailer `t` must carry (Engine3 `rootFour` with no chunk tree, keyed by the store's
+    key, and `chainHead`): what the load's chain check recomputes."""
+    root = hd("STORE/STATE4", t[D:D + 12], bytes(64), t[D + 12:D + 60], hd("STORE/KEY", key), t[D + 60:D + 76],
+              bytes([0xFF] * 4), t[P:P + A + 192])
+    return root, hd("CHAIN", bytes([2]), t[P + A + 192:P + A + 320], root)
+
+
+def to_v1(a: bytes) -> bytes:
+    """A decision answer of version 4 as version 1 wrote it: 16-byte records and leaves whose reasons are a `u32`
+    (conformance/FRAME_V1.md section 8).  Every reasons field is zero, so no bit is renumbered."""
+    def blob2(q):
+        return q + 2 + struct.unpack_from("<H", a, q)[0]
+
+    def count(q):
+        return struct.unpack_from("<I", a, q)[0]
+
+    n = count(19)
+    out = a[:4] + bytes([1, 0]) + a[6:87]
+    for r in (a[87 + 20 * i : 107 + 20 * i] for i in range(n)):
+        assert r[5:13] == bytes(8)
+        out += r[:5] + bytes(4) + r[13:]
+    q = 87 + 20 * n + 128 + 16 + 64 + A  # head, root, hold, grant, auth
+    k, q = count(q), q + 4
+    for _ in range(k):
+        q = blob2(q)  # notes
+    out += a[87 + 20 * n : q] + a[q : q + 4]
+    k, q = count(q), q + 4
+    for _ in range(k):  # leaves: outcome, reasons, authority, flag, then an id or a list, then input
+        assert a[q + 1 : q + 9] == bytes(8)
+        e = q + 11 + (64 if a[q + 10] == 1 else 0)
+        e = blob2(e) if a[q + 10] == 2 else e
+        out += a[q : q + 1] + bytes(4) + a[q + 9 : e + 64]
+        q = e + 64
+    s, k, q = q, count(q), q + 4
+    for _ in range(k):
+        q = blob2(q)  # adds
+    assert q == len(a)
+    return out + a[s:]
 
 
 def flip(path: Path, at: int) -> bytes:
@@ -108,7 +157,7 @@ class Engine3Recovery(unittest.TestCase):
                 self.assertNotEqual(log, edited)
                 pos, _, _, t = frames(log)[1]
                 self.assertEqual(log[pos + 16 : pos + 16 + len(second)], second)
-                self.assertNotEqual(log[t + P + 336 : t + P + 400], bytes(64))  # the replaced frame is named
+                self.assertNotEqual(log[t + P + A + 128 : t + P + A + 192], bytes(64))  # the replaced frame is named
                 eng.close()
                 third = request(3, head2)
                 self.assertIsNone(answer(third, self.engine(d=d).send(third))[0])
@@ -170,7 +219,7 @@ class Engine3Recovery(unittest.TestCase):
         head = self.commit(request(2, head), base)
         third = request(3, head)
         t = frames((base / "log").read_bytes())[0][3]
-        for name, at in (("prev", P + 400), ("shard", D), ("rq", P + 208)):
+        for name, at in (("prev", P + A + 192), ("shard", D), ("rq", P + A)):
             with self.subTest(field=name):
                 d = self.dir / name
                 shutil.copytree(base, d)
@@ -187,7 +236,7 @@ class Engine3Recovery(unittest.TestCase):
             head = self.commit(request(n, head, bodies), base)
         fourth = request(4, head)
         t = frames((base / "log").read_bytes())[1][3]
-        for name, at in (("prev", t + P + 400), ("bd", t + P + 464), ("root", t + P + 528), ("head", t + P + 592)):
+        for name, at in (("prev", t + P + A + 192), ("bd", t + P + A + 256), ("root", t + P + A + 320), ("head", t + P + A + 384)):
             with self.subTest(field=name):
                 d = self.dir / name
                 shutil.copytree(base, d)
@@ -210,9 +259,133 @@ class Engine3Recovery(unittest.TestCase):
                 d = self.dir / f"old{k}"
                 shutil.copytree(base, d)
                 raw = bytearray((d / "log").read_bytes())
-                raw[t + P + 208 : t + P + 272] = log[pos + 16 + 18 : pos + 16 + 82]
+                raw[t + P + A : t + P + A + 64] = log[pos + 16 + 18 : pos + 16 + 82]
                 (d / "log").write_bytes(bytes(raw))
                 self.assertEqual(answer(third, self.engine(d=d).send(third))[0], "flat_corrupt")
+
+    def test_a_store_with_the_208_byte_authority_record_is_refused(self):
+        # a store written before the record carried the rule set (no converter): each trailer 68 bytes shorter, the rule-set
+        # digest and version cut from its record and its length field lowered to match.  The record does not decode, so the
+        # frame reads as torn and the store as a head mismatch
+        base = self.dir / "base"
+        base.mkdir()
+        head = self.commit(request(1, ec.fw.GENESIS), base)
+        head = self.commit(request(2, head), base)
+        third = request(3, head)
+        log = (base / "log").read_bytes()
+        for k in (0, 1):
+            pos, rq, an, t = frames(log)[k]
+            with self.subTest(frame=k + 1):
+                d = self.dir / f"w{k}"
+                shutil.copytree(base, d)
+                raw = bytearray(log)
+                del raw[t + P + 208 : t + P + A]
+                raw[pos + 12 : pos + 16] = struct.pack("<I", struct.unpack("<I", log[pos + 12 : pos + 16])[0] - (A - 208))
+                (d / "log").write_bytes(bytes(raw))
+                self.assertEqual(answer(third, self.engine(d=d).send(third))[0], "flat_head")
+        self.assertIsNone(answer(third, self.engine(d=base).send(third))[0])
+
+    def test_a_rule_set_floor_the_store_does_not_meet_holds_and_a_digest_without_a_version_is_refused(self):
+        # the store has no rule set (version 0): a frame asserting version 1 is held whole (RULESET_STALE), logs nothing and
+        # leaves the record; version 0 with a nonzero digest does not decode (RECORD); the store then decides as before
+        eng, head = self.engine(), ec.fw.GENESIS
+        first = request(1, head, [allowed_body()])
+        why, _, head, _, auth, *_ = answer(first, eng.send(first))
+        self.assertIsNone(why)
+        log = (self.dir / "log").read_bytes()
+        serial, epoch = ec.fw.floors(head)[:2]
+        for name, floors, want in (("stale", (serial, epoch, 1, bytes([7]) * 64), "grant_ruleset_stale"),
+                                   ("stale, zero digest", (serial, epoch, 1, bytes(64)), "grant_ruleset_stale"),
+                                   ("digest without a version", (serial, epoch, 0, bytes([7]) * 64), "flat_record")):
+            with self.subTest(name):
+                held = request(2, head, [allowed_body()], floors=floors)
+                self.assertEqual(answer(held, eng.send(held))[0], want)
+                self.assertEqual((self.dir / "log").read_bytes(), log)
+        again = request(2, head, [allowed_body()])
+        why, _, _, _, after, *_ = answer(again, eng.send(again))
+        self.assertIsNone(why)
+        self.assertEqual((after[208:], auth[208:]), (bytes(A - 208), bytes(A - 208)))
+        eng.close()
+
+    def test_a_logged_request_of_version_1_is_not_replayed(self):
+        # a store logged under request version 1 is not migrated: a load that must read its requests again (here the rows
+        # are rebuilt after a process that ended without a clean stop) refuses it as corrupt
+        head = self.commit(request(1, ec.fw.GENESIS, [allowed_body()]))
+        second = request(2, head)
+        self.pending(second)
+        raw = bytearray((self.dir / "log").read_bytes())
+        self.assertEqual(bytes(raw[16 + 4 : 16 + 6]), bytes([2, 0]))
+        raw[16 + 4] = 1
+        (self.dir / "log").write_bytes(bytes(raw))
+        self.assertEqual(answer(second, self.engine().send(second))[0], "flat_corrupt")
+
+    def store_of_version_1(self, d, bodies):
+        """A store whose one batch (`bodies`) was logged as version 1 wrote it, then stopped cleanly: its answer written
+        as version 1 wrote it (`to_v1`) and bound as a store of version 1 binds it, its digest in the trailer (with the zero
+        head and root slots cut out after 16-byte records), then the trailer's root under the store's key and the head,
+        which it returns."""
+        head = self.commit(request(1, ec.fw.GENESIS, bodies), d)
+        log, key = (d / "log").read_bytes(), (d / "key").read_bytes()
+        [(pos, rq, an, t)] = frames(log)
+        a, tr = log[pos + 16 + rq : t], log[t:]
+        self.assertEqual((a[:6], a[19:23]), (b"RRDA" + bytes([4, 0]), struct.pack("<I", len(bodies))))
+        cut = 87 + 20 * len(bodies)
+        self.assertEqual(tr[P + A + 64 : P + A + 128], hd("ANSWER", a[:cut] + a[cut + 128 :]))
+        self.assertEqual(bound(tr, key), (tr[P + A + 320 : P + A + 384], head))
+        self.assertEqual(a[cut : cut + 128], bytes(128))  # the log keeps the head and root slots zero
+        v1, cut = to_v1(a), 87 + 16 * len(bodies)
+        tr = tr[: P + A + 64] + hd("ANSWER", v1[:cut] + v1[cut + 128 :]) + tr[P + A + 128 :]
+        root, head = bound(tr, key)
+        tr = tr[: P + A + 320] + root + head + tr[P + A + 448 :]
+        hdr = log[pos : pos + 8] + struct.pack("<I", len(v1)) + log[pos + 12 : pos + 16]
+        (d / "log").write_bytes(log[:pos] + hdr + log[pos + 16 : pos + 16 + rq] + v1 + tr)
+        return head
+
+    def test_a_store_of_version_1_is_refused_on_open(self):
+        # a decision answer before version 4 is not converted (conformance/FRAME_V1.md section 8): an open refuses a store
+        # that holds one (`MAGIC`), whether it stopped cleanly (the rows files trusted, no answer read again) or not, and
+        # whether its batch had lines or none (version 1 lays out an empty batch as version 4 does, but for the version)
+        for name, bodies, clean in (("clean", [allowed_body()], True), ("rebuild", [allowed_body()], False),
+                                    ("empty", [], True)):
+            with self.subTest(name):
+                d = self.dir / name
+                d.mkdir()
+                second = request(2, self.store_of_version_1(d, bodies))
+                if not clean:
+                    (d / "clean").write_bytes(bytes([0]))
+                self.assertEqual(answer(second, self.engine(d=d).send(second))[0], "flat_magic")
+
+    def test_the_checker_refuses_an_empty_batch_answer_of_version_1(self):
+        # the empty batch's answer bound as a store of version 1 binds it: every chain check passes, and the checker,
+        # which decides the batch again, refuses the logged answer; the same store before the change verifies
+        for name in ("v4", "v1"):
+            (self.dir / name).mkdir()
+        self.commit(request(1, ec.fw.GENESIS), self.dir / "v4")
+        rc, out = tv.verify(self.dir / "v4")
+        self.assertEqual((rc, "VERIFIED shard 0 batches 1 " in out), (0, True), out)
+        self.store_of_version_1(self.dir / "v1", [])
+        rc, out = tv.verify(self.dir / "v1")
+        self.assertEqual((rc, "batch 1 answer" in out, "VERIFIED" in out), (3, True, False), out)
+
+    def test_a_frame_that_cannot_be_read_again_on_load_is_an_io_failure(self):
+        # a load that must read a logged frame again and cannot (here the test hook makes the read come back short) is an
+        # IO failure, whether it rebuilds the rows (after a process that ended without a clean stop) or refills the rows a
+        # file lacks (after a clean stop); only a frame that is read and does not replay is corrupt.  The next load decides
+        for name in ("rebuild", "refill"):
+            with self.subTest(name):
+                d = self.dir / name
+                d.mkdir()
+                head = self.commit(request(1, ec.fw.GENESIS, [allowed_body()]), d)
+                second = request(2, head)
+                if name == "rebuild":
+                    self.pending(second, d)
+                else:
+                    self.assertGreater((d / "rows_rel").stat().st_size, 0)
+                    (d / "rows_rel").write_bytes(b"")
+                eng = self.engine("refill_read", d)
+                self.assertEqual(answer(second, eng.send(second))[0], "flat_io")
+                eng.close()
+                self.assertIsNone(answer(second, self.engine(d=d).send(second))[0])
 
     def test_refused_first_request_does_not_choose_the_start(self):
         # a first request with another pin, refused before anything is written (lines without a release name)
@@ -236,7 +409,7 @@ class Engine3Recovery(unittest.TestCase):
             frame = request(batch, head, [allowed_body()])
             why, _, head, *_ = answer(frame, eng.send(frame))
             self.assertIsNone(why)
-        stale = request(3, head, [allowed_body()], floors=(ec.fw.floors(head)[0], 1))
+        stale = request(3, head, [allowed_body()], floors=(ec.fw.floors(head)[0], 1, 0, bytes(64)))
         self.assertEqual(answer(stale, eng.send(stale))[0], "grant_stale_keyset")
         again = request(3, head, [allowed_body()])
         self.assertIsNone(answer(again, eng.send(again))[0])

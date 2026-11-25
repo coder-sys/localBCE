@@ -293,19 +293,19 @@ def gateCorrectionRetryChangedIdentityRejected : Bool :=
   resultHasReason (applyCorrectionTransition request) .ACTION_CONFLICT
 
 /-! Finding D (Constitution III.3): the decision time as given is part of a retry's identity. -/
-private def retryWithTime (stored : Option Bool) (given : Bool) (time : Nat) : CorrectionTransitionResult :=
+private def retryWithTime (stored : Option Bool) (got : Bool) (time : Nat) : CorrectionTransitionResult :=
   applyCorrectionTransition { correctionKatRetryRequest with command :=
     { correctionKatRetryRequest.command with
       actionLookup := .existing { correctionKatStoredIdentity with decisionTimeGiven := stored }
-      decisionTimeGiven := given
+      decisionTimeGiven := got
       decisionAtMs := time } }
 
-private def retryOffsetWithTime (stored : Option Bool) (given : Bool) (time : Nat) : CorrectionTransitionResult :=
+private def retryOffsetWithTime (stored : Option Bool) (got : Bool) (time : Nat) : CorrectionTransitionResult :=
   applyOffsetAuthorization { correctionKatRetryRequest with command :=
     { correctionKatRetryRequest.command with
       actionLookup := .existing { correctionKatStoredIdentity with
         actionKind := "OFFSET_AUTHORIZATION", decision := .OFFSET_AUTHORIZED, decisionTimeGiven := stored }
-      decisionTimeGiven := given
+      decisionTimeGiven := got
       decisionAtMs := time } }
 
 -- The original named its time: a resend naming it is a duplicate; one leaving it out is a conflict,

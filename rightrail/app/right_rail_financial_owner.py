@@ -123,7 +123,7 @@ _STAFF_WORKSPACE_QUERY: Final[str] = "workspace"
 _OBLIGATION_STATUS_CLAUSES: Final[dict[str, str]] = {"ALL": "1=1", "OPEN": "amount_satisfied=0", "SATISFIED": "amount_satisfied=1", "CASH_UNSATISFIED": "cash_satisfied=0"}
 _STAFF_DECISION_PACKAGE_QUERY: Final[str] = "decision_package"
 _MAX_CORRECTION_FOLLOWUP_PAGE_BYTES: Final[int] = 32 * 1024 * 1024
-# History segments (docs/CORE_REDESIGN.md "History segments"): one format with the gate.
+# History segments (ARCHITECTURE.md "History segments"): one format with the gate.
 _SEGMENT_FORMAT: Final[str] = "RR/GATE/SEGMENT/v1"
 _SEGMENT_DOMAIN: Final[bytes] = b"RR/GATE/SEGMENT/v1\x00"
 _MAX_SEGMENT_BYTES: Final[int] = 2 * _MAX_PACKAGE_BYTES  # holds the one catch-up segment of any store the old 8 MiB cap admitted
@@ -2658,7 +2658,7 @@ class FinancialOwner:
             outcomes = check.begin(connection) if check else [None] * len(commands)
             self._batch.connection = connection
             absorbing = check is not None and check.intake is not None
-            held = set()  # a cash file's items with a held row: their later rows assumed it (docs/CORE_REDESIGN.md "Rows")
+            held = set()  # a cash file's items with a held row: their later rows assumed it (ARCHITECTURE.md "Receiver cash-file boundary (XI.2)": depends_on_held)
             try:
                 for index, ((name, arguments), outcome) in enumerate(zip(commands, outcomes)):
                     if check and outcome is None and arguments["item_id"] in held:
@@ -6404,7 +6404,7 @@ class FinancialOwner:
         return self._verified_read(lambda connection: self._manifest(connection)[0])
 
     def export_history(self, directory: Path) -> bytes:
-        """Export all history as sealed segments and a manifest (docs/CORE_REDESIGN.md "History segments").
+        """Export all history as sealed segments and a manifest (ARCHITECTURE.md "History segments").
 
         The manifest is read in the sealing transaction; sealed segments are append-only,
         so their files may be written after it. A segment file already in ``directory``

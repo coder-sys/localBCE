@@ -34,11 +34,11 @@ N, BATCH = int(os.environ.get("RR_GATE_BENCH_N", 2000)), int(os.environ.get("RR_
 PER_PAYMENT, SEED = 4, 20261005
 # sha256 of the stored outputs of the 2,000-line corpus by batch size, taken on the history-index path (the index salt is seeded below);
 # the tokens carry the deciding worker's digest, so a gate_engine re-pin moves them, and the checkpoints carry the counter
-OUTPUT_DIGEST = {100: "09eea1c22fde6dd523fcefda77b4b642bb8b65a2118078b6df15b3b04401ce7d",
-                 2000: "0ce87da422adf6c7e30c7ae1ff3c22c76c41a2bb1701ea09ef3dfa705a6da4ef"}
+OUTPUT_DIGEST = {100: "63179daee322bb35c15e5108fb23d9e5f81d01b238e75b794f25ea5e366ec842",
+                 2000: "7cd042665eb8a1b0b4dd4d2dec2bddbcbaba51ee0fe78f10ef428a7aed63c9c7"}
 REALISTIC = os.environ.get("RR_GATE_BENCH_CORPUS") == "realistic"  # the seeded distinct-claims corpus (g.claim)
-REALISTIC_DIGEST = {100: "5918882a88c740a1d286d43b89ad4796987fd8cffb8acc46d087a16e3ee640f0",
-                    2000: "c16c02ee5d950cb9f2da2ab4878ecb5c4d7a4452738bc39847cb52f94d845012"}
+REALISTIC_DIGEST = {100: "43765b4d0c035db7dfd2355a12bf882ab7cf2578e4b805a4c014b96e63ceb105",
+                    2000: "de6b3bfe0878ac2c698ea9bbc514e4bfa4b844d3c8c12c174a748172b125563a"}
 # SHA3-512 of the sorted (line id, "OUTCOME REASONS") pairs of the 2,000-line corpus by (realistic?, batch size): the decisions alone,
 # which carry no engine hash, so a re-pin that moves the digests above must keep these (two lines that swap outcomes change this hash)
 PAIRS_DIGEST = {

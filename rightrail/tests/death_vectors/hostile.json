@@ -1,0 +1,163 @@
+[
+ {
+  "name": "empty file",
+  "cause": "unterminated_record",
+  "data": ""
+ },
+ {
+  "name": "no final line feed",
+  "cause": "unterminated_record",
+  "data": "HRRDETH01SYNSTATE-VITAL      00000000005120261031FSYNTHETIC-STATE     V                                                 \nDSYN0000001          20260315                                                                                           \nDSYN0000002          20240229                                                                                           \nDSYN0000005          19991231                                                                                           \nDSYN0000007          20261031                                                                                           \nT000000004                                                                                                              "
+ },
+ {
+  "name": "carriage returns",
+  "cause": "bad_record_length",
+  "data": "HRRDETH01SYNSTATE-VITAL      00000000005120261031FSYNTHETIC-STATE     V                                                 \r\nDSYN0000001          20260315                                                                                           \r\nDSYN0000002          20240229                                                                                           \r\nDSYN0000005          19991231                                                                                           \r\nDSYN0000007          20261031                                                                                           \r\nT000000004                                                                                                              \r\n"
+ },
+ {
+  "name": "row one byte short",
+  "cause": "bad_record_length",
+  "data": "HRRDETH01SYNSTATE-VITAL      00000000005120261031FSYNTHETIC-STATE     V                                                 \nDSYN0000001          20260315                                                                                           \nDSYN0000002          20240229                                                                                          \nDSYN0000005          19991231                                                                                           \nDSYN0000007          20261031                                                                                           \nT000000004                                                                                                              \n"
+ },
+ {
+  "name": "row of 130 bytes",
+  "cause": "bad_record_length",
+  "data": "HRRDETH01SYNSTATE-VITAL      00000000005120261031FSYNTHETIC-STATE     V                                                 \nDSYN0000001          20260315                                                                                           \nDSYN0000002          20240229                                                                                           XXXXXXXXXX\nDSYN0000005          19991231                                                                                           \nDSYN0000007          20261031                                                                                           \nT000000004                                                                                                              \n"
+ },
+ {
+  "name": "first record a row",
+  "cause": "no_header",
+  "data": "DSYN0000001          20260315                                                                                           \nDSYN0000002          20240229                                                                                           \nDSYN0000005          19991231                                                                                           \nDSYN0000007          20261031                                                                                           \nT000000004                                                                                                              \n"
+ },
+ {
+  "name": "no trailer",
+  "cause": "no_trailer",
+  "data": "HRRDETH01SYNSTATE-VITAL      00000000005120261031FSYNTHETIC-STATE     V                                                 \nDSYN0000001          20260315                                                                                           \nDSYN0000002          20240229                                                                                           \nDSYN0000005          19991231                                                                                           \nDSYN0000007          20261031                                                                                           \n"
+ },
+ {
+  "name": "second trailer",
+  "cause": "unknown_record_type",
+  "data": "HRRDETH01SYNSTATE-VITAL      00000000005120261031FSYNTHETIC-STATE     V                                                 \nDSYN0000001          20260315                                                                                           \nDSYN0000002          20240229                                                                                           \nDSYN0000005          19991231                                                                                           \nDSYN0000007          20261031                                                                                           \nT000000004                                                                                                              \nT000000004                                                                                                              \n"
+ },
+ {
+  "name": "unknown record type",
+  "cause": "unknown_record_type",
+  "data": "HRRDETH01SYNSTATE-VITAL      00000000005120261031FSYNTHETIC-STATE     V                                                 \nDSYN0000001          20260315                                                                                           \nDSYN0000002          20240229                                                                                           \nXSYN0000005          19991231                                                                                           \nDSYN0000007          20261031                                                                                           \nT000000004                                                                                                              \n"
+ },
+ {
+  "name": "eligibility layout",
+  "cause": "unknown_layout",
+  "data": "HRRELIG01SYNSTATE-VITAL      00000000005120261031FSYNTHETIC-STATE     V                                                 \nDSYN0000001          20260315                                                                                           \nDSYN0000002          20240229                                                                                           \nDSYN0000005          19991231                                                                                           \nDSYN0000007          20261031                                                                                           \nT000000004                                                                                                              \n"
+ },
+ {
+  "name": "blank proof",
+  "cause": "unknown_code",
+  "data": "HRRDETH01SYNSTATE-VITAL      00000000005120261031FSYNTHETIC-STATE                                                       \nDSYN0000001          20260315                                                                                           \nDSYN0000002          20240229                                                                                           \nDSYN0000005          19991231                                                                                           \nDSYN0000007          20261031                                                                                           \nT000000004                                                                                                              \n"
+ },
+ {
+  "name": "proof 0",
+  "cause": "unknown_code",
+  "data": "HRRDETH01SYNSTATE-VITAL      00000000005120261031FSYNTHETIC-STATE     0                                                 \nDSYN0000001          20260315                                                                                           \nDSYN0000002          20240229                                                                                           \nDSYN0000005          19991231                                                                                           \nDSYN0000007          20261031                                                                                           \nT000000004                                                                                                              \n"
+ },
+ {
+  "name": "federal proof letter",
+  "cause": "unknown_code",
+  "data": "HRRDETH01SYNSTATE-VITAL      00000000005120261031FSYNTHETIC-STATE     S                                                 \nDSYN0000001          20260315                                                                                           \nDSYN0000002          20240229                                                                                           \nDSYN0000005          19991231                                                                                           \nDSYN0000007          20261031                                                                                           \nT000000004                                                                                                              \n"
+ },
+ {
+  "name": "partial date, day unknown",
+  "cause": "bad_date",
+  "data": "HRRDETH01SYNSTATE-VITAL      00000000005120261031FSYNTHETIC-STATE     V                                                 \nDSYN0000001          20260300                                                                                           \nDSYN0000002          20240229                                                                                           \nDSYN0000005          19991231                                                                                           \nDSYN0000007          20261031                                                                                           \nT000000004                                                                                                              \n"
+ },
+ {
+  "name": "partial date, month and day unknown",
+  "cause": "bad_date",
+  "data": "HRRDETH01SYNSTATE-VITAL      00000000005120261031FSYNTHETIC-STATE     V                                                 \nDSYN0000001          20260315                                                                                           \nDSYN0000002          20240000                                                                                           \nDSYN0000005          19991231                                                                                           \nDSYN0000007          20261031                                                                                           \nT000000004                                                                                                              \n"
+ },
+ {
+  "name": "blank date of death",
+  "cause": "bad_date",
+  "data": "HRRDETH01SYNSTATE-VITAL      00000000005120261031FSYNTHETIC-STATE     V                                                 \nDSYN0000001          20260315                                                                                           \nDSYN0000002          20240229                                                                                           \nDSYN0000005                                                                                                             \nDSYN0000007          20261031                                                                                           \nT000000004                                                                                                              \n"
+ },
+ {
+  "name": "30 February",
+  "cause": "bad_date",
+  "data": "HRRDETH01SYNSTATE-VITAL      00000000005120261031FSYNTHETIC-STATE     V                                                 \nDSYN0000001          20260315                                                                                           \nDSYN0000002          20240229                                                                                           \nDSYN0000005          19991231                                                                                           \nDSYN0000007          20260230                                                                                           \nT000000004                                                                                                              \n"
+ },
+ {
+  "name": "space inside member id",
+  "cause": "bad_text",
+  "data": "HRRDETH01SYNSTATE-VITAL      00000000005120261031FSYNTHETIC-STATE     V                                                 \nDSYN 0000001         20260315                                                                                           \nDSYN0000002          20240229                                                                                           \nDSYN0000005          19991231                                                                                           \nDSYN0000007          20261031                                                                                           \nT000000004                                                                                                              \n"
+ },
+ {
+  "name": "blank member id",
+  "cause": "bad_text",
+  "data": "HRRDETH01SYNSTATE-VITAL      00000000005120261031FSYNTHETIC-STATE     V                                                 \nDSYN0000001          20260315                                                                                           \nD                    20240229                                                                                           \nDSYN0000005          19991231                                                                                           \nDSYN0000007          20261031                                                                                           \nT000000004                                                                                                              \n"
+ },
+ {
+  "name": "death after as-of",
+  "cause": "death_after_as_of",
+  "data": "HRRDETH01SYNSTATE-VITAL      00000000005120261031FSYNTHETIC-STATE     V                                                 \nDSYN0000001          20260315                                                                                           \nDSYN0000002          20240229                                                                                           \nDSYN0000005          19991231                                                                                           \nDSYN0000007          20261101                                                                                           \nT000000004                                                                                                              \n"
+ },
+ {
+  "name": "same member twice",
+  "cause": "duplicate_key",
+  "data": "HRRDETH01SYNSTATE-VITAL      00000000005120261031FSYNTHETIC-STATE     V                                                 \nDSYN0000001          20260315                                                                                           \nDSYN0000001          20260316                                                                                           \nDSYN0000002          20240229                                                                                           \nDSYN0000005          19991231                                                                                           \nDSYN0000007          20261031                                                                                           \nT000000005                                                                                                              \n"
+ },
+ {
+  "name": "count too high",
+  "cause": "count_mismatch",
+  "data": "HRRDETH01SYNSTATE-VITAL      00000000005120261031FSYNTHETIC-STATE     V                                                 \nDSYN0000001          20260315                                                                                           \nDSYN0000002          20240229                                                                                           \nDSYN0000005          19991231                                                                                           \nDSYN0000007          20261031                                                                                           \nT000000005                                                                                                              \n"
+ },
+ {
+  "name": "count too low",
+  "cause": "count_mismatch",
+  "data": "HRRDETH01SYNSTATE-VITAL      00000000005120261031FSYNTHETIC-STATE     V                                                 \nDSYN0000001          20260315                                                                                           \nDSYN0000002          20240229                                                                                           \nDSYN0000005          19991231                                                                                           \nDSYN0000007          20261031                                                                                           \nT000000003                                                                                                              \n"
+ },
+ {
+  "name": "row filler",
+  "cause": "bad_filler",
+  "data": "HRRDETH01SYNSTATE-VITAL      00000000005120261031FSYNTHETIC-STATE     V                                                 \nDSYN0000001          20260315                                                                                           \nDSYN0000002          20240229                                                                                          Z\nDSYN0000005          19991231                                                                                           \nDSYN0000007          20261031                                                                                           \nT000000004                                                                                                              \n"
+ },
+ {
+  "name": "header filler",
+  "cause": "bad_filler",
+  "data": "HRRDETH01SYNSTATE-VITAL      00000000005120261031FSYNTHETIC-STATE     VX                                                \nDSYN0000001          20260315                                                                                           \nDSYN0000002          20240229                                                                                           \nDSYN0000005          19991231                                                                                           \nDSYN0000007          20261031                                                                                           \nT000000004                                                                                                              \n"
+ },
+ {
+  "name": "letter in fseq",
+  "cause": "bad_number",
+  "data": "HRRDETH01SYNSTATE-VITAL      00000000005O20261031FSYNTHETIC-STATE     V                                                 \nDSYN0000001          20260315                                                                                           \nDSYN0000002          20240229                                                                                           \nDSYN0000005          19991231                                                                                           \nDSYN0000007          20261031                                                                                           \nT000000004                                                                                                              \n"
+ },
+ {
+  "name": "no identity for kind 2",
+  "cause": "kind_not_registered",
+  "data": "HRRDETH01SYNSTATE-VITAL      00000000005120261031FSYNTHETIC-STATE     V                                                 \nDSYN0000001          20260315                                                                                           \nDSYN0000002          20240229                                                                                           \nDSYN0000005          19991231                                                                                           \nDSYN0000007          20261031                                                                                           \nT000000004                                                                                                              \n",
+  "entry": {
+   "ids": [
+    [
+     1,
+     [
+      1
+     ]
+    ]
+   ]
+  }
+ },
+ {
+  "name": "identity code 2",
+  "cause": "unknown_identity_field",
+  "data": "HRRDETH01SYNSTATE-VITAL      00000000005120261031FSYNTHETIC-STATE     V                                                 \nDSYN0000001          20260315                                                                                           \nDSYN0000002          20240229                                                                                           \nDSYN0000005          19991231                                                                                           \nDSYN0000007          20261031                                                                                           \nT000000004                                                                                                              \n",
+  "entry": {
+   "ids": [
+    [
+     2,
+     [
+      1,
+      2
+     ]
+    ]
+   ]
+  }
+ }
+]

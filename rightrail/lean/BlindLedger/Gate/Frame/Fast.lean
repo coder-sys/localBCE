@@ -180,7 +180,7 @@ structure RowsReq where
   payKey : ByteArray
   rows : Array LineRow
 
-def requestDomain : ByteArray := (domain "DECIDE-REQUEST").toByteArray
+def requestDomain : ByteArray := decideRequestDomain.toByteArray
 
 /-- `Gate.decodeRequest`, in one pass.  It fails exactly where the byte-list reader fails. -/
 def decodeRows (x : ByteArray) : Option RowsReq := Id.run do
@@ -227,10 +227,12 @@ def decodeRows (x : ByteArray) : Option RowsReq := Id.run do
     if 0 < i && !lt64 x (q - 64) q 0 then return none
     evid := evid.push (x.extract q (q + 64))
     q := q + 64
-  if q != n then return none
+  if q + 1 != n then return none
+  let cf := x.get! q
+  if 1 < cf then return none
   return some ⟨⟨x.extract (dn + 2) te, x.extract (te + 2) ge, flows.getD (tag.toNat - 1) .FFS_CYCLE, x.extract (ge + 3) ce,
     x.extract (ce + 2) ye, x.extract ye (ye + 32), x.extract (ye + 34) ee, amount.toNat, x.extract (ee + 10) ke, lines.toList,
-    evid.toList⟩, payKey, rows⟩
+    evid.toList, cf == 1⟩, payKey, rows⟩
 
 /-- `beNat` of bytes `i` to `j` after `acc`, seven bytes per big-number step. -/
 def beNatA (b : ByteArray) (i j acc : Nat) : Nat := Id.run do
@@ -1274,9 +1276,9 @@ private theorem ib {x : ByteArray} {p e : Nat} (he : e = identEnd x p x.size) (h
   subst he; exact identEnd_bounds h
 
 private theorem dom_iff (x : ByteArray) (dn : Nat) (hdn : dn = requestDomain.size) (h1 : dn ≤ x.size) :
-    sameBytes x requestDomain 0 0 dn = true ↔ x.toList.take dn = domain "DECIDE-REQUEST" := by
-  have hrdl : requestDomain.toList = domain "DECIDE-REQUEST" := Bin.toList_toByteArray _
-  have hdnl : dn = (domain "DECIDE-REQUEST").length := by
+    sameBytes x requestDomain 0 0 dn = true ↔ x.toList.take dn = decideRequestDomain := by
+  have hrdl : requestDomain.toList = decideRequestDomain := Bin.toList_toByteArray _
+  have hdnl : dn = decideRequestDomain.length := by
     rw [hdn, Bin.size_eq_length', hrdl]
   rw [sameBytes_eq x requestDomain dn 0 0 (by omega) (by omega)]
   simp only [List.drop_zero, hrdl, decide_eq_true_eq]
@@ -1469,6 +1471,10 @@ private theorem payKey_idNat (x : ByteArray) (te ge ce ye : Nat) (h1 : ge = iden
   rw [idNatA_eq, copySlice_toList x _ ce (ge - te) (ye - ce) hd, Bin.toList_extract', f1, f2]
   rfl
 
+private theorem u8_beq_one (c : UInt8) : (c == 1) = (c.toNat == 1) := by
+  rw [Bool.eq_iff_iff, beq_iff_eq, beq_iff_eq, ← UInt8.toNat_inj]
+  exact Iff.rfl
+
 /-- The links to the byte-list reader (proofs owed): the request and payment number, the rules' lines, the rows. -/
 theorem decodeRows_eq (x : ByteArray) :
     (decodeRows x).map (fun d => (d.ra, idNatA d.payKey)) =
@@ -1503,7 +1509,7 @@ theorem decodeRows_eq (x : ByteArray) :
   unfold decodeRequest parse
   simp only [pRequest, StateT.run_bind]
   rw [hlen0]
-  have hdnl : dn = (domain "DECIDE-REQUEST").length := by
+  have hdnl : dn = decideRequestDomain.length := by
     rw [hdn, Bin.size_eq_length']; simp [requestDomain, Bin.toList_toByteArray]
   by_cases hmax : maxRequestBytes < x.size
   · rw [if_pos (show (decide (maxRequestBytes < x.size) || decide (x.size < dn) || !sameBytes x requestDomain 0 0 dn) = true by simp [hmax]),
@@ -1511,7 +1517,7 @@ theorem decodeRows_eq (x : ByteArray) :
     rfl
   rw [if_neg (show ¬ (x.size > maxRequestBytes) by omega)]
   rw [expect_run, ← hdnl]
-  by_cases hdom : dn ≤ x.size ∧ x.toList.take dn = domain "DECIDE-REQUEST"
+  by_cases hdom : dn ≤ x.size ∧ x.toList.take dn = decideRequestDomain
   case neg =>
     have : (decide (maxRequestBytes < x.size) || decide (x.size < dn) || !sameBytes x requestDomain 0 0 dn) = true := by
         by_cases h1 : dn ≤ x.size
@@ -1716,23 +1722,47 @@ theorem decodeRows_eq (x : ByteArray) :
               simp only [Option.bind_some]
               rw [if_pos hasc']
               simp only [Option.bind_some]
-              by_cases hqe : q' + 2 + 64 * (be2 x q').toNat = x.size
-              · rw [if_neg (show ¬ ((q' + 2 + 64 * (be2 x q').toNat != x.size) = true) by rw [bne_iff_ne]; exact fun h => h hqe)]
-                have hnil : SL x (q' + 2 + 64 * (be2 x q').toNat) = [] := (SL_nil _ _).mpr (by omega)
-                rw [hnil]
-                refine congrArg some (Prod.ext ?_ ?_)
-                · simp only [RequestBA.ofModel, RequestBA.mk.injEq]
-                  exact ⟨ex_eq x _ _ _ rfl, ex_eq x _ _ _ rfl, trivial, ex_eq x _ _ _ rfl, ex_eq x _ _ _ rfl,
-                    ex_eq x _ _ _ (by omega), ex_eq x _ _ _ (by omega), trivial, ex_eq x _ _ _ (by omega),
-                    by simp, by simp⟩
-                · show idNatA payKey = _
-                  rw [hpayKey]
-                  dsimp only
-                  exact payKey_idNat x te ge ce ye hge hye hge0 hye0
-              · rw [if_pos (show ((q' + 2 + 64 * (be2 x q').toNat != x.size) = true) from bne_iff_ne.mpr hqe)]
-                rcases hSL : SL x (q' + 2 + 64 * (be2 x q').toNat) with _ | ⟨a, t⟩
-                · exact absurd ((SL_nil _ _).mp hSL) (by omega)
-                · rfl
+              have hEle : q' + 2 + 64 * (be2 x q').toNat ≤ x.size := by omega
+              rw [nat_pos x x.size _ 1 0 1 (Nat.le_refl _) hEle]
+              by_cases hqe : q' + 2 + 64 * (be2 x q').toNat + 1 = x.size
+              · rw [if_neg (show ¬ ((q' + 2 + 64 * (be2 x q').toNat + 1 != x.size) = true) by
+                  rw [bne_iff_ne]; exact fun h => h hqe)]
+                rw [beNat_one x (q' + 2 + 64 * (be2 x q').toNat) (by omega)]
+                by_cases hcf : 1 < x.get! (q' + 2 + 64 * (be2 x q').toNat)
+                · have h1 := UInt8.lt_iff_toNat_lt.mp hcf
+                  rw [if_pos hcf, if_neg (show ¬ (q' + 2 + 64 * (be2 x q').toNat + 1 ≤ x.size ∧
+                      0 ≤ (x.get! (q' + 2 + 64 * (be2 x q').toNat)).toNat ∧
+                      (x.get! (q' + 2 + 64 * (be2 x q').toNat)).toNat ≤ 1) by
+                    intro h; have : (1 : UInt8).toNat = 1 := rfl; omega)]
+                  rfl
+                · have h1 : ¬ (1 : UInt8).toNat < (x.get! (q' + 2 + 64 * (be2 x q').toNat)).toNat :=
+                    fun h => hcf (UInt8.lt_iff_toNat_lt.mpr h)
+                  have h1' : (1 : UInt8).toNat = 1 := rfl
+                  rw [if_neg hcf, if_pos ⟨by omega, Nat.zero_le _, by omega⟩]
+                  have hnil : List.drop (q' + 2 + 64 * (be2 x q').toNat + 1) (List.take x.size x.toList) = [] :=
+                    (SL_nil _ _).mpr (by omega)
+                  simp only [Option.bind_some]
+                  rw [hnil]
+                  refine congrArg some (Prod.ext ?_ ?_)
+                  · simp only [RequestBA.ofModel, RequestBA.mk.injEq]
+                    exact ⟨ex_eq x _ _ _ rfl, ex_eq x _ _ _ rfl, trivial, ex_eq x _ _ _ rfl, ex_eq x _ _ _ rfl,
+                      ex_eq x _ _ _ (by omega), ex_eq x _ _ _ (by omega), trivial, ex_eq x _ _ _ (by omega),
+                      by simp, by simp, u8_beq_one _⟩
+                  · show idNatA payKey = _
+                    rw [hpayKey]
+                    dsimp only
+                    exact payKey_idNat x te ge ce ye hge hye hge0 hye0
+              · rw [if_pos (show ((q' + 2 + 64 * (be2 x q').toNat + 1 != x.size) = true) from bne_iff_ne.mpr hqe)]
+                by_cases hc : q' + 2 + 64 * (be2 x q').toNat + 1 ≤ x.size ∧
+                    0 ≤ beNat ((x.toList.drop (q' + 2 + 64 * (be2 x q').toNat)).take 1) ∧
+                    beNat ((x.toList.drop (q' + 2 + 64 * (be2 x q').toNat)).take 1) ≤ 1
+                · rw [if_pos hc]
+                  simp only [Option.bind_some]
+                  rcases hSL : List.drop (q' + 2 + 64 * (be2 x q').toNat + 1) (List.take x.size x.toList) with _ | ⟨a, t⟩
+                  · exact absurd ((SL_nil _ _).mp hSL) (by omega)
+                  · rfl
+                · rw [if_neg hc]
+                  rfl
             · rw [hf1]
               dsimp only
               obtain ⟨rs, hrs⟩ := many_digest_ok x (be2 x q').toNat (q' + 2) (by omega)
@@ -2334,9 +2364,12 @@ private theorem decodeRows_good (x : ByteArray) (d : RowsReq) (h : decodeRows x 
     rw [hf1] at h; dsimp only at h; simp at h
   rw [hf1] at h
   dsimp only at h
-  by_cases c10 : (Y.2.1 != x.size) = true
+  by_cases c10 : (Y.2.1 + 1 != x.size) = true
   · rw [if_pos c10] at h; simp at h
   rw [if_neg c10] at h
+  by_cases c11 : 1 < x.get! Y.2.1
+  · rw [if_pos c11] at h; simp at h
+  rw [if_neg c11] at h
   simp only [Option.some.injEq] at h
   subst h
   dsimp only at hr
@@ -2410,18 +2443,23 @@ def authP : P Auth := do
   let fv ← num 8
   unless fp ≤ 1 && (fp == 1 || fv == 0) do throw .RECORD
   let kfloor ← num 4
+  let rsv ← num 4
+  let rs ← cutB 64
+  unless rsv != 0 || rs == zeroDigest do throw .RECORD
   let grant ← blobP
   let keyset ← blobP
   let release ← blobP
   unless release.length == 0 || release.length == 64 do throw .RECORD
   let ksteps ← manyP (← num 4) (do pure ((← num 4), (← blobP)))
   let byps ← manyP (← num 4) blobP
+  let rsets ← manyP (← num 4) blobP
   let reqs ← manyP (← num 4) reqP
   unless (match reqs with
       | [] => true
       | e0 :: _ => reqs.all fun e => e.ra.tenantId == e0.ra.tenantId && e.ra.programId == e0.ra.programId) &&
       (reqs.foldl (fun s e => s.insert e.q) (∅ : Std.HashSet Nat)).size == reqs.length do throw .RECORD
-  pure { pin, floor := if fp == 1 then some fv else none, kfloor, grant, keyset, release, ksteps, byps, reqs }
+  pure { pin, floor := if fp == 1 then some fv else none, kfloor, rsv, rs, grant, keyset, release, ksteps, byps, rsets,
+         reqs }
 
 def bodyP (shard batch : Nat) : P Req := do
   let today ← num 4
@@ -2441,13 +2479,12 @@ def bodyP (shard batch : Nat) : P Req := do
   let auth ← authP
   pure { shard, batch, today, asOf, prev, dmf, pdeath, excl, span, redo, auth }
 
-/-- `Frame.decodeReq` over `ByteArray`: the request and its digest. -/
+/-- `Frame.decodeReq` over `ByteArray`: the request and the digest its header carries. -/
 def decodeReqFast (bs : ByteArray) : Except Word (Req × ByteArray) := do
   if bs.size < hdrBytes then throw .LENGTH
-  unless (bs.extract 0 4).toList == magicReq && ((bs.get! 4).toNat + 256 * (bs.get! 5).toNat) == version do throw .MAGIC
+  unless (bs.extract 0 4).toList == magicReq && ((bs.get! 4).toNat + 256 * (bs.get! 5).toNat) == reqVersion do throw .MAGIC
   let body := bs.extract hdrBytes bs.size
   let dg := bs.extract 18 hdrBytes
-  unless Bin.HB (⟨(domain "FRAME").toArray⟩ ++ body) == dg do throw .DIGEST
   let rd (p w : Nat) : Nat := Id.run do
     let mut v := 0
     for i in [0:w] do v := v * 256 + (bs.get! (p + w - 1 - i)).toNat
@@ -2947,16 +2984,21 @@ private def authS : S Auth := do
   let fv ← numS 8
   unless fp ≤ 1 && (fp == 1 || fv == 0) do throw .RECORD
   let kfloor ← numS 4
+  let rsv ← numS 4
+  let rs ← cutS 64
+  unless rsv != 0 || rs == zeroDigest do throw .RECORD
   let grant ← blobS
   let keyset ← blobS
   let release ← blobS
   unless release.length == 0 || release.length == 64 do throw .RECORD
   let ksteps ← manyS kstepS (← numS 4)
   let byps ← manyS blobS (← numS 4)
+  let rsets ← manyS blobS (← numS 4)
   let reqs ← manyS reqS (← numS 4)
   unless reqs.Pairwise (fun a b => a.q != b.q) && (match reqs with | [] => true | e0 :: _ => reqs.all fun e => e.r.tenantId == e0.r.tenantId && e.r.programId == e0.r.programId) do
     throw .RECORD
-  pure { pin, floor := if fp == 1 then some fv else none, kfloor, grant, keyset, release, ksteps, byps, reqs }
+  pure { pin, floor := if fp == 1 then some fv else none, kfloor, rsv, rs, grant, keyset, release, ksteps, byps, rsets,
+         reqs }
 
 private theorem nums2e (w1 w2 : Nat) (r : Bytes) : nums [w1, w2] r =
     (numRec w1 r >>= fun a => numRec w2 a.2 >>= fun b => Except.ok ([a.1, b.1], b.2)) := by
@@ -2995,7 +3037,7 @@ private theorem authRec_eq (r : Bytes) : authRec r = authS.run r := by
 private theorem ba_beq (a b : ByteArray) : (a == b) = true ↔ a = b :=
   (beq_iff_eq (a := a.data) (b := b.data)).trans ByteArray.ext_iff.symm
 
-private theorem ba_toList_inj (a b : ByteArray) : a.toList = b.toList ↔ a = b := by
+theorem ba_toList_inj (a b : ByteArray) : a.toList = b.toList ↔ a = b := by
   constructor
   · intro h; rw [← rq_ba a, ← rq_ba b, h]
   · intro h; rw [h]
@@ -3010,11 +3052,13 @@ private theorem MtS_authP : MtS id authP authS := by
   unfold authP authS
   refine MtS_bind (MtS_cutB 64) (fun pin => MtS_bind (MtS_num 1) (fun fp => MtS_bind (MtS_num 8) (fun fv => ?_)))
   refine MtS_unless _ _ .RECORD Iff.rfl ?_
-  refine MtS_bind (MtS_num 4) (fun kfloor => ?_)
+  refine MtS_bind (MtS_num 4) (fun kfloor => MtS_bind (MtS_num 4) (fun rsv => MtS_bind (MtS_cutB 64) (fun rs => ?_)))
+  refine MtS_unless _ _ .RECORD Iff.rfl ?_
   refine MtS_bind MtS_blobP (fun grant => MtS_bind MtS_blobP (fun keyset => MtS_bind MtS_blobP (fun release => ?_)))
   refine MtS_unless _ _ .RECORD Iff.rfl ?_
   refine MtS_bind (MtS_num 4) (fun nk => MtS_bind (MtS_manyP MtS_kstep nk) (fun ksteps => ?_))
   refine MtS_bind (MtS_num 4) (fun nb => MtS_bind (MtS_manyP MtS_blobP nb) (fun byps => ?_))
+  refine MtS_bind (MtS_num 4) (fun ns => MtS_bind (MtS_manyP MtS_blobP ns) (fun rsets => ?_))
   refine MtS_bind (MtS_num 4) (fun nq => MtS_bind (MtS_manyP MtS_reqP nq) (fun reqs => ?_))
   refine MtS_unless _ _ .RECORD ?_ (MtS_pure _)
   dsimp only [id]
@@ -3126,14 +3170,14 @@ private theorem ver_eq (bs : ByteArray) (h : 6 ≤ bs.size) :
   simp [List.range']
   omega
 
-private theorem body_list (bs : ByteArray) : (bs.extract hdrBytes bs.size).toList = bs.toList.drop hdrBytes := by
+theorem body_list (bs : ByteArray) : (bs.extract hdrBytes bs.size).toList = bs.toList.drop hdrBytes := by
   rw [Bin.toList_extract']
   apply List.take_of_length_le
   rw [List.length_drop, rq_len]
   omega
 
-private theorem decodeReqFast_eq' (H : Bytes → Bytes) (hH : ∀ b, H b = (Bin.HB ⟨b.toArray⟩).toList) (bs : ByteArray) :
-    (decodeReqFast bs).map (fun (q, d) => (q, d.toList)) = decodeReq H bs.toList := by
+private theorem decodeReqFast_eq' (bs : ByteArray) :
+    (decodeReqFast bs).map (fun (q, d) => (q, d.toList)) = decodeReq bs.toList := by
   by_cases hs : bs.size < hdrBytes
   · have h2 : ¬ hdrBytes ≤ bs.toList.length := by rw [rq_len]; omega
     have hT : takeN hdrBytes bs.toList = none := by simp [takeN, h2]
@@ -3143,19 +3187,12 @@ private theorem decodeReqFast_eq' (H : Bytes → Bytes) (hH : ∀ b, H b = (Bin.
   · have hs' : hdrBytes ≤ bs.size := by omega
     have h2 : hdrBytes ≤ bs.toList.length := by rw [rq_len]; exact hs'
     have h82 : hdrBytes = 82 := rfl
-    have hmag : ((bs.extract 0 4).toList == magicReq && ((bs.get! 4).toNat + 256 * (bs.get! 5).toNat) == version) =
-        ((bs.toList.take hdrBytes).take 4 == magicReq && unle (((bs.toList.take hdrBytes).drop 4).take 2) == version) := by
+    have hmag : ((bs.extract 0 4).toList == magicReq && ((bs.get! 4).toNat + 256 * (bs.get! 5).toNat) == reqVersion) =
+        ((bs.toList.take hdrBytes).take 4 == magicReq && unle (((bs.toList.take hdrBytes).drop 4).take 2) == reqVersion) := by
       rw [h82, hdr_slice _ 4 2 (by omega), ver_eq bs (by omega), Bin.toList_extract', List.take_take]
       simp
     have hdg : (bs.extract 18 hdrBytes).toList = (bs.toList.take hdrBytes).drop 18 := by
       rw [Bin.toList_extract', List.drop_take]
-    have hdig : (Bin.HB (⟨(domain "FRAME").toArray⟩ ++ bs.extract hdrBytes bs.size) == bs.extract 18 hdrBytes) =
-        (H (domain "FRAME" ++ bs.toList.drop hdrBytes) == (bs.toList.take hdrBytes).drop 18) := by
-      have hA : (⟨(domain "FRAME").toArray⟩ ++ bs.extract hdrBytes bs.size : ByteArray) =
-          ⟨(domain "FRAME" ++ bs.toList.drop hdrBytes).toArray⟩ := by
-        rw [← ba_toList_inj, Bin.toList_append', body_list]
-        simp [Bin.toList_eq']
-      rw [Bool.eq_iff_iff, ba_beq, beq_iff_eq, ← ba_toList_inj, hdg, hH, hA]
     have hr6 : (Id.run do
         let mut v := 0
         for i in [0:4] do v := v * 256 + (bs.get! (6 + 4 - 1 - i)).toNat
@@ -3172,27 +3209,22 @@ private theorem decodeReqFast_eq' (H : Bytes → Bytes) (hH : ∀ b, H b = (Bin.
     rw [if_neg hs, hT, hmag]
     dsimp only
     by_cases hm : ((bs.toList.take hdrBytes).take 4 == magicReq &&
-        unle (((bs.toList.take hdrBytes).drop 4).take 2) == version) = true
+        unle (((bs.toList.take hdrBytes).drop 4).take 2) == reqVersion) = true
     · simp only [hm, if_true, pure_bind]
-      rw [hdig]
-      by_cases hd2 : (H (domain "FRAME" ++ bs.toList.drop hdrBytes) == (bs.toList.take hdrBytes).drop 18) = true
-      · simp only [hd2, if_true]
-        dsimp only at hr6 hr10
-        rw [hr6, hr10]
-        have key := body_fin (unle (((bs.toList.take hdrBytes).drop 6).take 4))
-          (unle (((bs.toList.take hdrBytes).drop 10).take 8)) (bs.extract hdrBytes bs.size) (bs.extract 18 hdrBytes)
-        rw [body_list, hdg] at key
-        exact key
-      · simp only [hd2, Bool.false_eq_true, if_false]
-        rfl
+      dsimp only at hr6 hr10
+      rw [hr6, hr10]
+      have key := body_fin (unle (((bs.toList.take hdrBytes).drop 6).take 4))
+        (unle (((bs.toList.take hdrBytes).drop 10).take 8)) (bs.extract hdrBytes bs.size) (bs.extract 18 hdrBytes)
+      rw [body_list, hdg] at key
+      exact key
     · simp only [hm, Bool.false_eq_true, if_false]
       rfl
 
 /-- `Frame.decodeReq` read as bytes. -/
-theorem decodeReqFast_eq (H : Bytes → Bytes) (hH : ∀ b, H b = (Bin.HB ⟨b.toArray⟩).toList) (bs : ByteArray) :
+theorem decodeReqFast_eq (H : Bytes → Bytes) (bs : ByteArray) :
     (decodeReqFast bs).map (fun (q, d) => (encodeReq H q, d.toList)) =
-      (decodeReq H bs.toList).map (fun (q, d) => (encodeReq H q, d)) := by
-  rw [← decodeReqFast_eq' H hH bs]
+      (decodeReq bs.toList).map (fun (q, d) => (encodeReq H q, d)) := by
+  rw [← decodeReqFast_eq' bs]
   cases decodeReqFast bs with
   | error w => rfl
   | ok x => rfl
@@ -3267,11 +3299,10 @@ theorem toList_putBE (b : ByteArray) (w n : Nat) : (putBE b w n).toList = b.toLi
     rw [putBE, ih, natBE_succ]
     simp [Bin.toList_eq', ByteArray.data_push]
 
-/-! ### The commitments: context, payment digest, input and batch identity -/
+/-! ### The commitments: context, input and batch identity -/
 
 def contextDomain : ByteArray := (domain "CONTEXT").toByteArray
-def paymentDomain : ByteArray := (domain "PAYMENT").toByteArray
-def inputDomain : ByteArray := ("RR/GATE/INPUT/v6".toUTF8.toList ++ [0]).toByteArray
+def inputDomain : ByteArray := ("RR/GATE/INPUT/v7".toUTF8.toList ++ [0]).toByteArray
 def batchDomain : ByteArray := (domain "BATCH-INPUT").toByteArray
 
 /-- Where frame `bs`'s request count starts: its body ends with the count, then each request after its 4-byte length. -/
@@ -3282,26 +3313,17 @@ def ctxEnd (bs : ByteArray) (q : Req) : Nat := bs.size - 4 - q.auth.reqs.foldl (
 def contextAt (bs : ByteArray) (e : Nat) : ByteArray :=
   Bin.HB (bs.copySlice hdrBytes contextDomain contextDomain.size (e - hdrBytes))
 
-/-- `Gate.payDigest` of request `e` over the engine's hash, given its lines root: the request's bytes before its lines
-    and after them are cut by their lengths (each line is 2 bytes of length and its bytes, each reference 64 bytes). -/
-def payDigestR (e : Run.Req) (root : ByteArray) : ByteArray :=
+/-- `Gate.inputV7` of request `e` over the engine's hash, given `pre` (the input domain, then the batch context:
+    the same for every request of a batch) and its lines root: the request's bytes before its lines and after them
+    are cut by their lengths (each line is 2 bytes of length and its bytes, each reference 64 bytes, then the contest
+    byte). -/
+def inputR (pre : ByteArray) (e : Run.Req) (root : ByteArray) : ByteArray :=
   let x := e.x
-  let ts := x.size - 2 - 64 * e.ra.evidenceRefs.length
+  let ts := x.size - 3 - 64 * e.ra.evidenceRefs.length
   let he := ts - e.ra.lines.foldl (fun n l => n + 2 + l.size) 0
-  let b := putBE (ByteArray.emptyWithCapacity (paymentDomain.size + 4 + he + 64 + x.size - ts) ++ paymentDomain) 4 he
+  let b := putBE (ByteArray.emptyWithCapacity (pre.size + 4 + he + 64 + x.size - ts) ++ pre) 4 he
   let b := x.copySlice 0 b b.size he
   Bin.HB (x.copySlice ts (b ++ root) (b.size + root.size) (x.size - ts))
-
-/-- `Gate.inputV6` over the engine's hash. -/
-def inputV6Fast (ctx rd : ByteArray) : ByteArray := Bin.HB (inputDomain ++ ctx ++ rd)
-
-theorem inputV6Fast_eq (ctx rd : ByteArray) :
-    (inputV6Fast ctx rd).toList = Gate.inputV6 (fun b => (Bin.HB ⟨b.toArray⟩).toList) ctx.toList rd.toList := by
-  have hl : (inputDomain ++ ctx ++ rd).toList = Gate.inputV6Pre ctx.toList rd.toList := by
-    simp only [inputDomain, Gate.inputV6Pre, Bin.toList_append', Bin.toList_toByteArray, List.append_assoc]
-  have : inputDomain ++ ctx ++ rd = ⟨(Gate.inputV6Pre ctx.toList rd.toList).toArray⟩ :=
-    ByteArray.ext (by rw [← hl, Bin.toList_eq', Array.toArray_toList])
-  simp only [inputV6Fast, Gate.inputV6, this]
 
 /-- `Gate.batchInput` over the engine's hash, in one buffer of its final size. -/
 def batchInputFast (ctx : ByteArray) (rqs : Array ByteArray) : ByteArray :=
@@ -3393,10 +3415,10 @@ theorem linesRootA_eq (ls : List ByteArray) :
       rw [HB_toList', linesDomain_push]
     rw [hm]
 
-/-- `Frame.ident` over the engine's hash, and each request's input (`INPUT/v6`) in frame order. -/
+/-- `Frame.ident` over the engine's hash, and each request's input (`INPUT/v7`) in frame order. -/
 def identFast (bs : ByteArray) (q : Req) : ByteArray × Array ByteArray :=
   let c := contextAt bs (ctxEnd bs q)
-  let rqs := q.auth.reqs.toArray.map fun e => inputV6Fast c (payDigestR e (linesRootA e.ra.lines))
+  let rqs := q.auth.reqs.toArray.map fun e => inputR (inputDomain ++ c) e (linesRootA e.ra.lines)
   (batchInputFast c rqs, rqs)
 
 /-! ### A decoded payment request's bytes: its head, its lines, its tail -/
@@ -3571,7 +3593,10 @@ private theorem decodeRequest_bytes {x : Bytes} {m : Gate.Request} (h : Gate.dec
     obtain ⟨k2, b17, h17, hr⟩ := sbind hr
     obtain ⟨refs, b18, h18, hr⟩ := sbind hr
     obtain ⟨u5, b19, h19, hr⟩ := sbind hr
+    obtain ⟨cf, b20, h20, hr⟩ := sbind hr
     obtain ⟨rfl, rfl⟩ := spure hr
+    obtain ⟨-, -, -, -, -, hcf⟩ := nat_inv' h20
+    have e20 := nat_inv h20
     obtain ⟨rfl, -⟩ := need_inv h19
     obtain ⟨rfl, -⟩ := need_inv h16
     obtain ⟨rfl, -⟩ := need_inv h15
@@ -3584,8 +3609,9 @@ private theorem decodeRequest_bytes {x : Bytes} {m : Gate.Request} (h : Gate.dec
     subst hk hk2
     refine ⟨?_, hrefs⟩
     rw [expect_inv h1, ident_inv h2, ident_inv h3, tag_inv h4, ident_inv h5, ident_inv h6, (take_inv h7).1, ident_inv h8,
-      nat_inv h9, ident_inv h10, nat_inv h11, e12, nat_inv h17, e18]
-    simp [Gate.requestHead, Gate.requestTail, List.append_assoc]
+      nat_inv h9, ident_inv h10, nat_inv h11, e12, nat_inv h17, e18, e20]
+    rcases (show cf = 0 ∨ cf = 1 by omega) with rfl | rfl <;>
+      simp [Gate.requestHead, Gate.requestTail, List.append_assoc, natBE]
   · simp at h
 
 private theorem obind {α β : Type} {x : Option α} {f : α → Option β} {b : β} (h : (x >>= f) = some b) :
@@ -3622,34 +3648,34 @@ private theorem lines_fold (ls : List Bytes) (a : Nat) :
       Bin.toList_toByteArray]
     omega
 
-/-- `payDigestR` cuts a request's bytes where its lines start and end: it is `Gate.payDigest` of the request the bytes
+/-- `inputR` cuts a request's bytes where its lines start and end: it is `Gate.inputV7` of the request the bytes
     decode to. -/
-private theorem payDigestR_eq (e : Run.Req) (h : Run.reqOf e.x = some e) :
-    (payDigestR e (linesRootA e.ra.lines)).toList =
-      Gate.payDigest (fun b => (Bin.HB ⟨b.toArray⟩).toList) e.ra.toModel := by
+private theorem inputR_eq (ctx : ByteArray) (e : Run.Req) (h : Run.reqOf e.x = some e) :
+    (inputR (inputDomain ++ ctx) e (linesRootA e.ra.lines)).toList =
+      Gate.inputV7 (fun b => (Bin.HB ⟨b.toArray⟩).toList) ctx.toList e.ra.toModel := by
   obtain ⟨-, m, hm, hra⟩ := reqOf_inv h
   obtain ⟨hx, hrefs⟩ := decodeRequest_bytes hm
   have hroot : (linesRootA e.ra.lines).toList = Gate.linesRoot (fun b => (Bin.HB ⟨b.toArray⟩).toList) m.lines := by
     rw [linesRootA_eq, hra]
     simp [RequestBA.ofModel, List.map_map, Function.comp_def, Bin.toList_toByteArray]
   have hL := lines_fold m.lines 0
-  have htl : (Gate.requestTail m).length = 2 + 64 * e.ra.evidenceRefs.length := by
-    rw [hra]; simp [Gate.requestTail, RequestBA.ofModel, natBE_len, flat64 _ hrefs]
+  have htl : (Gate.requestTail m).length = 3 + 64 * e.ra.evidenceRefs.length := by
+    rw [hra]; simp [Gate.requestTail, RequestBA.ofModel, natBE_len, flat64 _ hrefs]; try omega
   have hsz : e.x.size = (Gate.requestHead m).length + ((m.lines.map Gate.identField).flatten).length +
       (Gate.requestTail m).length := by
     rw [Bin.size_eq_length', hx]; simp only [List.length_append]
-  have hts : e.x.size - 2 - 64 * e.ra.evidenceRefs.length =
+  have hts : e.x.size - 3 - 64 * e.ra.evidenceRefs.length =
       (Gate.requestHead m).length + ((m.lines.map Gate.identField).flatten).length := by omega
   have hfold : e.ra.lines.foldl (fun n l => n + 2 + l.size) 0 = ((m.lines.map Gate.identField).flatten).length := by
     rw [hra]; exact hL.trans (Nat.zero_add _)
-  unfold payDigestR
+  unfold inputR
   dsimp only
   rw [HB_toList', copySlice_toList _ _ _ _ _ ByteArray.size_append.symm, Bin.toList_append',
     copySlice_toList _ _ _ _ _ rfl, toList_putBE, Bin.toList_append', hroot, hts, hfold, Nat.add_sub_cancel,
     show e.x.size - ((Gate.requestHead m).length + ((m.lines.map Gate.identField).flatten).length) =
       (Gate.requestTail m).length by omega, hx]
   rw [hra, toModel_ofModel, empty_toList]
-  simp [Gate.payDigest, Gate.paymentPre, Gate.lp32, paymentDomain, Bin.toList_eq', List.append_assoc]
+  simp [Gate.inputV7, Gate.inputV7Pre, Gate.lp32, inputDomain, Bin.toList_append', Bin.toList_eq', List.append_assoc]
 
 private theorem reqs_fold (l : List Run.Req) (a : Nat) :
     l.foldl (fun n e => n + 4 + e.x.size) a = a + (l.map fun e => 4 + e.x.size).sum := by
@@ -3725,6 +3751,12 @@ private theorem authRec_reqs {bs r : Bytes} {a : Auth} (h : authRec bs = .ok (a,
   case isFalse => cases h
   obtain ⟨⟨kf, r3⟩, -, h⟩ := ex_bind h
   try dsimp only at h
+  obtain ⟨⟨rsv, r3v⟩, -, h⟩ := ex_bind h
+  try dsimp only at h
+  obtain ⟨⟨rs, r3r⟩, -, h⟩ := ex_bind h
+  try dsimp only at h
+  split at h
+  case isFalse => cases h
   obtain ⟨⟨g, r4⟩, -, h⟩ := ex_bind h
   try dsimp only at h
   obtain ⟨⟨k, r5⟩, -, h⟩ := ex_bind h
@@ -3740,6 +3772,10 @@ private theorem authRec_reqs {bs r : Bytes} {a : Auth} (h : authRec bs = .ok (a,
   obtain ⟨⟨nb, r9⟩, -, h⟩ := ex_bind h
   try dsimp only at h
   obtain ⟨⟨bys, r10⟩, -, h⟩ := ex_bind h
+  try dsimp only at h
+  obtain ⟨⟨ns, r10n⟩, -, h⟩ := ex_bind h
+  try dsimp only at h
+  obtain ⟨⟨rss, r10s⟩, -, h⟩ := ex_bind h
   try dsimp only at h
   obtain ⟨⟨nq, r11⟩, -, h⟩ := ex_bind h
   try dsimp only at h
@@ -3758,13 +3794,11 @@ private theorem decodeBody_reqs {hd : Hdr} {bs r : Bytes} {q : Req} (h : decodeB
   exact authRec_reqs ha
 
 /-- Every payment request of a decoded frame is what its bytes decode to. -/
-private theorem decodeReq_reqs {H : Bytes → Bytes} {bs dg : Bytes} {q : Req} (h : decodeReq H bs = .ok (q, dg)) :
+private theorem decodeReq_reqs {bs dg : Bytes} {q : Req} (h : decodeReq bs = .ok (q, dg)) :
     ∀ e ∈ q.auth.reqs, Run.reqOf e.x = some e := by
   unfold decodeReq at h
   obtain ⟨⟨hd, body⟩, -, h⟩ := ex_bind h
   try dsimp only at h
-  split at h
-  case isFalse => cases h
   obtain ⟨⟨q', rest⟩, hb, h⟩ := ex_bind h
   try dsimp only at h
   split at h
@@ -3776,8 +3810,8 @@ private theorem decodeReq_reqs {H : Bytes → Bytes} {bs dg : Bytes} {q : Req} (
     the decoder read them. -/
 theorem identFast_eq (bs : ByteArray) (q : Req) (dg : ByteArray) (h : decodeReqFast bs = .ok (q, dg)) :
     (identFast bs q).1.toList = Frame.ident (fun b => (Bin.HB ⟨b.toArray⟩).toList) bs.toList q := by
-  have hd : decodeReq (fun b => (Bin.HB ⟨b.toArray⟩).toList) bs.toList = .ok (q, dg.toList) := by
-    rw [← decodeReqFast_eq' _ (fun _ => rfl) bs, h]; rfl
+  have hd : decodeReq bs.toList = .ok (q, dg.toList) := by
+    rw [← decodeReqFast_eq' bs, h]; rfl
   have hr := decodeReq_reqs hd
   unfold identFast Frame.ident
   dsimp only
@@ -3786,7 +3820,7 @@ theorem identFast_eq (bs : ByteArray) (q : Req) (dg : ByteArray) (h : decodeReqF
   apply List.map_congr_left
   intro e he
   simp only [Function.comp_apply]
-  rw [inputV6Fast_eq, contextAt_eq, payDigestR_eq e (hr e (by simpa using he))]
+  rw [inputR_eq _ e (hr e (by simpa using he)), contextAt_eq]
 
 
 def putBlob2 (b x : ByteArray) : ByteArray := put b 2 x.size ++ x
@@ -3800,7 +3834,8 @@ def zero64B : ByteArray := ⟨Array.replicate 64 0⟩
 
 def putLeaf (b : ByteArray) (l : Leaf) : ByteArray :=
   let b := put (put (put b 1 l.outcome) 8 l.reasons) 1 l.authority
-  let b := if l.bypass == zero64B then b.push 0 else b.push 1 ++ l.bypass
+  let b := if l.earlier.size != 0 then putBlob2 (b.push 2) l.earlier
+    else if l.bypass == zero64B then b.push 0 else b.push 1 ++ l.bypass
   b ++ l.input
 
 def putExt (b : ByteArray) (e : Ext) : ByteArray :=
@@ -3816,7 +3851,7 @@ def encodeAnsFast (a : AnsFrame) : ByteArray :=
   let cap := 160 + 20 * a.recs.length + a.ext.hold.size + a.ext.grant.size + a.ext.auth.size + blobs a.ext.notes + blobs a.ext.adds +
     140 * a.ext.leaves.length + 4
   let b := putL (ByteArray.emptyWithCapacity cap) magicAns
-  let b := put (put (put (put (put b 2 ansVersion) 1 a.word.code) 4 a.shard) 8 a.batch) 4 a.recs.length
+  let b := put (put (put (put (put b 2 version) 1 a.word.code) 4 a.shard) 8 a.batch) 4 a.recs.length
   let b := b ++ a.digest
   let b := a.recs.foldl putRec b
   let b := b ++ a.head ++ a.root

@@ -119,7 +119,7 @@ def genBatch (c : Corpus) (t : Nat) : BatchIn := Id.run do
     if kind < 70 then
       for j in [0:1 + x % 4] do ls := ls.push (genRow c (1000 + 20 * t) c.hot (8 * p + j) pay)
       -- some new payments go at HOLD authority, with no holds or with some
-      if x % 7 == 0 then lim := lim.push (pay, if x % 2 == 0 then 0 else x / 7 % 2 ^ Rules.reasons.length)
+      if x % 7 == 0 then lim := lim.push (pay, if x % 2 == 0 then 0 else x / 7 % 2 ^ 24)
     else if kind < 78 then
       ls := ls.push { histRow c 0 (pickRow c c.nRel x) with id := nid, pay := pay }
     else if kind < 83 then
@@ -139,7 +139,7 @@ def genBatch (c : Corpus) (t : Nat) : BatchIn := Id.run do
     else
       let i := pickRow c c.nUnr x
       let r := histRow c 1 i
-      byp := byp.push (r.pay, if x % 2 == 0 then 2 ^ Rules.reasons.length - 1 else x % 2 ^ Rules.reasons.length)
+      byp := byp.push (r.pay, if x % 2 == 0 then 2 ^ 24 - 1 else x % 2 ^ 24)
       for j in [i / 3 * 3 : min (i / 3 * 3 + 3) c.nUnr] do
         let y := histRow c 1 j
         if !c.hot || y.member == r.member then ls := ls.push y
@@ -151,22 +151,13 @@ def spanOf (m : Nat) : List Span :=
   let base : List Span := [⟨m, planOf m, 20250101, 20271231⟩]
   if m % 101 == 0 then base ++ [⟨m, planOf m % 5 + 1, 20260101, 20260630⟩] else base
 
-/-- Eligibility rows of member `m` (G2): most members one row with an allowed aid code and a benefit level; one in 13
-    no level (BENEFIT_LEVEL_MISSING), one in 17 an aid code not allowed (PROGRAM_NOT_ELIGIBLE), two in 89 no row, one in
-    103 a second, shorter row. -/
-def eligOf (m : Nat) : List Elig :=
-  if m % 89 < 2 then [] else
-  let aid := if m % 17 == 0 then 12345 else allowedAid.getD (m % 5) 78131
-  let base : List Elig := [⟨m, aid, if m % 13 == 0 then 0 else 1, 20250101, 20271231⟩]
-  if m % 103 == 0 then base ++ [⟨m, 78131, 1, 20260101, 20260630⟩] else base
-
 def feeds : Feeds :=
-  { dmfSome := true, pdSome := true, exclSome := true, spanSome := true, eligSome := true,
-    dmfOk := true, pdOk := true, exclOk := true, spanOk := true, eligOk := true,
+  { dmfSome := true, pdSome := true, exclSome := true, spanSome := true,
+    dmfOk := true, pdOk := true, exclOk := true, spanOk := true,
     dmf := fun i => if i % 199 == 0 then [⟨i, 20260301⟩] else [],
     pdeath := fun i => if i % 499 == 0 then [⟨i, 20260201⟩] else [],
     excl := fun i => if i % 307 == 0 then [⟨i, 20260101, 99991231⟩] else [],
-    span := spanOf, elig := eligOf }
+    span := spanOf }
 
 def today : Nat := 20261031
 
@@ -302,10 +293,8 @@ def timeCorpus (c : Corpus) : IO Unit := do
 @[noinline] def sLocal (es : List (Key × Entry)) : IO (List Posting) := pure (localRows es)
 @[noinline] def sPost (ps : List Posting) (es : List (Key × Entry)) : IO (HashMap Key (List Nat)) := pure (postMap ps es)
 @[noinline] def sFeeds (fd : Feeds) (b : List Line) (ur : List Posting) :
-    IO (HashMap Nat (List Death) × HashMap Nat (List Death) × HashMap Nat (List Exclusion) × HashMap Nat (List Span) ×
-      HashMap Nat (List Elig)) :=
-  pure (idMap fd.dmf (members b), idMap fd.pdeath (parties b), idMap fd.excl (parties b), idMap fd.span (spanIds b ur),
-    idMap fd.elig (members b))
+    IO (HashMap Nat (List Death) × HashMap Nat (List Death) × HashMap Nat (List Exclusion) × HashMap Nat (List Span)) :=
+  pure (idMap fd.dmf (members b), idMap fd.pdeath (parties b), idMap fd.excl (parties b), idMap fd.span (spanIds b ur))
 @[noinline] def sSets (fc : FCtx) (b : List Line) : IO (HashSet Nat × HashSet Line) :=
   pure (HashSet.ofList fc.redo, HashSet.ofList b)
 @[noinline] def sCaps (fe : Fetched) (fd : Feeds) (b : List Line) : IO (HashSet Key × Bool) :=
@@ -357,7 +346,7 @@ def splitCorpus (c : Corpus) : IO Bool := do
     let rp ← sPost rr fe.rel
     let up ← sPost ur fe.unr
     let t6 ← IO.monoNanosNow
-    let (dm, pd, ex, sp, el) ← sFeeds fd b ur
+    let (dm, pd, ex, sp) ← sFeeds fd b ur
     let t7 ← IO.monoNanosNow
     let (rd, bt) ← sSets fc b
     let t8 ← IO.monoNanosNow
@@ -372,9 +361,8 @@ def splitCorpus (c : Corpus) : IO Bool := do
         relN := rr.length, unrN := ur.length, rel := (rr.map (·.row)).toArray, unr := (ur.map (·.row)).toArray,
         relPost := rp, unrPost := up, looseKeys := ∅,
         dmfSome := fd.dmfSome, pdSome := fd.pdSome, exclSome := fd.exclSome, spanSome := fd.spanSome,
-        eligSome := fd.eligSome,
-        dmfOk := fd.dmfOk, pdOk := fd.pdOk, exclOk := fd.exclOk, spanOk := fd.spanOk, eligOk := fd.eligOk,
-        dmf := dm, pdeath := pd, excl := ex, span := sp, elig := el }
+        dmfOk := fd.dmfOk, pdOk := fd.pdOk, exclOk := fd.exclOk, spanOk := fd.spanOk,
+        dmf := dm, pdeath := pd, excl := ex, span := sp }
     let o ← sOrder x b
     let t10 ← IO.monoNanosNow
     let ds0 ← sDecideAll x [] o
@@ -405,23 +393,19 @@ def find (n : String) : Option Corpus := corpora.find? (·.name == n)
 /-! ## Randomized check of the fixed-row decider -/
 
 /-- Feed variant `v`: each feed present 90 %, usable 75 % of those; one member in 7 (variant 0 mod 3) has more spans
-    than `capN`, one in 11 (variant 0 mod 5) more deaths, one in 13 (variant 0 mod 7) more eligibility rows. -/
+    than `capN`, one in 11 (variant 0 mod 5) more deaths. -/
 def feedsV (v : Nat) : Feeds :=
   let on (k p : Nat) := hh 7000 (16 * v + k) % 100 < p
   let ds := on 0 90
   let ps := on 1 90
   let es := on 2 90
   let ss := on 3 90
-  let gs := on 8 90
-  { dmfSome := ds, pdSome := ps, exclSome := es, spanSome := ss, eligSome := gs,
+  { dmfSome := ds, pdSome := ps, exclSome := es, spanSome := ss,
     dmfOk := ds && on 4 75, pdOk := ps && on 5 75, exclOk := es && on 6 75, spanOk := ss && on 7 75,
-    eligOk := gs && on 9 75,
     dmf := fun i => if v % 5 == 0 && i % 11 == 0 then List.replicate (capN + 1) ⟨i, 20270101⟩ else feeds.dmf i,
     pdeath := feeds.pdeath, excl := feeds.excl,
     span := fun i => if v % 3 == 0 && i % 7 == 0 then List.replicate (capN + 1) ⟨i, planOf i, 20250101, 20271231⟩
-      else spanOf i,
-    elig := fun i => if v % 7 == 0 && i % 13 == 0 then List.replicate (capN + 1) ⟨i, 78131, 1, 20250101, 20271231⟩
-      else eligOf i }
+      else spanOf i }
 
 def checkCorpora : List Corpus :=
   [⟨"mixed, dense", 20000, 2000, false, 0, 200, 100⟩, ⟨"mixed, 40 rows a member", 20000, 500, false, 0, 200, 100⟩,
@@ -584,7 +568,7 @@ def viewOf (r : FeedSrc × FeedSrc × FeedSrc × FeedSrc) : Feeds :=
   let none_ : Snapshot Line := ⟨0, 0, []⟩
   Worker.feedsOf
     { today, released := none, unresolved := none, releasedPrior := none_, unresolvedPrior := none_, anchor := 0,
-      redo := [], eligibility := none,
+      redo := [],
       dmf := snapOf d 36 fun o => (⟨2 ^ 256 + g d.rows o 32, g d.rows (o + 32) 4⟩ : Death),
       providerDeaths := snapOf p 25 fun o => (⟨g p.rows o 21, g p.rows (o + 21) 4⟩ : Death),
       exclusions := snapOf e 29 fun o => (⟨g e.rows o 21, g e.rows (o + 21) 4, g e.rows (o + 25) 4⟩ : Exclusion),
@@ -695,18 +679,14 @@ def spanEq (x y : Rows.SpanF) : Bool :=
   x.plan == y.plan && x.small == y.small && x.p0 == y.p0 && x.p1 == y.p1 && x.p2 == y.p2 && x.start == y.start &&
     x.stop == y.stop && x.mOk == y.mOk
 
-def eligEq (x y : Rows.EligF) : Bool :=
-  x.mOk == y.mOk && x.aidOk == y.aidOk && x.level == y.level && x.start == y.start && x.stop == y.stop
-
 /-- Every field of two layouts but the sources `toRef` reads; the feed facts of each line and unresolved row compared
     through their runs, since the engine's fact arrays are the whole feeds. -/
 def sameLay (a b : Rows.Lay) : Bool :=
   a.today == b.today && a.relCh == b.relCh && a.unrCh == b.unrCh && a.dmfSome == b.dmfSome && a.pdSome == b.pdSome &&
-  a.exclSome == b.exclSome && a.spanSome == b.spanSome && a.eligSome == b.eligSome && a.dmfOk == b.dmfOk &&
-  a.pdOk == b.pdOk && a.exclOk == b.exclOk && a.spanOk == b.spanOk && a.eligOk == b.eligOk &&
+  a.exclSome == b.exclSome && a.spanSome == b.spanSome && a.dmfOk == b.dmfOk && a.pdOk == b.pdOk &&
+  a.exclOk == b.exclOk && a.spanOk == b.spanOk &&
   arrEq (fun x y => x.row.same y.row && x.ke == y.ke && x.kn == y.kn && x.ki == y.ki && x.pay == y.pay &&
     runEq deathEq a.dmf b.dmf x.dmf y.dmf && runEq spanEq a.spans b.spans x.span y.span &&
-    runEq eligEq a.eligs b.eligs x.elig y.elig &&
     runEq deathEq a.pdeath b.pdeath x.pdP y.pdP && runEq deathEq a.pdeath b.pdeath x.pdR y.pdR &&
     runEq exclEq a.excl b.excl x.exP y.exP && runEq exclEq a.excl b.excl x.exR y.exR && x.fseen == y.fseen)
     a.lines b.lines &&
@@ -859,8 +839,7 @@ def rowsCorpus (c : Corpus) (passes : Nat) : IO Bool := do
       pByp := pByp.set! pj (byp.get? r.w9)
     lines := lines.push
       { row := r, ke := ks.idx[3 * i]!, kn := ks.idx[3 * i + 1]!, ki := ks.idx[3 * i + 2]!, pay := pj, dmf := default,
-        span := default, pdP := default, pdR := default, exP := default, exR := default, elig := default,
-        fseen := fs.contains r.w7 }
+        span := default, pdP := default, pdR := default, exP := default, exR := default, fseen := fs.contains r.w7 }
   pure lines.size
 
 def rowsProf (c : Corpus) (passes : Nat) : IO Bool := do

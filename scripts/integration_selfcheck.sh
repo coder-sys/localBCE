@@ -19,19 +19,19 @@ else
 fi
 if git merge-base --is-ancestor 3d91138 HEAD 2>/dev/null; then ok branch "HEAD descends from 3d91138"; else bad branch "HEAD does not contain 3d91138"; fi
 
-# rightrail import: trunk fc89f9e5 (docs/integration/RIGHTRAIL_IMPORTED_FROM.md).  With its history (variant A)
-# fc89f9e5 must be an ancestor; as a zip snapshot (variant B) the record must name the zip hash instead.
-rr_trunk=fc89f9e5ceaacfbfb0cb50173a4fd870e3872a3f
-rr_zip=1afbc74dc3cf3f5a97c494a196f0c0e0a2d3938abdd16c76b8ce09d36ba0ab71
+# rightrail import: trunk e5d0f36b (docs/integration/RIGHTRAIL_IMPORTED_FROM.md).  With its history (variant A)
+# e5d0f36b must be an ancestor; as a tree snapshot (variant B) the record must name the tree hash instead.
+rr_trunk=e5d0f36bb1f7a17173cf1a1520095b1ad5b1eb15
+rr_zip=86fdbe4eb3906a8aa71717995a8cc0b0662166ac  # the tree of e5d0f36b: the snapshot is that tree, byte for byte
 rr_rec=docs/integration/RIGHTRAIL_IMPORTED_FROM.md
 if ! { [ -d rightrail/lean ] && [ -d rightrail/app ] && [ -d rightrail/rust ]; }; then
   bad "rightrail import" "missing rightrail subtree"
 elif git merge-base --is-ancestor "$rr_trunk" HEAD 2>/dev/null; then
-  ok "rightrail import" "rightrail/{lean,app,rust} present; trunk fc89f9e5 reachable"
+  ok "rightrail import" "rightrail/{lean,app,rust} present; trunk e5d0f36b reachable"
 elif [ -f "$rr_rec" ] && grep -q "$rr_zip" "$rr_rec"; then
-  ok "rightrail import" "rightrail/{lean,app,rust} present; zip snapshot of fc89f9e5 (no history)"
+  ok "rightrail import" "rightrail/{lean,app,rust} present; tree snapshot of e5d0f36b (no history)"
 else
-  bad "rightrail import" "fc89f9e5 not reachable and $rr_rec does not name the zip snapshot"
+  bad "rightrail import" "e5d0f36b not reachable and $rr_rec does not name the tree snapshot"
 fi
 
 # groth16 (N-08 / D-01): must be unreachable
@@ -94,9 +94,9 @@ if [ -z "$banned" ]; then ok "tracked files" "no binaries tracked except RightRa
 
 # rightrail provenance
 if [ -f "$rr_rec" ] && grep -q "$rr_trunk" "$rr_rec"; then
-  ok "rightrail import" "$rr_rec names trunk fc89f9e5"
+  ok "rightrail import" "$rr_rec names trunk e5d0f36b"
 else
-  bad "rightrail import" "$rr_rec missing or does not name fc89f9e5"
+  bad "rightrail import" "$rr_rec missing or does not name e5d0f36b"
 fi
 
 # docs

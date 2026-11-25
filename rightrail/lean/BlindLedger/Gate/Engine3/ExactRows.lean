@@ -518,4 +518,67 @@ theorem redoW_mem_iff (redo : List Nat) (l : Line) (h : fitsLine2 l = true) :
   · intro hm
     exact ⟨l.pay, ⟨hm, hp'⟩, rfl⟩
 
+/-! ## Rows back to lines -/
+
+/-- The number whose words are `ws`, high word first. -/
+def wnat (ws : List UInt64) : Nat := ws.foldl (fun a w => a * 2 ^ 64 + w.toNat) 0
+
+/-- The line a row holds (the member's `0x01` restored); none when its flow byte is no flow.  For a fitting line it
+    undoes `RowX.of` (`RowX.line_of`). -/
+def RowX.line (x : RowX) : Option Line :=
+  (Flat.flowOf x.flow.toNat).map fun f =>
+    ⟨wnat [x.i0, x.i1, x.i2, x.i3, x.i4, x.i5, x.i6], wnat [x.p0, x.p1, x.p2, x.p3, x.p4, x.p5, x.p6, x.p7, x.p8], f,
+      2 ^ 256 + wnat [x.m0, x.m1, x.m2, x.m3], wnat [x.a0, x.a1, x.a2], wnat [x.r0, x.r1, x.r2], x.date.toNat,
+      wnat [x.q0, x.q1, x.q2, x.q3], x.units.toNat, x.cents.toNat⟩
+
+/-- The `k` low words of `n`, high word first. -/
+def wordsOf (n : Nat) : Nat → List UInt64
+  | 0 => []
+  | k + 1 => word n k :: wordsOf n k
+
+theorem foldl_words (n : Nat) : ∀ (k a : Nat),
+    (wordsOf n k).foldl (fun a w => a * 2 ^ 64 + w.toNat) a = a * 2 ^ (64 * k) + n % 2 ^ (64 * k)
+  | 0, a => by simp [wordsOf, Nat.mod_one]
+  | k + 1, a => by
+    have p : 2 ^ (64 * (k + 1)) = 2 ^ (64 * k) * 2 ^ 64 := by rw [Nat.mul_succ, Nat.pow_add]
+    have dn : n % 2 ^ (64 * (k + 1)) = n / 2 ^ (64 * k) % 2 ^ 64 * 2 ^ (64 * k) + n % 2 ^ (64 * k) := by
+      rw [p, Nat.mod_mul, Nat.mul_comm (2 ^ (64 * k))]; omega
+    have wn : (word n k).toNat = n / 2 ^ (64 * k) % 2 ^ 64 := by rw [word_toNat, Nat.shiftRight_eq_div_pow]
+    rw [wordsOf, List.foldl_cons, foldl_words n k, wn, dn, p]
+    generalize 2 ^ (64 * k) = X
+    generalize n / X % 2 ^ 64 = W
+    generalize n % X = R
+    rw [Nat.add_mul, Nat.mul_assoc, Nat.mul_comm (2 ^ 64) X, Nat.add_assoc]
+
+theorem wnat_words (n k : Nat) : wnat (wordsOf n k) = n % 2 ^ (64 * k) := by
+  rw [wnat, foldl_words, Nat.zero_mul, Nat.zero_add]
+
+/-- A fitting line comes back whole from its row. -/
+theorem RowX.line_of {l : Line} (h : fitsLine2 l = true) : (RowX.of l).line = some l := by
+  obtain ⟨hid, hpay, hmem, hpe, hre, hda, hpr, hun, hce⟩ := fits2 h
+  have hf : Flat.flowOf (RowX.of l).flow.toNat = some l.flow := by
+    show Flat.flowOf l.flow.tag.toUInt8.toNat = some l.flow
+    generalize l.flow = f
+    cases f <;> rfl
+  have u32 {a : Nat} (ha : a < 2 ^ 32) : a.toUInt32.toNat = a := by
+    simp only [Nat.toUInt32, UInt32.toNat_ofNat']; omega
+  have hm : 2 ^ 256 + wnat (wordsOf l.member 4) = l.member := by
+    rw [wnat_words]
+    have := Nat.div_add_mod l.member (2 ^ 256)
+    rw [hmem] at this
+    omega
+  have hc : (word l.cents 0).toNat = l.cents := by
+    rw [word_toNat, Nat.mul_zero, Nat.shiftRight_zero]; omega
+  rw [RowX.line, hf]
+  exact congrArg some (line_ext _ _
+    (by show wnat (wordsOf l.id 7) = l.id; rw [wnat_words]; exact Nat.mod_eq_of_lt (by omega))
+    (by show wnat (wordsOf l.pay 9) = l.pay; rw [wnat_words]; exact Nat.mod_eq_of_lt (by omega))
+    rfl
+    (by show 2 ^ 256 + wnat (wordsOf l.member 4) = l.member; exact hm)
+    (by show wnat (wordsOf l.payee 3) = l.payee; rw [wnat_words]; exact Nat.mod_eq_of_lt (by omega))
+    (by show wnat (wordsOf l.rendering 3) = l.rendering; rw [wnat_words]; exact Nat.mod_eq_of_lt (by omega))
+    (u32 hda)
+    (by show wnat (wordsOf l.proc 4) = l.proc; rw [wnat_words]; exact Nat.mod_eq_of_lt (by omega))
+    (u32 hun) hc)
+
 end BlindLedger.Gate.Engine3

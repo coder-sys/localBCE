@@ -15,7 +15,16 @@ shard's and its pledge this key's, and trusts the newest sealed row only when it
 key and its pledge and checkpoint signature under that certificate's key (O(1) per open), so a row added or changed by
 anyone without the key is never signed, served or used (``store_tampered``, the row kept as evidence).  A retries row
 (the retry key of a batch sealed by recovery) carries its own pledge over the key and its batch's checkpoint digest
-(``_RETRY_DOMAIN``), checked with its batch's row before its tokens are served again.
+(``_RETRY_DOMAIN``), checked with its batch's row before its tokens are served again.  Each batch row also pledges the
+root of the set of retry keys (``rset``, over the hashes in ``rbuckets``: a key's bucket is its top 10 bits, and each
+bucket's hash covers its keys and their batches' digests), so a retries row deleted or rekeyed is ``store_tampered`` when
+its exact retry arrives, never decided again.  A batch with ANSWERED tokens
+stores their earlier lists (``earlier``: the EARLIER/v1 bodies in token order) in the reservation's transaction; each is
+served again only when it hashes to its signed token's ``earlier_root``, so it needs no pledge of its own.  Its batch
+row says so (``listed`` = 1, pledged), so a missing ``earlier`` row of such a batch is ``store_tampered``.  A batch
+sealed before lists were stored (``listed`` NULL: its pledge is as an older producer wrote it) has each list rebuilt
+from the shard's stored frames at its first exact retry, served only under that same check, and stored then
+(``answered``).
 At cutover the batch's row also stores ``qb`` (the RULES_QUARANTINE bytes) and the cut tag, and it and every later row
 ``dq = SHA3-512(qb)``, all pledged with their column index (a row before cutover has none: its message is unchanged): the
 newest row's ``dq``, verified at open, says the shard is cut over even if the cutover row is later edited.
@@ -26,6 +35,8 @@ from __future__ import annotations
 import contextlib
 from dataclasses import replace
 import hashlib
+import itertools
+import math
 from pathlib import Path
 import sqlite3
 import time
@@ -37,19 +48,26 @@ from app import right_rail_gate_mark as marks
 from app import right_rail_gate_signer as signer
 
 _TRIES: Final = 3  # a reservation a database error rolled back is written again at most this often
+_SEARCH: Final = 1 << 16  # the most other earlier lists ``_rebuilt`` may try for one batch's payments its first twins leave open; more refuses
 LIFETIME: Final = 7 * 86_400  # maxTokenLifetime; the decision's age stays the payer's check 5
 _MARK_DOMAIN: Final = b"RR/GATE/PRODUCER-MARK/v1\x00"  # bodies: epoch, seq_to + 1 (8 bytes each, big-endian), digest
 _ZERO: Final = bytes(80)  # position zero, a new store: its key sorts below any batch's (seq_to + 1 >= 1)
 _PLEDGE_DOMAIN: Final = b"RR/GATE/PRODUCER-PLEDGE/v2\x00"  # || SHA3-512 of the framed row columns (``_pledge``)
 _PENDING_DOMAIN: Final = b"RR/GATE/PRODUCER-PENDING/v1\x00"  # || SHA3-512 of the framed (tenant, shard) and a stored decide frame's record
 _RETRY_DOMAIN: Final = b"RR/GATE/PRODUCER-RETRY/v1\x00"  # || SHA3-512 of the framed (tenant, shard), retry key and its batch's checkpoint digest
+_RSET_DOMAIN: Final = b"RR/GATE/PRODUCER-RSET/v1\x00"  # || each non-empty (bucket, its hash) in bucket order (``_set_root``)
+_BUCKETS: Final = 1024  # a retry key's bucket is its top 10 bits
 _SCHEMA: Final = """
 CREATE TABLE IF NOT EXISTS batches(
   id INTEGER PRIMARY KEY, epoch INTEGER NOT NULL, seq_from INTEGER NOT NULL, seq_to INTEGER NOT NULL,
   digest BLOB NOT NULL UNIQUE, header BLOB NOT NULL, state_digest BLOB NOT NULL, tokens BLOB NOT NULL,
   signature BLOB, adds BLOB NOT NULL, pledge BLOB, cert BLOB NOT NULL,
-  qb BLOB, dq BLOB, cut BLOB, UNIQUE(epoch, seq_from));
+  qb BLOB, dq BLOB, cut BLOB, vcosign BLOB, listed BLOB, rset BLOB, UNIQUE(epoch, seq_from));
+CREATE TRIGGER IF NOT EXISTS batches_vcosign BEFORE UPDATE OF vcosign ON batches
+  WHEN OLD.signature IS NOT NULL OR NEW.vcosign IS NULL BEGIN SELECT RAISE(ABORT, 'append_only'); END;
 CREATE TRIGGER IF NOT EXISTS batches_quar BEFORE UPDATE OF qb, dq, cut ON batches BEGIN SELECT RAISE(ABORT, 'append_only'); END;
+CREATE TRIGGER IF NOT EXISTS batches_listed BEFORE UPDATE OF listed ON batches BEGIN SELECT RAISE(ABORT, 'append_only'); END;
+CREATE TRIGGER IF NOT EXISTS batches_rset BEFORE UPDATE OF rset ON batches BEGIN SELECT RAISE(ABORT, 'append_only'); END;
 CREATE TRIGGER IF NOT EXISTS batches_fixed BEFORE UPDATE OF id, epoch, seq_from, seq_to, digest, header,
   state_digest, tokens, adds, pledge, cert ON batches BEGIN SELECT RAISE(ABORT, 'append_only'); END;
 CREATE TRIGGER IF NOT EXISTS batches_seal BEFORE UPDATE OF signature ON batches
@@ -66,19 +84,26 @@ CREATE TRIGGER IF NOT EXISTS retries_fixed BEFORE UPDATE ON retries BEGIN SELECT
 CREATE TRIGGER IF NOT EXISTS retries_void BEFORE DELETE ON retries
   WHEN EXISTS(SELECT 1 FROM batches WHERE id=OLD.batch_id AND signature IS NOT NULL)
   BEGIN SELECT RAISE(ABORT, 'append_only'); END;
+CREATE TABLE IF NOT EXISTS earlier(batch_id INTEGER PRIMARY KEY REFERENCES batches(id), lists BLOB NOT NULL);
+CREATE TRIGGER IF NOT EXISTS earlier_fixed BEFORE UPDATE ON earlier BEGIN SELECT RAISE(ABORT, 'append_only'); END;
+CREATE TRIGGER IF NOT EXISTS earlier_void BEFORE DELETE ON earlier
+  WHEN EXISTS(SELECT 1 FROM batches WHERE id=OLD.batch_id AND signature IS NOT NULL)
+  BEGIN SELECT RAISE(ABORT, 'append_only'); END;
+CREATE TABLE IF NOT EXISTS rbuckets(b INTEGER PRIMARY KEY, h BLOB NOT NULL);
 """
-_COLUMNS: Final = "id, epoch, seq_to, digest, header, state_digest, tokens, signature, dq"
-_PLEDGED: Final = "epoch, seq_from, seq_to, digest, header, state_digest, tokens, adds, qb, dq, cut, cert"
+_COLUMNS: Final = "id, epoch, seq_to, digest, header, state_digest, tokens, signature, dq, vcosign"
+_PLEDGED: Final = "epoch, seq_from, seq_to, digest, header, state_digest, tokens, adds, qb, dq, cut, listed, rset, cert"
 
 
-_OPTIONAL: Final = tuple(_PLEDGED.split(", ").index(c) for c in ("qb", "dq", "cut"))
+_OPTIONAL: Final = tuple(_PLEDGED.split(", ").index(c) for c in ("qb", "dq", "cut", "listed", "rset"))
 
 
 def _pledge(who: tuple[str, int], row: Sequence) -> bytes:
     """The message the owner signs for a row: the store's (tenant, shard), then ``_PLEDGED``'s values, each framed
     (integers as 8 bytes big-endian), so a row copied from another shard's store does not verify here.  NULLs are
-    skipped; once any of qb, dq, cut is set, each set one is preceded by its column index, so bytes moved between
-    them change the message (a row with all three NULL, before cutover, keeps its message)."""
+    skipped; once any of qb, dq, cut, listed, rset is set, each set one is preceded by its column index, so bytes moved
+    between them change the message (a row with all five NULL, before cutover, before lists were stored and before the
+    root of its retry keys was pledged, keeps its message)."""
     tag = any(row[i] is not None for i in _OPTIONAL)
     row = [x for i, v in enumerate(row) if v is not None for x in ((i, v) if tag and i in _OPTIONAL else (v,))]
     fields = (v.to_bytes(8, "big") if type(v) is int else v.encode("ascii") if type(v) is str else bytes(v) for v in (*who, *row))
@@ -90,6 +115,40 @@ def _retry(who: tuple[str, int], key: bytes, digest: bytes) -> bytes:
     of the batch it names, so a key moved to another batch, or a row copied from another store, does not verify."""
     fields = (who[0].encode("ascii"), who[1].to_bytes(8, "big"), key, digest)
     return _RETRY_DOMAIN + hashlib.sha3_512(b"".join(map(signer.framed, fields))).digest()
+
+
+def _bucket(key: bytes) -> int:
+    """A retry key's bucket: its top 10 bits (keys are SHA3-256, so they spread evenly over the ``_BUCKETS``)."""
+    return int.from_bytes(key[:2], "big") >> 6
+
+
+def _bucket_hash(rows: Sequence[tuple[bytes, bytes]]) -> bytes | None:
+    """SHA3-512 over each (retry key, its batch's checkpoint digest), framed, of one bucket, in key order; None for none.
+    A value no owner writes (not bytes) raises TypeError."""
+    return hashlib.sha3_512(b"".join(signer.framed(k) + signer.framed(d) for k, d in rows)).digest() if rows else None
+
+
+def _set_root(buckets: dict[int, bytes]) -> bytes:
+    """The root of the set of retry keys (``rset``): SHA3-512 of ``_RSET_DOMAIN`` and each non-empty bucket (2 bytes) and its
+    framed hash, in bucket order.  A value no owner writes raises TypeError, OverflowError or AttributeError."""
+    return hashlib.sha3_512(_RSET_DOMAIN + b"".join(b.to_bytes(2, "big") + signer.framed(h) for b, h in sorted(buckets.items()))).digest()
+
+
+@contextlib.contextmanager
+def _decoded():
+    """Reads of a retries key: one sqlite cannot decode (text that is not UTF-8, which no owner writes) is ``store_tampered``;
+    any other database error, a locked or busy store included, passes."""
+    try:
+        yield
+    except sqlite3.OperationalError as error:
+        if str(error).startswith("Could not decode"):
+            raise GateProducerError("store_tampered") from error
+        raise
+
+
+def _signed(row) -> bytes:
+    """The signed checkpoint of a sealed ``_COLUMNS`` row: header, signature and the verifier's cosign record."""
+    return gate.attach_signature(row[4], row[7]) + (row[9] or b"")
 
 
 def _tokens(data: bytes) -> list[bytes]:
@@ -108,6 +167,40 @@ def _ident(data: bytes, at: int) -> tuple[bytes, int]:
     return data[at + 2 : end], end
 
 
+def _request_lines(body: bytes) -> tuple[str, str, list[bytes]]:
+    """(program, payment id, lines) of DECIDE-REQUEST/v2 bytes; read, not checked (the caller checks the lines root)."""
+    program, at = _ident(body, _ident(body, len(gate.DECIDE_REQUEST))[1])  # tenant, program
+    payment, at = _ident(body, _ident(body, at + 1)[1])  # flow, command key, payment
+    at = _ident(body, _ident(body, at + gate.MEMBER_KEY)[1] + 8)[1]  # member, payee, amount, period
+    lines, at = [], at + 2
+    for _ in range(int.from_bytes(body[at - 2 : at], "big")):
+        line, at = _ident(body, at)
+        lines.append(line)
+    return program.decode("ascii"), payment.decode("ascii"), lines
+
+
+def _twin_key(line: bytes) -> tuple[str, bytes]:
+    """(line id, the line's bytes but its id) of a canonical line (``gate.encode_line``): two lines with the same bytes
+    but the id are Lean ``sameLine``.  An id that is not ASCII is kept replaced: no list naming it has a signed root."""
+    end = 3 + int.from_bytes(line[1:3], "big")
+    return line[3:end].decode("ascii", "replace"), line[:1] + line[end:]
+
+
+def _root(entries: tuple[tuple[str, str, str, str], ...]) -> bytes | None:
+    """``gate.earlier_root`` of ``entries``; None for a list no answer carries (a line id twice, say)."""
+    try:
+        return gate.earlier_root(entries)
+    except gate.GateCodecError:
+        return None
+
+
+def _heads(header: bytes) -> tuple[bytes, bytes]:
+    """(``event_head``, ``token_root``) of CHECKPOINT/v3 header bytes: the digest of the shard's sealed batch before it
+    (zero for its first), and the Merkle root of its token leaves."""
+    at = _ident(header, _ident(header, len(gate.CHECKPOINT) + 1)[1])[1] + 4 + 3 * 8 + gate.DIGEST  # tenant, program; shard, seqs, epoch, prev
+    return header[at : at + gate.DIGEST], header[at + gate.DIGEST : at + 2 * gate.DIGEST]
+
+
 def _owner(header: bytes) -> tuple[str, int] | None:
     """The (tenant, shard) a CHECKPOINT/v3 header names; None for any other bytes."""
     if not header.startswith(gate.CHECKPOINT):
@@ -121,9 +214,9 @@ class GateProducerError(RuntimeError):
     """The store is locked, unavailable, rewound or from a newer epoch, or a batch was empty or refused."""
 
 
-def _custody(tpm: int | None, root_pk: bytes, cert: bytes, signed: bytes) -> str:
+def _custody(tpm: int | None, link: bytes, cert: bytes, signed: bytes) -> str:
     """Lean ``custodyOf``'s step (``create``, ``ready``, ``catch_up``); its refusal is raised under Lean's name."""
-    step = signer.custody(tpm, root_pk, cert, signed)
+    step = signer.custody(tpm, link, cert, signed)
     if step not in ("create", "ready", "catch_up"):
         raise GateProducerError(step)
     return step
@@ -131,13 +224,16 @@ def _custody(tpm: int | None, root_pk: bytes, cert: bytes, signed: bytes) -> str
 
 class ShardProducer:
     def __init__(self, path: Path, *, mark_path: Path, tenant_id: str, shard_id: int, epoch: int, handle: str,
-                 root_pk: bytes, key_cert: bytes, payer_newest: bytes | None, counter, floors, lock=contextlib.nullcontext) -> None:
-        """``floors``: a callable giving the tenant's (grant serial, key-set epoch) floors, read from the tenant's floor file
-        alone (``right_rail_gate_decide.TenantAuthority.floors_in``), so any shard can reopen first after a cold restart.  An
-        unsigned reservation found at start, never released, is sealed only if its authority record is not below the higher of
-        those floors and this shard's own newest sealed record; otherwise it is voided (its batch is decided again) and the
+                 link: bytes, key_cert: bytes, payer_newest: bytes | None, counter, floors, cosign, lock=contextlib.nullcontext) -> None:
+        """``floors``: a callable giving the tenant's (grant serial, key-set epoch, rule-set version, rule-set digest)
+        floors, read from the tenant's floor file alone (``right_rail_gate_decide.TenantAuthority.floors_in``), so any shard
+        can reopen first after a cold restart.  An unsigned reservation found at start, never released, is sealed only if its
+        authority record is behind neither those floors nor this shard's own newest sealed record (``chain.behind``); otherwise it is voided (its batch is decided again) and the
         start refuses ``reservation_below_floor``.  ``lock``: the tenant's floor lock as a context (``TenantAuthority._locked``'s
         file), taken around the last floor check and the stored signature of a reseal at start, as ``commit``'s ``lock`` is.
+        ``link``: the tenant's held AUTHORITY-LINK/v1 (the certificate and every checkpoint count only under it).  ``cosign``: a
+        callable from a signed checkpoint (header and signature) to the verifier's cosign record; the verifier service is its
+        caller's, and ``signer.seal`` releases nothing that Lean ``publishOk`` does not accept with that record.
         ``payer_newest``: the digest of the payer's newest stored checkpoint for this shard, ``gate.ZERO_DIGEST`` if it
         has none, ``None`` if the caller could not read it (``payer_unavailable``).  A store that does not hold it sealed is
         ``store_rewound``.  Both refusals come before anything is created or written, so they repeat on every start.
@@ -154,30 +250,32 @@ class ShardProducer:
         if payer_newest != gate.ZERO_DIGEST and not Path(path).exists():
             raise GateProducerError("store_rewound")
         if not Path(path).exists():
-            _custody(counter.read(), root_pk, b"", b"")  # a missing store: refused before a file is created
+            _custody(counter.read(), link, b"", b"")  # a missing store: refused before a file is created
         self.shard, self.tenant = shard_id, tenant_id
         self._flat_count = (0, 0)  # (id of the last sealed batch counted, sealed batches so far)
         self._authority: tuple[int, bytes | None] = (0, None)  # (id of the sealed batch checked, its authority record)
         # the whole answer the last decide prepared, until it is sealed: ``commit`` signs only an answer equal to it
         self.prepared = None
         self._counter, self._floors, self._lock, self._closed = counter, floors, lock, False
-        self._who, self._epoch, self._handle, self._root_pk, self._cert, self._mark = (tenant_id, shard_id), epoch, handle, root_pk, key_cert, mark_path
+        self._who, self._epoch, self._handle, self._link, self._cert, self._mark = (tenant_id, shard_id), epoch, handle, link, key_cert, mark_path
+        self._cosign = cosign
         self._db = sqlite3.connect(path, timeout=0, isolation_level=None)
         try:
             for pragma in ("locking_mode=EXCLUSIVE", "journal_mode=WAL", "synchronous=FULL"):
                 self._db.execute(f"PRAGMA {pragma}")
             columns = [column[1] for column in self._db.execute("PRAGMA table_info(batches)")]
-            if columns and ("cert" not in columns or "idreg_n" in columns):
-                raise GateProducerError("store_version")  # a store without pledged certificates, or from before line identity was per shard: refused, never migrated
+            if columns and ("cert" not in columns or "vcosign" not in columns or "idreg_n" in columns):
+                raise GateProducerError("store_version")  # a store without pledged certificates or cosign records, or from before line identity was per shard: refused, never migrated
             retries = [column[1] for column in self._db.execute("PRAGMA table_info(retries)")]
             if retries and "pledge" not in retries:
                 raise GateProducerError("store_version")  # retry rows without the owner's pledge: refused, never migrated
             if payer_newest != gate.ZERO_DIGEST and not (columns and self._db.execute(
                     "SELECT 1 FROM batches WHERE digest=? AND signature IS NOT NULL", (payer_newest,)).fetchone()):
                 raise GateProducerError("store_rewound")  # the payer's newest checkpoint, sealed here; the TPM counter (custody branch) replaces this
-            for column in [c for c in ("qb", "dq", "cut") if columns and c not in columns]:  # older rows: NULL, not cut over
-                self._db.execute(f"ALTER TABLE batches ADD COLUMN {column} BLOB")
-            self._db.executescript(_SCHEMA)
+            # older rows: NULL, not cut over, no lists stored, no root of the retry keys (``rbuckets`` starts empty).  The migration is one transaction, committed only once every
+            # refusal below has passed: a refused open closes, which rolls it back, so the store stays byte for byte as it was
+            alter = "".join(f"ALTER TABLE batches ADD COLUMN {c} BLOB;" for c in ("qb", "dq", "cut", "listed", "rset") if columns and c not in columns)
+            self._db.executescript(f"BEGIN IMMEDIATE;{alter}{_SCHEMA}")
         except sqlite3.OperationalError as error:
             self._db.close()
             raise GateProducerError("store_locked") from error
@@ -197,8 +295,11 @@ class ShardProducer:
                 raise GateProducerError("unsealed_old_epoch")
             if open_:  # only the owner's own reservation is resealed: one, the newest row, this shard's, its pledge this key's
                 *row, pledge = self._db.execute(f"SELECT {_PLEDGED}, pledge FROM batches WHERE id=?", (open_[0],)).fetchone()
-                if (len(opens) > 1 or (last and last[0] > open_[0]) or type(pledge) is not bytes or _owner(open_[4]) != self._who
-                        or not signer.verify(signer.public_key(handle), _pledge(self._who, row), pledge)):
+                try:
+                    owned = type(pledge) is bytes and signer.verify(signer.public_key(handle), _pledge(self._who, row), pledge)
+                except (TypeError, ValueError, OverflowError):  # a value no owner writes (text, or an integer outside 8 bytes)
+                    owned = False
+                if len(opens) > 1 or (last and last[0] > open_[0]) or _owner(open_[4]) != self._who or not owned:
                     raise GateProducerError("store_tampered")
             if last and not self._trusted(last[0]):  # before the mark moves to it, it is served
                 raise GateProducerError("store_tampered")
@@ -206,8 +307,12 @@ class ShardProducer:
             # before the mark moves and before any reseal: a refusal here writes nothing and repeats on every start
             stored = int.from_bytes(last[4][-8:], "big") if last else None  # the newest sealed header's own counter
             cert = self._db.execute("SELECT cert FROM batches WHERE id=?", (last[0],)).fetchone()[0] if last else b""
-            step = _custody(counter.read(), root_pk, cert,  # always: a store can appear after the check above
-                            gate.attach_signature(last[4], last[7]) if last else b"")
+            step = _custody(counter.read(), link, cert,  # always: a store can appear after the check above
+                            _signed(last) if last else b"")
+            try:
+                self._db.execute("COMMIT")  # the migration above: every refusal before it has passed
+            except sqlite3.OperationalError as error:  # as when the migration itself fails: closed below, rolled back
+                raise GateProducerError("store_locked") from error
             self._check_mark(last)
             if step == "catch_up" and counter.increment() != stored:  # Custody.lean seal_crash_resumes: increment once, read back
                 raise GateProducerError("counter_raced")
@@ -218,33 +323,72 @@ class ShardProducer:
             raise
 
     def _void(self, id_: int) -> None:
-        """Delete an unsigned reservation (its retry key, its record and its batch) in one transaction: all go or none."""
+        """Delete an unsigned reservation (its retry key, record, earlier lists and batch) in one transaction: all go or none.
+        Its key's bucket hash is recomputed in the same transaction when its rows were as stored; otherwise it is left for a
+        miss in that bucket to find (``store_tampered``), never rebuilt over a changed row."""
         self._db.execute("BEGIN IMMEDIATE")
         try:
+            with _decoded():
+                found = self._db.execute("SELECT key FROM retries WHERE batch_id=?", (id_,)).fetchone()
+            b = _bucket(found[0]) if found and type(found[0]) is bytes else None
+            stored = None if b is None else self._db.execute("SELECT h FROM rbuckets WHERE b=?", (b,)).fetchone()
+            try:
+                kept = stored is not None and _bucket_hash(self._rows(b)) == stored[0]
+            except TypeError:
+                kept = False
             self._db.execute("DELETE FROM retries WHERE batch_id=?", (id_,))
             self._db.execute("DELETE FROM records WHERE batch_id=?", (id_,))
+            self._db.execute("DELETE FROM earlier WHERE batch_id=?", (id_,))
             self._db.execute("DELETE FROM batches WHERE id=?", (id_,))
+            if kept:
+                h = _bucket_hash(self._rows(b))
+                self._db.execute(*(("DELETE FROM rbuckets WHERE b=?", (b,)) if h is None else ("INSERT OR REPLACE INTO rbuckets(b, h) VALUES(?, ?)", (b, h))))
         except BaseException:
             self._db.execute("ROLLBACK")
             raise
         self._db.execute("COMMIT")
 
-    def _trusted(self, id_: int, also: tuple[bytes, bytes] = (b"", b"")) -> bool:
-        """Whether sealed row ``id_`` is as its owner wrote it: its certificate is the root key's for this tenant and
-        the row's epoch, and that certificate's key signed the row's pledge and its checkpoint header (this shard's), and
-        ``also`` (message, signature), when it names a message."""
-        *row, pledge, signature = self._db.execute(f"SELECT {_PLEDGED}, pledge, signature FROM batches WHERE id=?", (id_,)).fetchone()
-        cert, size, pk = row[-1], gate.ML_DSA_87_SIGNATURE, gate.ML_DSA_87_PUBLIC_KEY
+    def _rows(self, b: int) -> list[tuple[bytes, bytes]]:
+        """(retry key, its batch's checkpoint digest) of each retries row in bucket ``b``, in key order: the keys from
+        ``b``'s 10 bits followed by zeros up to the next bucket's (bucket 0 and the last are open below and above)."""
+        bounds = ([("key >= ?", (b << 6).to_bytes(2, "big"))] if b > 0 else []) + ([("key < ?", ((b + 1) << 6).to_bytes(2, "big"))] if b < _BUCKETS - 1 else [])
+        where = " AND ".join(c for c, _ in bounds)
+        with _decoded():
+            return self._db.execute(f"SELECT key, digest FROM retries JOIN batches ON id = batch_id WHERE {where} ORDER BY key",
+                                    [v for _, v in bounds]).fetchall()
+
+    def _checked(self, key: bytes, root: bytes) -> tuple[dict[int, bytes], list[tuple[bytes, bytes]]]:
+        """The stored bucket hashes and ``key``'s bucket's rows (``_rows``), once those hashes give ``root`` (the newest row's
+        pledged ``rset``) and those rows give their bucket's stored hash (no row for an empty bucket); else ``store_tampered``,
+        and nothing is written.  No signature is checked here: the open checked the newest row's pledge, or this producer wrote it."""
         try:
-            body, sig = cert[: -2 - size], cert[-size:]
-            return (cert[-2 - size : -size] == size.to_bytes(2, "big") and body.startswith(gate.KEY_CERT)
-                    and _ident(body, len(gate.KEY_CERT) + 1)[0] == self._who[0].encode("ascii")
-                    and int.from_bytes(body[-pk - 12 : -pk - 4], "big") == row[0] and _owner(row[4]) == self._who
-                    and signer.verify(self._root_pk, body, sig)
-                    and signer.verify(body[-pk:], _pledge(self._who, row), pledge)
-                    and signer.verify(body[-pk:], row[4], signature)
-                    and (not also[0] or signer.verify(body[-pk:], *also)))
-        except (TypeError, ValueError, AttributeError):  # a value no owner writes (text where bytes are stored)
+            buckets, rows = dict(self._db.execute("SELECT b, h FROM rbuckets")), self._rows(_bucket(key))
+            if _set_root(buckets) != root or _bucket_hash(rows) != buckets.get(_bucket(key)):
+                raise GateProducerError("store_tampered")
+        except (TypeError, OverflowError, AttributeError) as error:  # a value no owner writes
+            raise GateProducerError("store_tampered") from error
+        return buckets, rows
+
+    def _trusted(self, id_: int, also: tuple[bytes, bytes] = (b"", b"")) -> bool:
+        """Whether sealed row ``id_`` is as its owner wrote it: its certificate is the held link's, signed by its root and
+        witness keys, for this tenant and the row's epoch, and that certificate's key signed the row's pledge and its
+        checkpoint header (this shard's), the certificate's verifier key signed the header's cosign record, and ``also``
+        (message, signature), when it names a message."""
+        *row, pledge, signature, vcosign = self._db.execute(
+            f"SELECT {_PLEDGED}, pledge, signature, vcosign FROM batches WHERE id=?", (id_,)).fetchone()
+        try:
+            cert, held = gate.read_key_cert(row[-1]), gate.read_link(self._link)
+            vrel, vsig = vcosign[len(gate.VCOSIGN) : len(gate.VCOSIGN) + gate.DIGEST], vcosign[-gate.ML_DSA_87_SIGNATURE :]
+            return (cert.tenant_id == self._who[0] == held.tenant_id and cert.epoch == row[0] and _owner(row[4]) == self._who
+                    and cert.link == gate.sha3_512(held.body)
+                    and signer.verify(held.root_key, cert.body, cert.root_signature)
+                    and signer.verify(held.witness_key, cert.body, cert.witness_signature)
+                    and signer.verify(cert.key, _pledge(self._who, row), pledge)
+                    and signer.verify(cert.key, row[4], signature)
+                    and gate.encode_cosign(vrel, vsig) == vcosign
+                    and signer.verify(cert.verifier_key, gate.cosign_message(row[4], vrel), vsig)
+                    and (not also[0] or signer.verify(cert.key, *also)))
+        except (TypeError, ValueError, AttributeError, OverflowError):  # a value no owner writes (text where bytes are stored, an integer outside 8 bytes)
             return False
 
     def _void_or_close(self, id_: int) -> None:
@@ -286,11 +430,12 @@ class ShardProducer:
         """Void reservation ``row`` and refuse ``reservation_below_floor`` if its authority record is below the tenant's floors or
         below this shard's own newest sealed record; floors that cannot be read void it too (nothing is signed or released
         for it, so voiding is always safe) and the read error is raised."""
-        auth = lambda id_: chain.floors_of(bytes(self._db.execute(  # no record (empty adds) reads as (0, 0): below any raised floor
+        auth = lambda id_: chain.floors_of(bytes(self._db.execute(  # no record (empty adds) reads as none: below any raised floor
             "SELECT substr(adds, 1, ?) FROM batches WHERE id=?", (chain.AUTH, id_)).fetchone()[0] or b""))
         below = failed = None
         try:
-            below = any(a < max(b, c) for a, b, c in zip(auth(row[0]), self._floors(), auth(last[0]) if last else (0, 0)))
+            mine = auth(row[0])
+            below = chain.behind(mine, self._floors()) or bool(last) and chain.behind(mine, auth(last[0]))
         except Exception as error:
             failed = error
         except BaseException:  # an interrupt: not voided, so the reservation stays for a reopen and nothing more is served
@@ -316,8 +461,8 @@ class ShardProducer:
             self._void_or_close(row[0])
             raise
         try:
-            signature = signer.seal(self._handle, self._root_pk, self._cert, last and gate.attach_signature(last[4], last[7]),
-                                    row[4], tokens, before)
+            signature, record = signer.seal(self._handle, self._link, self._cert, last and _signed(last),
+                                            row[4], tokens, before, self._cosign)
         except signer.GateSignerError as error:
             if str(error) == "gate_verify_refused":  # no signature left custody: the reservation can be voided
                 self._void_or_close(row[0])
@@ -333,7 +478,7 @@ class ShardProducer:
                 stage = 1
                 self._check_floors(row, last)  # voids the reservation itself when it refuses
                 stage = 2
-                self._db.execute("UPDATE batches SET signature=? WHERE id=?", (signature, row[0]))
+                self._db.execute("UPDATE batches SET signature=?, vcosign=? WHERE id=?", (signature, record, row[0]))
                 moved = self._counter.increment()
         except BaseException as error:
             if stage == 0:  # nothing signed is stored: void it, the producer stays open and a retry decides the batch again
@@ -365,7 +510,7 @@ class ShardProducer:
         """Seal the batch ``decide`` prepared -> (checkpoint, signed checkpoint, tokens).  No caller supplies a leaf: ``ans``
         must equal ``self.prepared`` (set only by ``decide``, so its payments are Lean's ``RULES_PAY`` answers), and each leaf
         copies its request's own fields, Lean's outcome and reason codes, the deciding worker's release (as rule version and engine release)
-        INPUT/v6 as Lean and the host each computed it, and Lean's authority and grant id; the batch's frame is stored with it (``record``), and an answer
+        INPUT/v7 as Lean and the host each computed it, and Lean's authority and grant id; the batch's frame is stored with it (``record``), and an answer
         naming a retry key (``ans.retry``) is filed under it in the same transaction (``answered``); the caller names the program.  The answer is spent from here.  ``cut``, (qb, cut tag) of the batch that cut over,
         once (``cut_over``); a database error before the reservation is stored is ``store_unavailable`` (one writing the reservation is tried again, at most
         ``_TRIES`` times, first).  ``admit``: a context the reservation is written
@@ -378,20 +523,25 @@ class ShardProducer:
         leaves = [gate.TokenLeaf(y.tenant, program, self._who[1], y.flow, 0, y.payment_id, y.member_key, y.payee_ref,
                                  y.cents, y.period, y.lines_root, y.outcome, y.reasons, y.authority, y.grant_id, y.bypass,
                                  ans.release, ans.release, y.input, created_at, 0, 0, created_at,
-                                 created_at) for y in ans.pays]
+                                 created_at, gate.earlier_root(y.earlier) if y.earlier else gate.ZERO_DIGEST)
+                  for y in ans.pays]
         try:
-            return self._commit(program, leaves, ans.digest, created_at, ans.adds, cut, ans.frame, ans.retry, admit, lock)
+            return self._commit(program, leaves, ans.digest, created_at, ans.adds, cut, ans.frame, ans.retry,
+                                {y.payment_id: y.earlier for y in ans.pays}, admit, lock)
         except sqlite3.Error as error:
             raise GateProducerError("store_unavailable") from error
 
     def _commit(self, program: str, leaves: Sequence[gate.TokenLeaf], state_digest: bytes, created_at: int,
-                adds: bytes, cut: tuple[bytes, bytes] | None, frame: bytes, retry: bytes, admit, lock):
+                adds: bytes, cut: tuple[bytes, bytes] | None, frame: bytes, retry: bytes,
+                earlier: dict[str, tuple[tuple[str, str, str, str], ...]], admit, lock):
         if not leaves:
             raise GateProducerError("empty_batch")
         if any((leaf.tenant_id, leaf.shard_id) != self._who for leaf in leaves):
             raise GateProducerError("foreign_leaf")  # this writer's chain holds only its own shard
+        if retry and len(retry) != 32:  # a retry key is SHA3-256 (``_bucket`` and the SQL bounds place only such keys alike): nothing is written
+            raise GateProducerError("bad_retry_key")
         last = self._sealed()
-        newest = self._db.execute("SELECT signature IS NULL FROM batches ORDER BY id DESC LIMIT 1").fetchone()
+        newest = self._db.execute("SELECT signature IS NULL, rset FROM batches ORDER BY id DESC LIMIT 1").fetchone()
         if newest and newest[0]:  # only the newest row can be open: a start refuses any other (store_tampered), and the lock holds the rest out
             raise GateProducerError("unsealed_reservation")
         if cut and last and last[8] is not None:
@@ -407,8 +557,28 @@ class ShardProducer:
         header = gate.encode_checkpoint_header(checkpoint)
         framed = b"".join(signer.framed(gate.encode_token(token)) for token in tokens)
         digest = gate.checkpoint_digest(checkpoint)
+        lists = b"".join(gate.earlier_body(earlier[leaf.payment_id]) for leaf in ordered if leaf.outcome == "ANSWERED")  # token order
+        # the root of the set of retry keys, this batch's included: at the store's first commit under it every bucket is built
+        # from its rows; after that only the key's bucket, from rows first checked against the pledged root (as ``answered``)
+        whole, writes = not newest or newest[1] is None, {}
+        try:
+            if whole:  # bucket by bucket: only the key's own bucket's rows are kept
+                buckets, rows = {}, []
+                for b in range(_BUCKETS):
+                    if (h := _bucket_hash(got := self._rows(b))) is not None:
+                        buckets[b] = h
+                    if retry and b == _bucket(retry):
+                        rows = got
+                writes = buckets
+            elif retry:
+                buckets, rows = self._checked(retry, newest[1])
+            if retry:
+                buckets[_bucket(retry)] = writes[_bucket(retry)] = _bucket_hash(sorted([*rows, (retry, digest)]))
+            rset = _set_root(buckets) if whole or retry else newest[1]
+        except (TypeError, OverflowError, AttributeError) as error:  # a value no owner writes, in a store's older rows
+            raise GateProducerError("store_tampered") from error
         row = (self._epoch, checkpoint.seq_from, checkpoint.seq_to, digest, header, state_digest, framed, adds, cut and cut[0], hashlib.sha3_512(cut[0]).digest() if cut else last and last[8],
-               cut and cut[1], self._cert)
+               cut and cut[1], 1 if lists else None, rset, self._cert)  # listed: an int, never a bool (``_pledge`` frames ints)
         retried = retry and signer.sign(self._handle, _retry(self._who, retry, digest))
         with admit():  # the admission: the reservation is written under it or not at all
             self.prepared = None  # spent once admitted: a refusal before it (a busy lock) keeps the answer
@@ -422,6 +592,13 @@ class ShardProducer:
                     self._db.execute("INSERT INTO records(batch_id, frame) VALUES(?, ?)", (batch_id, frame))
                     if retry:
                         self._db.execute("INSERT INTO retries(key, batch_id, pledge) VALUES(?, ?, ?)", (retry, batch_id, retried))
+                    if whole:
+                        self._db.execute("DELETE FROM rbuckets")
+                    for b, h in writes.items():  # one execute per row: every write goes through the same call
+                        self._db.execute("INSERT OR REPLACE INTO rbuckets(b, h) VALUES(?, ?)", (b, h))
+                    self._db.execute("DELETE FROM earlier WHERE batch_id=?", (batch_id,))  # an orphan an older void left at a reused id
+                    if lists:
+                        self._db.execute("INSERT INTO earlier(batch_id, lists) VALUES(?, ?)", (batch_id, lists))
                     self._db.execute("COMMIT")
                     break
                 except BaseException as error:
@@ -431,7 +608,7 @@ class ShardProducer:
                         raise
                     time.sleep(0.05 * tries)
         sealed = self._seal(self._db.execute(f"SELECT {_COLUMNS} FROM batches WHERE digest=?", (digest,)).fetchone(), last, lock)
-        return checkpoint, gate.attach_signature(sealed[4], sealed[7]), tokens
+        return checkpoint, _signed(sealed), tokens
 
     def record(self, batch_id: int) -> bytes:
         """The exact decide frame batch ``batch_id`` (its ``id``) was decided on: what a replay re-runs."""
@@ -441,18 +618,140 @@ class ShardProducer:
             raise GateProducerError("no_record")
         return found[0]
 
-    def answered(self, key: bytes) -> tuple[bytes, tuple[bytes, ...]] | None:
-        """(signed checkpoint, token bytes) of the sealed batch filed under retry ``key``: what an exact retry of its requests is
-        given, byte for byte.  None while no sealed batch is filed under it.  A row whose pledge, or whose batch, is not as
-        its owner wrote it (a key moved to another batch, say) is ``store_tampered``, and the row is kept as evidence."""
+    def answered(self, key: bytes) -> tuple[bytes, tuple[bytes, ...], tuple[tuple[tuple[str, str, str, str], ...], ...]] | None:
+        """(signed checkpoint, token bytes, per token its earlier list, empty unless ANSWERED) of the sealed batch filed under
+        retry ``key``: what an exact retry of its requests is given, byte for byte.  None while no sealed batch is filed under
+        it, once the stored bucket hashes give the newest row's pledged root of the retry keys and ``key``'s bucket's rows
+        give its hash (``_checked``): otherwise a filed row was deleted or rekeyed, and the miss is ``store_tampered``, never
+        decided again (a store whose newest row pledges no root, before its first commit under it, is not checked).
+        A row whose pledge, or whose batch, is not as its owner wrote it (a key moved to another batch, say), or a stored
+        earlier list that is not its token's (``earlier_root``), or no stored list for a batch whose pledged row says it
+        stored them (``listed``), is ``store_tampered``, and the row is kept as evidence.  A batch with ANSWERED tokens,
+        sealed before lists were stored, has them rebuilt from the shard's stored frames and stored (``_rebuilt``): never
+        served without them, and never with any list but the one its tokens sign."""
         self._live()
-        row = self._db.execute("SELECT id, digest, retries.pledge, header, signature, tokens FROM retries JOIN batches ON id = batch_id "
+        row = self._db.execute("SELECT id, digest, retries.pledge, header, signature, tokens, vcosign, lists, listed FROM retries "
+                               "JOIN batches ON id = retries.batch_id LEFT JOIN earlier ON earlier.batch_id = id "
                                "WHERE key=? AND signature IS NOT NULL", (key,)).fetchone()
         if row is None:
+            root = self._db.execute("SELECT rset FROM batches ORDER BY id DESC LIMIT 1").fetchone()
+            if root and root[0] is not None:
+                self._checked(key, root[0])
             return None
         if type(row[1]) is not bytes or not self._trusted(row[0], (_retry(self._who, key, row[1]), row[2])):
             raise GateProducerError("store_tampered")
-        return gate.attach_signature(row[3], row[4]), tuple(_tokens(row[5]))
+        tokens, lists, at = tuple(_tokens(row[5])), [], 0
+        read = [gate.read_token(token) for token in tokens]
+        roots = [r[3] for r in read]
+        if row[7] is None and any(root != gate.ZERO_DIGEST for root in roots):
+            if row[8] is not None:  # sealed with its lists stored (pledged above): the row was deleted, never rebuilt
+                raise GateProducerError("store_tampered")
+            return gate.attach_signature(row[3], row[4]) + row[6], tokens, self._rebuilt(row[0], row[5], read)
+        try:
+            for root in roots:
+                entries, at = ((), at) if root == gate.ZERO_DIGEST else gate.read_earlier(row[7], at)
+                if entries and gate.earlier_root(entries) != root:
+                    raise GateProducerError("store_tampered")
+                lists.append(entries)
+            if row[7] is not None and at != len(row[7]):  # lists no token names
+                raise GateProducerError("store_tampered")
+        except (gate.GateCodecError, TypeError) as error:
+            raise GateProducerError("store_tampered") from error
+        return gate.attach_signature(row[3], row[4]) + row[6], tokens, tuple(lists)
+
+    def _rebuilt(self, id_: int, packed: bytes, read: Sequence[tuple[str, str, tuple[str, ...], bytes]]
+                 ) -> tuple[tuple[tuple[str, str, str, str], ...], ...]:
+        """Per token of sealed batch ``id_`` (its tokens column ``packed``, each read as ``gate.read_token``), sealed before
+        earlier lists were stored, the list its token signs, then stored in ``earlier`` so a later retry reads it as any other
+        batch's (``answered`` checks it against the same root).  An answered line's twin is a line of an ALLOW payment of an
+        earlier sealed batch of this shard whose bytes but the id are its own (Lean ``sameLine`` compares every field after
+        the id).  Batches are read in store order, and after each one that adds a twin, each payment still open is given
+        every line with a twin its first one (Lean ``twin``: the first released line); the read stops once every payment
+        has the signed ``earlier_root``.  Only for payments still open after the whole history are the other choices
+        tried, at most ``_SEARCH`` lists in all.  Only a list with the signed root is ever returned.  A stored frame that
+        is missing or that the decide layer cannot read (no store that opens has one), or a request that is not its
+        token's (another program or payment, or lines that are not its ``lines_root``), is ``store_tampered``.  With no
+        list found, the batches below ``id_`` are checked (``_chained``: their headers and token leaves hash up to this
+        trusted batch, so each frame read above was checked against its signed tokens): a check that fails is
+        ``store_tampered``, else ``store_version_earlier``: refused, never guessed."""
+        from app import right_rail_gate_decide as decide  # the frame's format is the decide layer's; it imports this module
+
+        def requests(frame, tokens: bytes) -> list[tuple[str, str, list[bytes], str]]:
+            """(program, payment id, lines, signed outcome) of each request of a stored batch, checked against its tokens."""
+            if type(frame) is not bytes:  # every batch's frame is stored in its reservation's transaction
+                raise GateProducerError("store_tampered")
+            out = []
+            try:
+                signed = {p: (program, root, outcome) for program, p, root, outcome in map(gate.read_token_lines, _tokens(tokens))}
+                for program, payment, lines in map(_request_lines, decide._requests(frame)[1]):
+                    if signed.get(payment, ())[:2] != (program, gate.lines_root(lines)):
+                        raise GateProducerError("store_tampered")
+                    out.append((program, payment, lines, signed[payment][2]))
+            except (decide.GateDecideError, gate.GateCodecError, UnicodeDecodeError, IndexError, TypeError) as error:
+                raise GateProducerError("store_tampered") from error  # TypeError: a value no owner writes
+            if len(out) != len(signed) or {x[1] for x in out} != signed.keys():  # one request a token
+                raise GateProducerError("store_tampered")
+            return out
+
+        def refuse() -> None:
+            if not self._chained(id_):
+                raise GateProducerError("store_tampered")
+            raise GateProducerError("store_version_earlier")
+
+        def first(i: int) -> tuple[tuple[str, str, str, str], ...]:
+            return tuple(sorted(((line_id, *twins[same][0]) for line_id, same in open_[i] if same in twins), key=lambda e: e[0].encode()))
+        found = self._db.execute("SELECT frame FROM records WHERE batch_id=?", (id_,)).fetchone()
+        own = {p: lines for _, p, lines, _ in requests(found and found[0], packed)}
+        open_ = {i: list(map(_twin_key, own[payment])) for i, (payment, _, _, root) in enumerate(read) if root != gate.ZERO_DIGEST}
+        want = {same for keys in open_.values() for _, same in keys}
+        lists: list[tuple[tuple[str, str, str, str], ...]] = [() for _ in read]
+        twins: dict[bytes, list[tuple[str, str, str]]] = {}  # a line's bytes but the id: (program, payment id, line id) of each paid one, in store order
+        with contextlib.closing(self._db.execute("SELECT frame, tokens FROM batches LEFT JOIN records ON batch_id = id "
+                                                 "WHERE id < ? AND signature IS NOT NULL ORDER BY id", (id_,))) as history:
+            for frame, tokens in history:  # one frame at a time
+                added = False
+                for program, payment, lines, outcome in requests(frame, tokens):
+                    for line_id, same in map(_twin_key, lines):
+                        if outcome == "ALLOW" and same in want and (program, payment, line_id) not in twins.get(same, ()):
+                            twins.setdefault(same, []).append((program, payment, line_id))
+                            added = True
+                for i in list(open_) if added else ():
+                    if _root(entries := first(i)) == read[i][3]:
+                        lists[i] = entries
+                        del open_[i]
+                if not open_:
+                    break
+        # each payment still open: per line with a twin, no entry or one entry per twin
+        options = {i: [[None, *((line_id, *twin) for twin in twins[same])] for line_id, same in keys if same in twins] for i, keys in open_.items()}
+        if sum(math.prod(map(len, o)) for o in options.values()) > _SEARCH:
+            refuse()
+        for i, o in options.items():
+            entries = next((e for e in (tuple(sorted(filter(None, pick), key=lambda e: e[0].encode())) for pick in itertools.product(*o))
+                            if _root(e) == read[i][3]), None)
+            if entries is None:
+                refuse()
+            lists[i] = entries
+        with contextlib.suppress(sqlite3.Error):  # each list has its signed root; one not stored is only rebuilt again next time
+            self._db.execute("INSERT INTO earlier(batch_id, lists) VALUES(?, ?)",
+                             (id_, b"".join(gate.earlier_body(e) for e, r in zip(lists, read) if r[3] != gate.ZERO_DIGEST)))
+        return tuple(lists)
+
+    def _chained(self, id_: int) -> bool:
+        """Whether the sealed batches up to ``id_`` form one hash chain: each row's digest is the SHA3-512 of its header,
+        each header's ``event_head`` the digest of the sealed row before it (zero for the first), and its ``token_root`` the
+        Merkle root of its stored tokens' leaves.  With ``id_`` trusted, a sealed row removed below it, or a header or a
+        token leaf changed (an outcome, a payment, a lines root), shows: hashes only, no signature."""
+        prev = gate.ZERO_DIGEST
+        for digest, header, tokens in self._db.execute("SELECT digest, header, tokens FROM batches WHERE id <= ? AND "
+                                                       "signature IS NOT NULL ORDER BY id", (id_,)):
+            try:
+                if (digest != gate.sha3_512(header) or _heads(header) != (prev, gate.merkle_tree(
+                        gate.MERKLE_NODE, [gate.token_leaf(token) for token in _tokens(tokens)])[0])):
+                    return False
+            except (gate.GateCodecError, IndexError, TypeError):  # bytes no owner writes, or a value that is not bytes
+                return False
+            prev = digest
+        return True
 
     def vouch(self, record: bytes) -> bytes:
         """This owner's signature over a stored decide frame's ``record`` for this (tenant, shard), under ``_PENDING_DOMAIN``."""
@@ -471,8 +770,8 @@ class ShardProducer:
     def published(self) -> list[bytes]:
         """The sealed signed checkpoints in seq order."""
         self._live()
-        return [gate.attach_signature(header, signature) for header, signature in
-                self._db.execute("SELECT header, signature FROM batches WHERE signature IS NOT NULL ORDER BY id")]
+        return [gate.attach_signature(header, signature) + record for header, signature, record in
+                self._db.execute("SELECT header, signature, vcosign FROM batches WHERE signature IS NOT NULL ORDER BY id")]
 
     def anchor(self) -> bytes | None:
         """The last sealed checkpoint's state digest (None at the shard's genesis): the decide layer's anchor."""

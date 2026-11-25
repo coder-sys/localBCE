@@ -47,13 +47,13 @@ def tokenFits (c : Crypto) (k : Nat) (x : Stored) (i : Nat) (bytes : Bytes) : Bo
     (`accepts`), follows the producer's last published checkpoint, and the batch's tokens are exactly its
     `count` leaves in seq order, each fitting, payment ids strictly ascending (so no payment twice, checked in
     one pass). -/
-def publishOk (rootPk cert : Bytes) (last : Option Bytes) (new : Bytes) (tokens : List Bytes)
+def publishOk (link : Cosign.Link) (cert : Bytes) (last : Option Bytes) (new : Bytes) (tokens : List Bytes)
     (tpm : Nat) : Bool :=
-  match decodeKeyCert cert, storedOf sha3 new with
+  match Cosign.decode cert, storedOf sha3 new with
   | some e, some n =>
-    accepts rootPk cert new && last.all (fun b => (storedOf sha3 b).isSome) &&
+    accepts link cert new && last.all (fun b => (storedOf sha3 b).isSome) &&
       follows (last.bind (storedOf sha3)) n && n.checkpoint.counter == tpm + 1 && tokens.length == n.checkpoint.count &&
-      (tokens.zipIdx.all fun (b, i) => tokenFits (realCrypto [(n.checkpoint.tenantId, rootPk)]) e.shardCount n i b) &&
+      (tokens.zipIdx.all fun (b, i) => tokenFits realCrypto e.shardCount n i b) &&
       ascending ((tokens.filterMap decodeToken).map (·.leaf.paymentId))
   | _, _ => false
 

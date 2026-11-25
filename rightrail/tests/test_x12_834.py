@@ -28,6 +28,14 @@ class Reader834Tests(unittest.TestCase):
         data = file_of([body], **kwargs)
         return data, r834.read_834(data)
 
+    def test_each_set_gives_its_roster_with_its_whole_bgn08_with_or_without_a_member(self):
+        change, n1 = "BGN*00*F2*20260102*0930****2", header()[1]
+        data = file_of([[change, n1] + member("M1"), header(), [change, "BGN*00*F3*20260102*0930****RX", n1], ["BGN*00*F4*20260102*0930****rx "],
+                        ["BGN*00*F5*20260102*0930****2:RX"], [change, change]])
+        got = r834.read_834(data)
+        self.assertEqual(got.rosters, tuple(r834.Roster("2026-01-02T09:30:00", x12.digest(io.BytesIO(data)), 0, action, data.index(f"ST*834*{n:04d}".encode()))
+                                            for n, action in zip(range(1, 7), ("2", "", "", "RX", "2:RX", "2"))))
+
     def test_clean_member_fields_offsets_and_both_dates(self):
         data, got = self.read([member("M0000001", reason="08")])
         self.assertEqual((got.refused, got.quarantines, got.duplicates), ("", (), ()))

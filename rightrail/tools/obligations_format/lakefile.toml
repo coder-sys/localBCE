@@ -1,0 +1,23 @@
+name = "obligations_format"
+version = "0.1.0"
+defaultTargets = ["obligations_constants", "obligations_format_check"]
+
+# The obligations record format's two programs, in a separate package so lean/lakefile.toml (in the rules source
+# digest and the executable pins) is untouched.  Compiles only the format module and what it imports.
+[[lean_lib]]
+name = "BlindLedger"
+srcDir = "../../lean"
+roots = ["BlindLedger.Sha3Quick", "BlindLedger.Gate.FactCodec", "BlindLedger.Gate.Obligations.Layout", "BlindLedger.Gate.Obligations.Format.Records",
+  "BlindLedger.Gate.Obligations.Format.Fast", "BlindLedger.Gate.Obligations.Format.Fold",
+  "BlindLedger.Gate.Obligations.Format.Constants"]
+
+# Prints app/right_rail_obligations_constants.json.
+[[lean_exe]]
+name = "obligations_constants"
+srcDir = "../../lean"
+root = "BlindLedger.Gate.Obligations.Format.Constants"
+
+# Vectors, fuzzing and timing of the record codecs (tests/test_obligations_format.py); not pinned.
+[[lean_exe]]
+name = "obligations_format_check"
+root = "FormatCheck"

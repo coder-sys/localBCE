@@ -2,12 +2,9 @@
 
 Status: draft. Synthetic, nonpayment, non-PHI: `proofSuiteId=null`, `production_usable=false`, `activation=false`.
 The Lean model is normative: `lean/BlindLedger/Gate/Frame/Spec.lean` (codecs, the decision of a request, the record,
-`join`, the human text, admission and retry), built by the `frame_statements` library. No `sorry` is left in
-`Frame/Spec.lean`, `Frame/Fast.lean` or `Frame/Answer.lean`; `tests/lean_sorry_allowlist.txt` is empty and
-`tests/test_no_sorry_source.py` holds it so. The host
-(`app/right_rail_gate_decide.py`) builds and reads these frames today. `tests/gate_vectors/gate_v1.vectors` carries
-answer vectors (`answer` lines) at answer header version 3 (see the note in section 4): `gate_vectors` requires an
-accept vector to decode and re-encode to the same bytes and a reject vector to be refused (`Gate/Vectors.lean:238-241`). The history store, the chain and the state root are `FLAT_V1.md`'s.
+`join`, the human text, admission and retry), built by the `frame_statements` library. Its theorems are proved (no
+`sorry` in `Frame/`). The host
+(`app/right_rail_gate_decide.py`) builds and reads these frames today. No vectors are published yet. The history store, the chain and the state root are `FLAT_V1.md`'s.
 
 ## 1. Notation and transport
 
@@ -27,10 +24,16 @@ Header, 82 bytes:
 | Offset | Field | Width | Rule |
 |---|---|---|---|
 | 0 | magic | 4 | ASCII `RRDQ` |
-| 4 | version | u16 | 1 |
+| 4 | version | u16 | 2 |
 | 6 | shard | u32 | |
 | 10 | batch | u64 | the batch number, from 1 |
-| 18 | digest | 64 | `H(dom FRAME ‖ body)`; the body is every byte after the header |
+| 18 | digest | 64 | the frame digest `H(dom FRAME2 ‖ body)`; the body is every byte after the header |
+
+The host computes the frame digest in one hash over the body. The engine does not recompute it: it carries the field
+into its log and echoes it in the answer. The checker recomputes it over every logged request before it accepts the
+frame, and reports `frame digest` when the field differs (`frameDigestB_eq`). The preimage is the tag and then the
+body, so equal preimages are equal bodies, byte for byte and in order (`framePre_inj`, `frameDigest_binds`); shard
+and batch are header fields outside it. Retry is keyed by the batch identity (section 6), never by this field.
 
 Body. The sections come in this order and must use the body exactly:
 
@@ -61,12 +64,21 @@ Body. The sections come in this order and must use the body exactly:
    compare it with a line's payment number (Constitution III.3: a retry is the same canonical payment identity).
 4. Authority. It is the shard's authority record that the text frame
    carried, as lengths and bytes (`blob` is `u32` length then bytes): `pin 64 ‖ floor present u8 ‖ floor u64 ‖ kfloor
-   u32 ‖ grant blob ‖ key set blob ‖ release blob ‖ key steps u32, each day u32 ‖ blob ‖ bypasses u32, each blob ‖ requests u32,
-   each blob`. The bytes are the state's, unchanged: the host forwards them and never re-encodes product data. The
-   engine verifies the signatures, reads the lines from the request bytes (`Run.reqOf`) and derives the bypasses from the
-   signed bypass requests (`Run.bypOf`). Nothing in the frame states a line or a bypass, so unsigned data never
-   releases a payment. `kfloor` is the tenant's key-set epoch floor, the highest key-set epoch any shard of the tenant
+   u32 ‖ rsv u32 ‖ rs 64 ‖ grant blob ‖ key set blob ‖ release blob ‖ key steps u32, each day u32 ‖ blob ‖ bypasses u32, each blob ‖ rule sets u32, each
+   blob ‖ requests u32, each blob`. The bytes are the state's, unchanged: the host forwards them and never re-encodes product data. The
+   engine verifies the signatures, reads the lines from the request bytes (`Run.reqOf`) and derives the bypasses and
+   cause releases from the signed approvals in the bypasses section (`Run.approvals`): bytes that begin with the
+   approval tag and kind byte 3 are a cause record (`CauseRelease`), any other bytes a bypass. Nothing in the frame
+   states a line or a bypass, so unsigned data never releases a payment. `kfloor` is the tenant's key-set epoch floor, the highest key-set epoch any shard of the tenant
    has admitted (zero asserts none): a key set below it holds the batch as `STALE_KEYSET` (`admit_keyset_floor`).
+   `rsv` and `rs` are the tenant's rule-set floor: the highest rule-set version any shard of the tenant has admitted and
+   that record's digest (`rsv` 0 with `rs` all zero asserts none). A shard record whose version is below
+   `rsv` holds it as `RULESET_STALE`, and one at `rsv` under another digest as `RULESET_FORK`; while the record's version
+   is above 0 the frame must present the rule-set record in force, and a frame that does not holds as `RULESET_MISSING`.
+   The rule-set records are the signed `RR/GATE/RULESET/v1` records the batch presents, inside the frame's identity; the
+   rows-file engine admits and keeps them as conformance/RULESET_V1.md section 9 says (`Engine3.RuleGate.after`), and
+   `gate_engine` holds a batch that presents one as `RULESET_NOT_RUN` (`Worker.rulesetHold`). A held batch decides
+   nothing and leaves the authority record unchanged. Records in a frame with no requests are refused `RECORD`.
 
 The decoder (`decodeReq`) refuses the whole frame. It checks in byte order, and the first failure names the status:
 
@@ -74,8 +86,7 @@ The decoder (`decodeReq`) refuses the whole frame. It checks in byte order, and 
 |---|---|
 | `LENGTH` | fewer than 82 bytes; a section ends past the body; bytes left after the authority section |
 | `MAGIC` | the magic or the version is wrong |
-| `DIGEST` | the body does not hash to `digest`; this is checked before any body byte is read |
-| `RECORD` | any of: a feed state above 2; nonzero fields in a state 0 or 2 descriptor; `asOf ≠ 0` at a batch other than 1; a floor flag above 1 or a floor value under a clear flag; a payment request over 8 MiB or one that does not decode or whose lines do not map; two requests of one payment; requests of more than one tenant or program |
+| `RECORD` | any of: a feed state above 2; nonzero fields in a state 0 or 2 descriptor; `asOf ≠ 0` at a batch other than 1; a floor flag above 1 or a floor value under a clear flag; `rsv` 0 with `rs` not all zero; a payment request over 8 MiB or one that does not decode or whose lines do not map; two requests of one payment; requests of more than one tenant or program |
 
 A malformed record refuses the whole frame because the frame is then untrusted. A value too wide for the store is not
 malformed. It is section 3's per-line hold.
@@ -98,18 +109,12 @@ A redo value too wide for its field is left out by the host. The lines that carr
 
 ## 4. Answer (engine to host)
 
-Note: this section keeps the earlier answer layout (u32 reasons, 16-byte records, 71/135-byte leaves, leaf codes at bits
-24 and 25). The built engine answers at header version 3 (`Frame/Spec.lean:126` `ansVersion`): reasons are a u64, a rule
-reason at bit `r.idx` and the leaf-only UNENCODABLE_PAYMENT and SCOPE at bits 62 and 63 (`:500-503`); a record is 20
-bytes (`:591-594`), a leaf 75 or 139 (`:506-510`). The request is still version 1 (`:122`). A full page for the version-3
-frames is still to come.
-
 Header, 87 bytes:
 
 | Offset | Field | Width | Rule |
 |---|---|---|---|
 | 0 | magic | 4 | ASCII `RRDA` |
-| 4 | version | u16 | 1 |
+| 4 | version | u16 | 4 (3 is the fact answer's, `ENGINE_V3.md`) |
 | 6 | status | u8 | table below; 0 is OK |
 | 7 | shard | u32 | the request's |
 | 11 | batch | u64 | the request's; after OK, the store's batch count |
@@ -126,31 +131,42 @@ Extension, added by the implementer, rr-core to confirm (a 1:1 transcription of 
 length then bytes):
 - `hold 16`: the grant refusal word, zero padded, or all zero. When set the batch decided nothing and has no records.
 - `grant 64`: the grant id the batch was decided under, all zero when none.
-- `auth 208`: the shard's authority record after the batch (`Worker.encAuth`): `key-set pin 64 ‖ key-set epoch u32 ‖
-  key-set head 64 ‖ day u32 ‖ checkpoint 64 ‖ grant floor u64`. The batch digest binds it (section 5). Store open, every
-  replayed batch and the checkers refuse a record that changes the pin or lowers the key-set epoch or the grant floor
-  from the record before it (`ChunkIo.authFollows`).
-- notes `u32`, each a `blob2`: the bypass notes.
-- leaves `u32`, one per request in request order, each: `outcome u8 ‖ reasons u32 (bit 24 UNENCODABLE_PAYMENT, bit 25
-  SCOPE) ‖ authority u8 ‖ bypass flag u8` (0 none, 1 a bypass released the payment; any other value is refused), then
-  when the flag is 1 the bypass id (64, not all zero), then `input 64` (INPUT/v6, `ENGINE_V3.md` §18). 71 or 135 bytes.
-  An outcome or authority over 2, or a reason bit over 25, is refused.
+- `auth 276` (`authLen`): the shard's authority record after the batch (`Worker.encAuth`): `key-set pin 64 ‖ key-set
+  epoch u32 ‖ key-set head 64 ‖ day u32 ‖ checkpoint 64 ‖ grant floor u64 ‖ rule-set digest 64 ‖ rule-set version u32`.
+  The batch digest binds it (section 5). Store open, every replayed batch and the checkers refuse a record of another
+  length, and one that changes the pin, lowers the key-set epoch, the grant floor or the rule-set version, changes the
+  rule-set digest at the same version, or has a version above 0 with an all-zero digest or version 0 with another
+  digest, from the record before it (`ChunkIo.authFollows`). `gate_engine` writes version 0 and the zero digest and refuses to load a record with a
+  version above 0.
+- notes `u32`, each a `blob2`: the bypass and cause notes (`RULES_BYPASS`, `RULES_CAUSE`).
+- leaves `u32`, one per request in request order, each: `outcome u8 (0 ALLOW, 1 HOLD, 2 HUMAN_REVIEW, 3 ANSWERED) ‖
+  reasons u64 (rule reasons at their bits below; bit 62 UNENCODABLE_PAYMENT, bit 63 SCOPE) ‖ authority u8 ‖ flag u8` (0
+  none, 1 a bypass or cause record
+  released the payment, 2 the payment exactly repeats paid lines; any other value is refused), then when the flag is 1
+  its id (64, not all zero), when it is 2 the earlier list as a `blob2` (not empty), then `input 64` (INPUT/v7,
+  `ENGINE_V3.md` §18). The flag is 2 exactly when the outcome is 3. The earlier list is the body of
+  `RR/GATE/EARLIER/v1`: a `u16` big-endian count, then for each repeated line, ascending by line id, its line id, the
+  earlier program and payment id and the earlier line id, each a `u16` big-endian length and the bytes. 75 or 139
+  bytes, or 78 and more with a list. The host takes an id only for a payment the bypass names or the cause record
+  lists, and a list only when each line id in it is one of the request's.
+  An outcome over 3, an authority over 2, or a reason bit from 29 to 61, is refused (60 and 61 name nothing yet).
   The leaf copies no request field: the host computes `input` from the request it sent, refuses the answer when they
   differ, and builds the token leaf from its own fields (`ENGINE_V3.md` §17, §25).
 - adds `u32`, each a `blob2`: the rows the batch appended, in order.
 
-Record, 16 bytes:
+Record, 20 bytes:
 
 | Offset | Field | Width | Values |
 |---|---|---|---|
 | 0 | index | u24 | the line's position in the request |
 | 3 | outcome | u8 | 0 ALLOW, 1 HOLD, 2 HUMAN_REVIEW |
 | 4 | rule | u8 | 0 decided, joins no set; 1 joins the released set; 2 joins the unresolved set; 3 field over width; 4 another line of its payment over width; 5 joins the released set because its payment is in the engine's bypasses (rr-core to confirm) |
-| 5 | reasons | u32 | bit i is `reasons[i]` (below); bits 24-31 are zero |
-| 9 | chunk | u32 | counterpart reference; `0xFFFFFFFF` is none |
-| 13 | row | u24 | counterpart reference; `0xFFFFFF` is none |
+| 5 | reasons | u64 | reason `r` at bit `r.idx` (below); bits 29-63 are zero |
+| 13 | chunk | u32 | counterpart reference; `0xFFFFFFFF` is none |
+| 17 | row | u24 | counterpart reference; `0xFFFFFF` is none |
 
-Reason bits, in the byte order of their names (`Rules.reasons`):
+Reason bits are the reasons' numbers (`Rules.Reason.idx`). A number never changes: a new reason takes the next one,
+wherever its name sorts, and the names are listed in byte order (`Rules.reasons`) apart from the numbers.
 
 | Bits | Reasons |
 |---|---|
@@ -160,6 +176,11 @@ Reason bits, in the byte order of their names (`Rules.reasons`):
 | 12-15 | PROVIDER_DECEASED, PROVIDER_DECEASED_UNVERIFIED, PROVIDER_EXCLUDED, PROVIDER_EXCLUDED_UNVERIFIED |
 | 16-19 | SERVICE_DATE_FUTURE, SERVICE_DATE_INVALID, STALE_DMF, STALE_ENROLLMENT |
 | 20-23 | STALE_EXCLUSION, STALE_PROVIDER_DEATH, STALE_RELEASED, STALE_UNRESOLVED |
+| 24-27 | BENEFIT_LEVEL_MISSING, BENEFIT_LEVEL_MISSING_UNVERIFIED, PROGRAM_NOT_ELIGIBLE, PROGRAM_NOT_ELIGIBLE_UNVERIFIED |
+| 28 | STALE_ELIGIBILITY |
+
+The five eligibility reasons (24-28) are never set by the fixed rules (`GATE_RULES_V1.md`); only a signed rule set may
+set them.
 
 A decision's reasons are always `reasons.filter p` (POSTING_CAP holds included), so the mask loses nothing.
 
@@ -193,7 +214,7 @@ Statuses:
 | 0 | OK | 7 | HEAD | 14 | CORRUPT |
 | 1 | MAGIC | 8 | SHARD | 15 | INIT |
 | 2 | LENGTH | 9 | LOCK | 16 | KILL |
-| 3 | DIGEST | 10 | FILES | 17 | NUMBER |
+| 3 | DIGEST (reserved; not sent) | 10 | FILES | 17 | NUMBER |
 | 4 | RECORD | 11 | IMAGE | 18 | FULL |
 | 5 | NOT_NEXT | 12 | REPLAY | 19 | TREE |
 | 6 | CONFLICT | 13 | IO | 20 | FRAME |
@@ -243,16 +264,16 @@ Let n be the number of batches in the engine's log.
 | Request | Answer |
 |---|---|
 | another shard | `SHARD` |
-| batch n+1, with `prev` the engine's head (when there is no store, the genesis head `chainStart` over the shard and the key-set pin) | decided, logged with the request's digest and the answer bytes |
+| batch n+1, with `prev` the engine's head (when there is no store, the genesis head `chainStart` over the shard and the key-set pin) | decided, logged with the request's batch identity (`Frame.ident`, `ENGINE_V3.md` §18) and the answer bytes |
 | batch n+1, with any other `prev` | `HEAD` |
-| batch n (n > 0), with the logged digest | the logged answer, byte for byte, and no state change (`serve_retry`) |
-| batch n, with another digest | `CONFLICT` (`serve_conflict`) |
+| batch n (n > 0), with the logged identity | the logged answer, byte for byte, and no state change (`serve_retry`) |
+| batch n, with another identity | `CONFLICT` (`serve_conflict`) |
 | any other batch | `NOT_NEXT` (`serve_not_next`) |
 
 The log changes only by the next batch (`serve_log`).
 
 What this asks of the other layers (TODO slice 0, StoreLog: the durable retry log is the store's):
-- The store's log entry keeps the request digest and the answer, or enough to rebuild the answer from the state before
+- The store's log entry keeps the request's batch identity and the answer, or enough to rebuild the answer from the state before
   the batch, since the answer is a pure function of that state and the request.
 - Load keeps an unsealed last batch; it no longer puts one back.
 - The host keeps a request's bytes from before it sends them until it has sealed the answer. After any loss it resends
@@ -288,6 +309,67 @@ Changes from today's behaviour:
 - The store directory and shard are fixed when the engine starts.
 
 ## 8. Change record
+
+2026-11-22: reason bits are the reasons' numbers, in u64 fields (protected change: wire format, Constitution XI.2).
+- Predicate changed: the answer header's version is 4. A record is 20 bytes, its reasons a u64; a leaf's reasons are a
+  u64. A rule reason `r` is bit `r.idx` (before, bit i was the i-th name in byte order); a leaf's own codes are bit 62
+  (UNENCODABLE_PAYMENT) and bit 63 (SCOPE) (before, 24 and 25). Five reasons are added with numbers 24-28
+  (BENEFIT_LEVEL_MISSING, BENEFIT_LEVEL_MISSING_UNVERIFIED, PROGRAM_NOT_ELIGIBLE, PROGRAM_NOT_ELIGIBLE_UNVERIFIED,
+  STALE_ELIGIBILITY); the grant's hold and override masks (`Authority.reasonMask`) widen from 2^24 to 2^29. Version 1,
+  bits 29-61 and a record bit 62 or 63 are refused by the engine's decoder and the host.
+- Invariant: a reason's bit never moves. Adding a reason whose name sorts into the middle of the list would have
+  renumbered every reason after it under the old rule, so an answer, a signed hold or an override mask written before
+  would name other reasons when read after.
+- Evidence: the five eligibility names sort among the existing ones (BENEFIT_* after ALREADY_DECIDED, PROGRAM_* after
+  POSTING_CAP), so with bit = place their addition would have moved bits 1-23.
+- Disposition: replace. Replacement control: `Rules.Reason.idx_inj`, `idx_dense`, `idx_len`, `reasons_len_le`;
+  `Frame.maskOf_testBit_idx`, `unmask_maskOf`, `maskOf_lt` and the answer round trips of `Frame/Spec.lean` and
+  `Frame/Answer.lean` over the new widths; golden vectors (version 1, 2 and 3, record bits 29 and 62 and leaf bits 29,
+  60 and 61 rejected); tests/test_gate_answer_v4.py (the host's table equals `Reason.idx` read from the Lean source).
+- Scope: every decision answer of both engines, the checker and the host, from this change on, with no end date. An
+  answer or store written before it does not decode (no converter; only synthetic test stores were written before it).
+  A store whose log holds a decision answer of version 1 is refused on open (`MAGIC`), whether it stopped cleanly or
+  not, and the checker refuses the answer, even for a batch with no lines and with its trailer, root and head bound as a
+  store of version 1 bound them (tests/test_engine3_recovery.py). No store in production holds one, so no migration is
+  needed.
+  The link rows a store derives from answers keep their 4-byte reasons field; a record whose reasons do not fit it is
+  refused (`tailsOf`). Bits 0-23 keep their meaning.
+- Claims withdrawn: none.
+
+2026-11-20: a batch presents its signed rule-set records (protected change: wire format, Constitution XI.2).
+- Predicate changed: the request's authority section gains `rule sets u32, each blob` after the bypasses, inside the
+  frame's identity (CONTEXT/v1). The rows-file engine runs `RuleSet.gateStep` on them before the authority check and
+  writes the head and version it gives into the authority record; a batch it holds is held whole (`RULESET_REFUSED`,
+  `RULESET_NOT_RUN`, `RULESET_MISSING`, `RULESET_OTHER`, `HEAD`). `gate_engine` holds any batch that presents one
+  (`RULESET_NOT_RUN`). Records in a frame with no requests are `RECORD`.
+- Invariant: a shard's rule set changes only from none to a runnable record that the signed-rule admission admitted, or,
+  on a shard behind the tenant, to the record whose digest the tenant asserts; while it holds one, every batch presents
+  that record again, so no batch runs under none or under another record.
+- Evidence: the authority record carried the rule-set head and version, but no frame could present a record, so every
+  frame on a shard with a rule set held.
+- Disposition: extend. Replacement control: `RuleGate.after_eq`, `after_held`, `after_late`, `after_floor`,
+  `RuleSet.gateStep_held`, `gateStep_late`, `gateStep_ok`, the request's `encAuth`/`authRec` round trip and its fast
+  twin, and tests/test_engine3_rulesets.py.
+- Scope: every request frame of both engines and the checker, from this change on, with no end date. A frame written
+  before it does not decode (no converter; only synthetic test stores were written before it).
+- Claims withdrawn: none.
+
+2026-11-19: the authority record carries the rule set in force (protected change: wire format, Constitution XI.2).
+- Predicate changed: the authority record grows from 208 to 276 bytes (`authLen`), adding `rule-set digest 64 ‖ rule-set
+  version u32` after the grant floor; the request's authority section gains `rsv u32 ‖ rs 64` after `kfloor`, and
+  `RECORD` refuses `rsv` 0 with a nonzero `rs`.
+- Invariant: a rule set admitted on a shard cannot be silently downgraded or forked: `authFollows` refuses a lower
+  version or another digest at the same version, and the host's floor file and every frame carry the tenant's highest
+  version and its digest, so a shard behind it holds (`RULESET_STALE`) and one at it under another digest holds
+  (`RULESET_FORK`).
+- Evidence: no field of the 208-byte record bound which rule set was admitted, the grant floor was read to the end of
+  the record, and the width was a literal at more than 40 places.
+- Disposition: replace. Replacement control: `authFollows_iff`, `authFollows_trans`, `decAuth_isSome`,
+  `decAuth_encAuth`, the request's `encAuth`/`authRec` round trip and its fast twins, and the tests of the rule-set
+  holds, the record length, the floor file and rolled-back stores.
+- Scope: every store, frame and checker of both engines, and the host, from this change on, with no end date. A
+  208-byte record is refused at load; no converter (only synthetic test stores were written before it).
+- Claims withdrawn: none.
 
 2026-11-08: the new engine takes on the flat chain's authority record (protected change: wire format and digest domain).
 - Predicate changed: the batch digest was `H(dom CHAIN ‖ 0x03 ‖ delta)` and the genesis head did not hash the key-set
@@ -327,3 +409,8 @@ Changes from today's behaviour:
   is not activated, so no frame of the previous widths is product input. Feed pins are unchanged (SNAPSHOT/v1 hashes
   ids at the rules' identifier width).
 - Claims withdrawn: none.
+
+2026-11-12: the frame digest is one hash the engine carries (protected change: wire format and digest domain). The
+record is `ENGINE_V3.md` §28. Request version 2; digest `H(dom FRAME2 ‖ body)`; no decoder returns `DIGEST`; the
+checker recomputes the digest of every logged request. Section 6 names the batch identity, which has keyed retry since
+`ENGINE_V3.md` §24.

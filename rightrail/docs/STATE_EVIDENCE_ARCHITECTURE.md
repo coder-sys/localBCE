@@ -25,7 +25,7 @@ money a fee-for-service gate can reach is only about 5% of improper dollars (RR)
 
 Success is measured by the work removed, not the proof held. The state stops rebuilding, chasing, recoding,
 reconciling, reporting and re-procuring (section 2), and every role's day gets simpler (section 3, Constitution
-Articles XII to XIV).
+Article XII).
 
 ## 2. What the state stops doing: the six wastes
 
@@ -35,7 +35,7 @@ public audits, CMS data and state reports.
 
 | Waste | Today | Why it exists | What ends it | Fate |
 |---|---|---|---|---|
-| **Rebuilding** | Rebuilding what happened after someone asks:<br>• PERM and MEQC file pulls (77.17% of improper dollars are missing documentation)<br>• deferral packs (MN $350M frozen, CA $1.3B)<br>• capitation base data rebuilt each cycle from three years of scattered data<br>• Georgia's 237,400 lines that did not reconcile<br>• waiver cost-neutrality and budget-neutrality baselines | The evidence was not kept with the payment | The warrant: evidence is made once, at decision time, and every later question is a query | Gone as work. The questions stay; the rebuilding does not |
+| **Rebuilding** | Rebuilding what happened after someone asks:<br>• PERM and MEQC file pulls (77.17% of improper dollars are missing documentation)<br>• deferral responses (Minnesota: three deferrals totalling $549.7M; California: $1.34B in one quarter), where most deferred dollars turn on provider paper and other state systems, not the claims record alone<br>• capitation base data rebuilt each cycle from three years of scattered data<br>• Georgia's 237,400 lines that did not reconcile<br>• waiver cost-neutrality and budget-neutrality baselines | The evidence was not kept with the payment | The warrant: evidence is made once, at decision time, and every later question is a query | Gone as work. The questions stay; the rebuilding does not |
 | **Chasing** | Staff and contractors chasing missing documents, and:<br>• recoveries (NY: $52.2M where recovery work had not been initiated)<br>• MLR remittances (49% of 495 reports incomplete)<br>• plan fraud referrals<br>• EVV records after payment (Colorado: $8.07M refund, $45.7M under review) | Whoever holds the fact has no reason to send it | The cure router (section 6.8) turns the incentive around: the party that wants to be paid supplies the missing fact. The state chases less, but the federal clean-claim clocks (42 CFR 447.45) still run and held items still land on state staff | Gone for routine cases |
 | **Recoding** | Rules rewritten in vendor code by change order:<br>• TN change-order cap from $103.6M to $417.0M<br>• GA 35 change requests, over 104,000 hours<br>• FL one change, 28,000 hours<br>• TX TIERS +118% with no new competition<br>• "all 56 programs" paying for the same federal change<br>• 101 NC and 88 OH county offices configured one by one | The rules live in vendor code | Rule packs: the state edits signed data, sees the dollar effect, and signs. A pack written once can be adopted by every state | Moved in. Change orders for policy logic are gone |
 | **Reconciling** | Records from different systems compared afterwards:<br>• CMS-64 against T-MSIS (61.4% to 139.2% by state)<br>• subcontractor records against state records<br>• directed-payment spreadsheets reconciled months later<br>• recoupments as separate transactions (Ohio)<br>• sanction reports ($2,500 reported against $33.8M) | Each system keeps its own history | One ledger. Every report and every party's totals are views of the same records, so they agree by construction inside the ledger; flows outside it (plans, the claims system) still differ and are split by cause. Differences that come from outside are split by cause (section 8.2) | Gone inside the ledger |
@@ -69,8 +69,8 @@ Each responsibility RightRail takes names, before go-live, the old tasks it reti
 
 ## 3. What it feels like
 
-Staff never see the machinery: assertions, the two times, read sets, belief, packs and warrants. Article XIII forbids
-internal identifiers, digests or codes on screen. Article XIV sets the rule for work: what the system can fix, it fixes
+Staff never see the machinery: assertions, the two times, read sets, belief, packs and warrants. Article XII.5 forbids
+internal identifiers, digests or codes on screen. Article XII.8 sets the rule for work: what the system can fix, it fixes
 and notes; what needs a person reaches them once per cause, with the reason, the money, the deadline, the owner and one
 settling action.
 
@@ -263,6 +263,97 @@ own vectors and by shadow runs over history before the state signs (6.6).
 Pricing stays out. The state's pricer (DRG and APC groupers, contract rates) is a source of class (a). Rules check its
 output against bounds, such as a fee schedule ceiling or a directed-payment cap, and never reimplement it.
 
+#### 6.3.1 First version: today's rules as signed data
+
+The first version carries only what the first jobs need: the gate's fact rules (R1-R5 in GATE_RULES_V1) as data the
+state signs, run by one Lean interpreter, so an audit folder and a replay can name the exact rules in force for a line.
+The primitives above beyond these come with the packs that need them. Bytes: `conformance/RULESET_V1.md`. Model and
+statements: `lean/BlindLedger/Gate/RuleSet/Spec.lean`.
+
+Record. A rule set is a header, a list of legal sources, a maximum age per reference source, and up to 64 rules, then
+a KEYSET/v2 signature block. The header names the state and tenant, a version chained to the previous version's digest
+(as key sets chain), a signing window of at most 31 days (as an APPROVAL/v2 grant), an effective range over the line's
+date, and the earlier versions this one ends. A rule names one reason, one legal source and one condition. The rule
+set's digest is its identity: the next version's `prev`, the payment token leaf's `ruleVersion`, and what a decision
+record cites.
+
+Signers. A POLICY quorum of the shard's admitted key set: at least `kPolicy` distinct employees, each with a POLICY key
+(role 6) live on the head's day (unrevoked and inside its validity window), sign the message. The state sets `kPolicy`
+from 2 to 8 in its key set. A key set does not decode if one employee or one identity-provider subject holds both an
+unrevoked POLICY key and an unrevoked key of any other role (ROSTER, SOURCE, APPROVER or any), or if unrevoked POLICY
+keys do not map employees and subjects one to one, so the signers are distinct people under distinct subjects and none
+of them can also manage keys, attach facts, release or bypass. Roster keys add and revoke POLICY keys but never sign a
+rule set (the single state agency keeps policy authority, 42 CFR 431.10(e)). A key set with no POLICY key keeps its old bytes.
+
+Two times. Valid time is the effective range over the line's date (the date of service, or the first day of a
+capitation month). Known time is the batch that admitted the record: a rule set admitted in batch `kb` governs
+decisions from batch `kb + 1` (a decision batch `B` reads as of `K = B − 1`, as fact records do). A later version
+corrects an earlier one by ending its range, never by editing it: an end cuts the named version's range to a date, or
+withdraws it for every date. Ends replace the separate rule withdrawal record of the fact-record design.
+
+Conditions. A small tree language: AND, OR and NOT; the line's flow; whether its date is a calendar date; whether a
+source was read and whether it is fresh at the rule set's maximum age; whether some row of a source names the line's
+member or a party with a date before the line's date, or an interval holding it (optionally with the line's plan); and
+whether the member's enrollment shows two plans in the line's month. Depth at most 8, at most 8 operands per node. The
+interpreter is structural recursion over the tree, so it always ends; every node has a fixed cost (1, or 2 to 3 for the
+index probes), the record's total is computed from its bytes, and a record over 1,024 units per line does not decode.
+Maximum ages are from 1 day to the law's ceilings (deaths 90, provider deaths 90, exclusions 31) and, for enrollment,
+the product's ceiling of 10 days; a record listing no enrollment age uses 4.
+
+What stays fixed. A rule set may fire only the thirteen fact reasons. The release-once rules (the duplicate and
+identity reasons against the released and unresolved sets and within the batch), the line's own date checks, the
+staleness of the two sets, each reason's outcome class, which reasons a bypass may override, and the batch structure
+stay in Lean, so release once is stated for every rule set, signed or not (`allow_clear_any`). So does the enrollment
+guard: an enrollment feed older than the rule set's enrollment age sends the line to review (`STALE_ENROLLMENT`), never
+to an allow (`enroll_stale_allow`), and the guard adds no hold reason (`enroll_stale_hold`: under a stale feed the hold
+reasons equal those with no feed; a suppressed `MEMBER_NOT_ENROLLED` drops the near-key relaxation, so a later line of
+the same member and month may hold on `CAP_MEMBER_MONTH_DUPLICATE`, fail closed). A capitation line that its
+rule set finds not enrolled claims no member-month, as today.
+
+Today's rules as data. Pack 1 is today's ages (90, 90, 31, 7 days) and thirteen conditions, cost 82 per line. Its
+equality with today's rules on every read set, key list, line and reason (`pack1_fires`), once proved, carries every theorem
+about the current rules to a gate that runs pack 1 (`pack1_decideBatch`).
+
+Refused, in this order: a record that does not decode (any bound above, the cost bound included); another state or
+tenant; a head day outside the signing window; not the next version, a wrong `prev`, or an earlier batch than the last
+version; an end that names no version still in force or does not shorten it; an effective range that, after this
+record's ends, shares a date with a range still in force; fewer than a POLICY quorum of signatures. A refused record
+never runs (`admit_unsigned`, `reachable_signed`, `select_mem`).
+
+Replay. A line decided as of known time `K` runs under the one rule set admitted by `K` whose range, after the ends
+admitted by `K`, holds the line's date (`select_unique`, `select_iff`). A line with none is not decided and its
+payment is not released until a rule set covers its date. Replay depends only on what was admitted by `K`
+(`replay_congr`), so a rule set admitted later never changes a past answer (`replay_later`); with the same facts and
+the same known time, the answer is the same. Every name in brackets in this section is a stated theorem; its proof is
+a proof slice below.
+
+What it replaces, in order. Nothing in Python decides today, and nothing in Python is replaced; Python gains a twin
+codec that carries the bytes.
+1. Lean: `Rules/Spec.lean` `fires` becomes the interpreter under pack 1 once `pack1_fires` is proved; every theorem
+   stated over `decideBatch` keeps its statement.
+2. The fast twins, each re-proved through the interpreter instead of through `fires`: `Rules/Fast.lean`, then the claim
+   engine's row rules (`Flat/DecideRows.lean`), then the history engine (`Engine3`).
+3. The token leaf's `ruleVersion` changes from the engine's build hash to the admitted rule set's digest; the payer's
+   check against the grant's rule versions is unchanged.
+4. The fact-record rule withdrawal record is dropped for ends.
+`conformance/gate_rules_v1_ref.py` stays as the independent checker of pack 1.
+
+Build slices. Implementation slices:
+- I1, codec. `app/right_rail_ruleset_codec.py` and the Lean `decode` and `encode`, with a golden table of record
+  digests in the model. Accepted when `tests/test_ruleset_v1_codec.py` passes in full.
+- I2, admission and series. The authority section carries a rule set; the gate admits it with the key-set head and
+  stores the series. Accepted by must-reject frames for each refusal above and a two-version series replayed at both
+  known times.
+- I3, pack 1 live. The rules worker runs `firesP` under the selected rule set; the leaf's `ruleVersion` is the
+  rule set's digest. Accepted when the gate rules vectors and negative vectors pass unchanged with pack 1 signed, and
+  the token tests check the new `ruleVersion`, including that a grant naming only the old build hash makes the payer
+  refuse the token (the payment holds; it never pays under rules the grant did not name).
+Proofs, all done with no `sorry` (`lean/BlindLedger/Gate/RuleSet/Spec.lean`; statement pin and axiom audit):
+- P1, interpreter: `evalC_eq`, `evalC_le`, `run_bounded`, `dataFires_core`.
+- P2, equality: `pack1_fires`, `pack1_decideBatch`, `allow_clear_any`; P2 gates I3.
+- P3, bytes and admission: `decode_canonical`, `admit_signed`, `admit_unsigned`, `reachable_signed`.
+- P4, selection and replay: `select_mem`, `select_unique`, `select_iff`, `replay_congr`, `replay_later`.
+
 ### 6.4 Reopen: exact, never a rewrite
 
 When a superseding assertion arrives, or a pack version is withdrawn (for example, the frailty test vacated on
@@ -305,7 +396,10 @@ all of them.
 There is one reader per source format: 834, 820, 837 (claims and encounters), 835 (the state's, and each plan's to its
 providers, with paid and allowed amounts and dates), NCPDP, EVV, the death file, LEIE, NPPES, PARIS, Do Not Pay, the
 eligibility-system extract, marketplace account transfers, wage and other-program data, the plans' prior-authorization
-decisions (CMS-0057-F interface, from Jan 1 2027) and provider directories. Findings by others (OIG, auditors, courts,
+decisions (CMS-0057-F interface, from Jan 1 2027), provider directories, provider licensure and screening, background
+studies, service authorisations, assessments and plans of care, and the records other systems already keep
+(eligibility evidence history, rule-engine traces), which are checked against the record rather than trusted. Provider
+paper is read with its origin kept: who sent it, when, and for which line. Findings by others (OIG, auditors, courts,
 fair-hearing decisions, CMS letters) enter as assertions too, and a repeat finding links to the earlier one. Each reader:
 - treats its input as hostile and receipts the file by SHA3-512 when it arrives, with the sender, channel and signing
   key it came under;
@@ -422,7 +516,7 @@ conflict, each with a reason, a cure owner and a reopen path.
 | **Planned change** | 250,000 members moved from plans to fee-for-service on one date. A plan leaves a state. The claims system changes vendor, restarts its sequences and renumbers claims. A recoupment arrives for a line paid before go-live | A state-signed **transition record**, entered ahead of the date, names the population or source, the date, the old and new producer, the sequence restart and a crosswalk from old to new claim numbers. A drop or a new sender that matches it is expected. During parallel running both feeds are read and every disagreement is one finding per cause. Void and replacement chains cross the cutover through the crosswalk, and a pre-go-live recoupment links to the signed legacy claim. Capitation and fee-for-service cannot both pay one member for the same month. A drop that does not match the record is still a broken feed |
 | **Void and replace chains** | A replacement claim with no original. A void of a claim that was already voided. A chain that forms a cycle. A replacement in another system | Claim identity (Constitution III.3) links each frequency-code 7 or 8 to its original; a broken chain is a hold with a reason; the money effect goes through obligations, so a dollar can never be released twice |
 | **Reference data** | A fee schedule loaded with a column shifted. A wrong NCCI edition. A provider shown active after termination ($50.3M paid to 584 terminated providers) | Each warrant cites the table version and row. A correction is a superseding assertion with a valid interval; reopen finds the warrants that read the bad rows; underpayments and overpayments become obligations. A shadow comparison of the new table against the old is shown before signature |
-| **Source recall** | A vendor defect that ran for months, such as the 2023 ex parte household defect in 30 states (about 500,000 reinstated), or Colorado's 72 of 80 letters wrong | A state-signed **source recall** record says: source S, under version X, over valid interval V, is unreliable for fact kind K. It lowers that source's class for the interval, and reopen re-decides every warrant that relied on it. A data recall then works like a drug recall: exact, bounded and auditable. This is new, and it is needed |
+| **Source recall** | A vendor defect that ran for months, such as the 2023 ex parte household defect in 30 states (about 500,000 reinstated), or Colorado's 72 of 80 letters wrong | A state-signed **source recall** record says: source S, under version X, over valid interval V, is unreliable for fact kind K. It lowers that source's class for the interval, and reopen re-decides every warrant that relied on it. A data recall then works like a drug recall: exact, bounded and auditable. Systems already correct records one by one; what is new is recalling by source, version and interval and re-deciding exactly what relied on it |
 | **Breached sender or channel** | A claims processor or file-transfer service is breached (Conduent 2025, MOVEit 2023). The breach is found months later, and two notices give different start dates | A state-signed **compromise record** names the sender, channel or signing key and an interval that starts at the earliest credible date. Every receipt records the channel it came under, so the record lists exactly which assertions, warrants and released payments relied on that channel in the interval. Files in the interval are re-read against an independent source: those that agree stand; disagreements are quarantined as one finding per cause, and reopen re-decides what relied on them. New files under the compromised key are refused until the sender is re-keyed; the state is never halted whole and the breached sender is never trusted whole. Released payments in the set become findings for the state, which decides any recovery |
 | **Totals that do not tie** | CMS-64 vs T-MSIS (61% to 139% by state). A state total of $943.8B against $957.4B. Georgia's 237,400 lines that did not reconcile | Every external control total gets a computed counterpart from warrants and a **tie-out record**: the difference, split into buckets by cause (unwarranted, late, voided, outside the period, unknown), with the external total's stated period and as-of label. An unexplained remainder is a C7 hold on the report, not a footnote. Completeness is measured per plan, month and service category, and any view that depends on it (provider inactivity, the rate base, a demonstration measure) runs only where completeness passed. A pooled measure such as a loss ratio names its pooling level and shows the others beside it |
 | **Fabrication** | Personal care billed for a dead person. One aide in two places at once. More than 24 hours billed in a day. AI-written notes | **Physical-impossibility rules** (time, place, life span, capacity) are certain and cheap, and they become pack rules. Money conditions need class (a)-(c) sources or agreement between independent sources (idea 5). Documents never satisfy them alone, except where the law accepts self-attestation for that condition and the pack cites it |
@@ -447,7 +541,7 @@ Proof targets added:
 - **Compromise:** a compromise record reopens exactly the warrants that read assertions received under that channel in
   its interval (the recall theorem, keyed by channel).
 
-### 8.4 The worst data never becomes work per line (Article XIV)
+### 8.4 The worst data never becomes work per line (Article XII.9)
 
 | Case | What a person does | Everything else |
 |---|---|---|

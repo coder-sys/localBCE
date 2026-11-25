@@ -136,7 +136,7 @@ def _shipped(name: str) -> bytes:
 
 def _interaction_model(raw: bytes) -> tuple[tuple, dict]:
     """(roles, route -> roles) from the interaction model: do_POST enforces it, the page reads the same file.
-    A role is selected by path, never by query string, and a fixed set of real roles keeps every disallowed control absent from the page (Art. XIII.4)."""
+    A role is selected by path, never by query string, and a fixed set of real roles keeps every disallowed control absent from the page (Art. XII.7)."""
     try:
         model = json.loads(raw)
         return tuple(model["roles"]), {c["route"][5:]: frozenset(c["roles"]) for c in model["controls"].values() if c["route"].startswith("POST ")}

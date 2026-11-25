@@ -5,23 +5,22 @@ import BlindLedger.Gate.Flat.Bin
 /-! The binary frames between the host and the rules engine (formats conformance/FRAME_V1.md).
 
     Host to engine: one request per batch, a fixed header (magic `RRDQ`, version, shard, batch number, the SHA3-512 of
-    the body under `dom FRAME`) and a body of fixed-width little-endian sections: the context (today, the genesis date,
+    the body under `dom FRAME2`) and a body of fixed-width little-endian sections: the context (today, the genesis date,
     the signed head the batch follows, four feed descriptors with their pins), the feed rows, the redone payments and
     the authority section (the shard's pin, grant, key set, signed bypasses, release and the payment requests, each as
     the bytes the state delivered them).  The lines a batch is decided on are not sent: the engine reads them from the
     signed request bytes (`Run.reqOf`), so a product identifier is never encoded twice.  The engine alone derives the
-    bypasses from the signed bypass requests.  A bad header, digest, length or record refuses the whole frame.
+    bypasses from the signed bypass requests.  A bad header, length or record refuses the whole frame; the engine
+    carries the digest and does not recompute it, the checker does.
 
     Engine to host: one answer per request, a fixed header (magic `RRDA`, version, status, shard, batch, record count,
-    the request's digest; answer header version 3) and, when decided, one 20-byte record per decided line (position
+    the request's digest; answer header version 4) and, when decided, one 20-byte record per decided line (position
     among the decided lines, outcome, rule, reasons as a u64 bitmask with reason `r` at bit `r.idx`, the counterpart's
-    store position), the chain head and the state root after the
-    batch, and the extension (grant refusal, bypass notes, token leaves, the rows appended).
+    store position), the chain head and the state root after the batch, and the extension (grant refusal, bypass notes, token leaves, the rows appended).
     Everything today's text answer carried that the record does not is recomputed by `join` from the record, the frame
     and the store state before the batch; `Ans.text` is the human text, produced on demand.
 
-    `H` is SHA3-512 at runtime; statements take it as a parameter.  The answer frame's round trips are proved; the other
-    theorems are stated, not yet proved.
+    `H` is SHA3-512 at runtime; statements take it as a parameter.
     Synthetic, nonpayment, non-PHI, activation=false. -/
 
 namespace BlindLedger.Gate.Frame
@@ -74,18 +73,23 @@ def spanC : RowCodec Span :=
   ⟨[33, 21, 4, 4], fun s => [s.member, s.plan, s.start, s.stop], fun | [m, p, a, b] => some ⟨m, p, a, b⟩ | _ => none⟩
 
 /-- The authority a batch carries: the key-set genesis pin (checked against the store's at every batch), the asserted
-    grant floor, the asserted key-set epoch floor (`kfloor`, a u32; zero asserts none), the signed grant, key set and
-    key-set steps, the signed bypasses, the engine release and the payment requests, each as the bytes the state
+    grant floor, the asserted key-set epoch floor (`kfloor`, a u32; zero asserts none), the asserted rule-set floor
+    (`rsv`, a u32, and the digest `rs` of the record at that version; 0 and `zeroDigest` assert none), the signed
+    grant, key set and key-set steps, the signed bypasses, the signed rule-set records the batch presents (`rsets`,
+    conformance/RULESET_V1.md section 9), the engine release and the payment requests, each as the bytes the state
     delivered them (`Run.Req.x`). -/
 structure Auth where
   pin : Bytes
   floor : Option Nat
   kfloor : Nat
+  rsv : Nat
+  rs : Bytes
   grant : Bytes
   keyset : Bytes
   release : Bytes
   ksteps : List (Nat × Bytes)
   byps : List Bytes
+  rsets : List Bytes
   reqs : List Run.Req
 
 structure Req where
@@ -104,7 +108,8 @@ structure Req where
   auth : Auth
 
 /-- What the engine derives from the signed bytes of a request (admission, `Run.admit`): the lines it decides, in frame
-    order (`Run.St.lines`), the admitted bypasses, payment number and override mask (`FCtx.byp`, `Run.bypOf`), and the
+    order (`Run.St.lines`), the admitted bypasses' and cause records' pairs, payment number and override mask (`FCtx.byp`,
+    `Run.approvals`), and the
     payments under a HOLD-level grant entry, payment number and holds mask (`FCtx.lim`, `Run.limOf`). -/
 structure Derived where
   lines : List Line
@@ -119,11 +124,11 @@ structure Hdr where
 
 def magicReq : Bytes := "RRDQ".toUTF8.toList
 def magicAns : Bytes := "RRDA".toUTF8.toList
-def version : Nat := 1
-/-- The answer header's version: 3, with u64 reason fields numbered by `Reason.idx` and the leaf-only codes at bits 62
-    and 63.  Kept apart from the request's `version` only until the request side of FRAME/v3 lands; then the two unify
-    into one `version := 3` for request and answer (TRUNK_STEP2_FRAME_DESIGN.md decision 7). -/
-def ansVersion : Nat := 3
+/-- The answer header's version.  4: u64 reason fields with reason `r` at bit `r.idx` and the leaf-only codes at bits 62
+    and 63 (version 1 had u32 fields numbered by place in `reasons`; 3 is the fact answer's, `FactFrame.ansVersion`). -/
+def version : Nat := 4
+/-- The request header's version.  2: the digest is `frameDigest`, which the engine carries and does not recompute. -/
+def reqVersion : Nat := 2
 def hdrBytes : Nat := 82
 def ansHdrBytes : Nat := 87
 
@@ -144,17 +149,19 @@ def encFeed {α : Type} (c : RowCodec α) (f : Feed α) : Option (Bytes × Bytes
 def blob (b : Bytes) : Option Bytes := do pure ((← le 4 b.length) ++ b)
 
 def encAuth (a : Auth) : Option Bytes := do
-  guard (a.pin.length = 64)
+  guard (a.pin.length = 64 ∧ a.rs.length = 64)
   let f ← leAll [1, 8] [if a.floor.isSome then 1 else 0, a.floor.getD 0]
   let kf ← le 4 a.kfloor
+  let v ← le 4 a.rsv
   let g ← blob a.grant
   let k ← blob a.keyset
   let r ← blob a.release
   let ks ← a.ksteps.mapM fun (d, b) => do pure ((← le 4 d) ++ (← blob b))
   let bs ← a.byps.mapM blob
+  let ss ← a.rsets.mapM blob
   let rs ← a.reqs.mapM (blob ·.x.toList)
-  pure (a.pin ++ f ++ kf ++ g ++ k ++ r ++ (← le 4 a.ksteps.length) ++ ks.flatten ++ (← le 4 a.byps.length) ++ bs.flatten ++
-    (← le 4 a.reqs.length) ++ rs.flatten)
+  pure (a.pin ++ f ++ kf ++ v ++ a.rs ++ g ++ k ++ r ++ (← le 4 a.ksteps.length) ++ ks.flatten ++ (← le 4 a.byps.length) ++
+    bs.flatten ++ (← le 4 a.rsets.length) ++ ss.flatten ++ (← le 4 a.reqs.length) ++ rs.flatten)
 
 def encodeBody (q : Req) : Option Bytes := do
   guard (q.prev.length = 64 && (q.batch == 1 || q.asOf == 0))
@@ -168,21 +175,28 @@ def encodeBody (q : Req) : Option Bytes := do
   let au ← encAuth q.auth
   pure (c ++ q.prev ++ n ++ d1 ++ d2 ++ d3 ++ d4 ++ r1 ++ r2 ++ r3 ++ r4 ++ rs.flatten ++ au)
 
+/-- `FRAME2/v1`'s preimage: the whole body of a request frame. -/
+def framePre (body : Bytes) : Bytes := domain "FRAME2" ++ body
+
+/-- The request frame's digest: one hash of the whole body.  The host computes it over the bytes it sends and the
+    checker recomputes it over the bytes logged; the engine carries it into its answer. -/
+def frameDigest (H : Bytes → Bytes) (body : Bytes) : Bytes := H (framePre body)
+
 def encodeReq (H : Bytes → Bytes) (q : Req) : Option Bytes := do
   let body ← encodeBody q
-  let h ← leAll [2, 4, 8] [version, q.shard, q.batch]
-  pure (magicReq ++ h ++ H (domain "FRAME" ++ body) ++ body)
+  let h ← leAll [2, 4, 8] [reqVersion, q.shard, q.batch]
+  pure (magicReq ++ h ++ frameDigest H body ++ body)
 
 /-- The body of request frame `bs` before its request count: what `Gate.context` hashes. -/
 def ctxBytes (bs : Bytes) (q : Req) : Bytes :=
   let body := bs.drop hdrBytes
   body.take (body.length - 4 - (q.auth.reqs.map fun e => 4 + e.x.size).sum)
 
-/-- The batch's identity (III.3, the retry key): `BATCH-INPUT` over the context and each request's `INPUT/v6`, so a
+/-- The batch's identity (III.3, the retry key): `BATCH-INPUT` over the context and each request's `INPUT/v7`, so a
     retry with the same payments has the same identity. -/
 def ident (H : Bytes → Bytes) (bs : Bytes) (q : Req) : Bytes :=
   let c := Gate.context H (ctxBytes bs q)
-  Gate.batchInput H c (q.auth.reqs.map fun e => Gate.inputV6 H c (Gate.payDigest H e.ra.toModel))
+  Gate.batchInput H c (q.auth.reqs.map fun e => Gate.inputV7 H c e.ra.toModel)
 
 /-! ### Decode (fail closed: the first failure in byte order names the word) -/
 
@@ -212,7 +226,7 @@ def many {α : Type} (f : Bytes → Except Word (α × Bytes)) : Nat → Bytes �
 
 def decodeHdr (bs : Bytes) : Except Word (Hdr × Bytes) := do
   let some (h, body) := takeN hdrBytes bs | throw .LENGTH
-  unless h.take 4 == magicReq && unle ((h.drop 4).take 2) == version do throw .MAGIC
+  unless h.take 4 == magicReq && unle ((h.drop 4).take 2) == reqVersion do throw .MAGIC
   pure (⟨unle ((h.drop 6).take 4), unle ((h.drop 10).take 8), h.drop 18⟩, body)
 
 /-- A feed descriptor: state, asOf, count, rows; then the pin. -/
@@ -254,6 +268,9 @@ def authRec (bs : Bytes) : Except Word (Auth × Bytes) := do
   let ([fp, fv], r) ← nums [1, 8] r | throw .RECORD
   unless fp ≤ 1 && (fp == 1 || fv == 0) do throw .RECORD
   let (kfloor, r) ← numRec 4 r
+  let (rsv, r) ← numRec 4 r
+  let (rs, r) ← cut 64 r
+  unless rsv != 0 || rs == zeroDigest do throw .RECORD
   let (grant, r) ← blobRec r
   let (keyset, r) ← blobRec r
   let (release, r) ← blobRec r
@@ -262,11 +279,14 @@ def authRec (bs : Bytes) : Except Word (Auth × Bytes) := do
   let (ksteps, r) ← many kstepRec nk r
   let (nb, r) ← numRec 4 r
   let (byps, r) ← many blobRec nb r
+  let (ns, r) ← numRec 4 r
+  let (rsets, r) ← many blobRec ns r
   let (nq, r) ← numRec 4 r
   let (reqs, r) ← many reqRec nq r
   unless reqs.Pairwise (fun a b => a.q != b.q) && (match reqs with | [] => true | e0 :: _ => reqs.all fun e => e.r.tenantId == e0.r.tenantId && e.r.programId == e0.r.programId) do
     throw .RECORD
-  pure ({ pin, floor := if fp == 1 then some fv else none, kfloor, grant, keyset, release, ksteps, byps, reqs }, r)
+  pure ({ pin, floor := if fp == 1 then some fv else none, kfloor, rsv, rs, grant, keyset, release, ksteps, byps, rsets,
+          reqs }, r)
 
 /-- Everything before the authority section: the context, the feed rows and the redone payments. -/
 structure Pre where
@@ -301,10 +321,10 @@ def decodeBody (h : Hdr) (bs : Bytes) : Except Word (Req × Bytes) := do
   pure ({ shard := h.shard, batch := h.batch, today := p.today, asOf := p.asOf, prev := p.prev, dmf := p.dmf,
           pdeath := p.pdeath, excl := p.excl, span := p.span, redo := p.redo, auth }, r)
 
-/-- The request and its digest.  The digest is checked before the body is read, and the body must be used exactly. -/
-def decodeReq (H : Bytes → Bytes) (bs : Bytes) : Except Word (Req × Bytes) := do
+/-- The request and the digest its header carries.  The body must be used exactly.  The digest is not compared here:
+    whoever relies on it compares it with `frameDigest` of the body (`encodeReq_decodeReq`). -/
+def decodeReq (bs : Bytes) : Except Word (Req × Bytes) := do
   let (h, body) ← decodeHdr bs
-  unless H (domain "FRAME" ++ body) == h.digest do throw .DIGEST
   let (q, rest) ← decodeBody h body
   unless rest.isEmpty do throw .LENGTH
   pure (q, h.digest)
@@ -326,27 +346,24 @@ def snap {α : Type} (H : Bytes → Bytes) (kind : Nat) (fields : α → List (N
 def ctxOf (H : Bytes → Bytes) (q : Req) (dv : Derived) : Ctx :=
   { today := q.today, dmf := snap H 1 Death.fields q.dmf, providerDeaths := snap H 2 Death.fields q.pdeath,
     exclusions := snap H 3 Exclusion.fields q.excl, enrollment := snap H 4 Span.fields q.span,
-    eligibility := none, released := none, unresolved := none, releasedPrior := ⟨0, 0, []⟩, unresolvedPrior := ⟨0, 0, []⟩, anchor := 0,
+    released := none, unresolved := none, releasedPrior := ⟨0, 0, []⟩, unresolvedPrior := ⟨0, 0, []⟩, anchor := 0,
     redo := q.redo, byp := dv.byp, lim := dv.lim }
 
 def feedsOf (c : Ctx) : Feeds :=
   { dmfSome := c.dmf.isSome, pdSome := c.providerDeaths.isSome, exclSome := c.exclusions.isSome,
-    spanSome := c.enrollment.isSome, eligSome := c.eligibility.isSome,
+    spanSome := c.enrollment.isSome,
     dmfOk := usable c.today 90 okDeath c.dmf, pdOk := usable c.today 90 okDeath c.providerDeaths,
     exclOk := usable c.today 31 okExclusion c.exclusions, spanOk := usable c.today 7 okSpan c.enrollment,
-    eligOk := usable c.today 7 okElig c.eligibility,
     dmf := fun i => (entries c.dmf).filter (·.id == i), pdeath := fun i => (entries c.providerDeaths).filter (·.id == i),
     excl := fun i => (entries c.exclusions).filter (·.id == i),
-    span := fun i => (entries c.enrollment).filter (·.member == i),
-    elig := fun i => (entries c.eligibility).filter (·.member == i) }
+    span := fun i => (entries c.enrollment).filter (·.member == i) }
 
 def fcOf (H : Bytes → Bytes) (q : Req) (dv : Derived) : FCtx := ⟨q.today, q.redo, feedsOf (ctxOf H q dv), dv.byp, dv.lim⟩
 
 /-- The decide theorems' hypothesis holds for every request. -/
 theorem fcOf_inv (H : Bytes → Bytes) (q : Req) (dv : Derived) : FCtxInv (fcOf H q dv) (ctxOf H q dv) := by
   unfold FCtxInv
-  exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, fun _ => rfl, fun _ => rfl, fun _ => rfl, fun _ => rfl, rfl, rfl,
-    rfl, rfl, fun _ => rfl⟩
+  exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, fun _ => rfl, fun _ => rfl, fun _ => rfl, fun _ => rfl, rfl, rfl⟩
 
 /-- The lines the rules see (`Run.keep`), with their positions among the decided lines. -/
 def kept (dv : Derived) : List (Nat × Line) :=
@@ -431,7 +448,8 @@ def maskOf (rs : List Reason) : Nat := reasons.foldl (fun m r => if rs.contains 
 /-- The reasons a mask names, in `reasons` (name) order. -/
 def unmask (m : Nat) : List Reason := reasons.filter fun r => m.testBit r.idx
 
-/-- A leaf's own codes, never a rule reason: UNENCODABLE_PAYMENT at bit 62 and SCOPE at bit 63 (each emitted alone). -/
+/-- A leaf's own codes, never a rule reason: UNENCODABLE_PAYMENT at bit 62 and SCOPE at bit 63 (each emitted alone).
+    Bits from `reasons.length` to 61 are refused. -/
 def leafUnencodable : Nat := 2 ^ 62
 def leafScope : Nat := 2 ^ 63
 
@@ -490,26 +508,32 @@ def manyO {α : Type} (f : Bytes → Option (α × Bytes)) : Nat → Bytes → O
 /-- A length (`u16`) and then the bytes. -/
 def blob2 (b : Bytes) : Option Bytes := do pure ((← le 2 b.length) ++ b)
 
-/-- One payment's leaf: its outcome, reason mask and authority, the id of the bypass that released it (zero when none) and
-    its input (`INPUT/v6`).  The host builds the token leaf from its own request fields, this and the answer's grant id. -/
+/-- One payment's leaf: its outcome, reason mask and authority, the id of the bypass that released it (zero when none),
+    its input (`INPUT/v7`) and, for an `ANSWERED` payment, its earlier list (the `RR/GATE/EARLIER/v1` count and entries).
+    The host builds the token leaf from its own request fields, this and the answer's grant id. -/
 structure Leaf where
   outcome : Nat
   reasons : Nat
   authority : Nat
   bypass : ByteArray
   input : ByteArray
+  earlier : ByteArray := ByteArray.empty
   deriving DecidableEq
 
-/-- Outcome and authority are codes 0-2; the reasons are a u64 whose low 62 bits are rule reasons (bit `r.idx`) and
-    whose bits 62 and 63 are the leaf's own codes (`leafUnencodable`, `leafScope`). -/
+/-- Outcome codes 0-3 (3 `ANSWERED`: exactly the leaves with an earlier list, and those carry no bypass), authority codes
+    0-2; the reasons are a u64 whose low 62 bits are rule reasons (bit `r.idx`) and whose bits 62 and 63 are the leaf's
+    own codes (`leafUnencodable`, `leafScope`). -/
 def Leaf.ok (l : Leaf) : Bool :=
-  l.outcome ≤ 2 && l.reasons < 2 ^ 64 && l.reasons % 2 ^ 62 < 2 ^ Rules.reasons.length && l.authority ≤ 2
+  l.outcome ≤ 3 && l.reasons < 2 ^ 64 && l.reasons % 2 ^ 62 < 2 ^ Rules.reasons.length && l.authority ≤ 2 && ((l.outcome == 3) == (l.earlier.size != 0)) &&
+    (l.earlier.size == 0 || l.bypass.toList == zeroDigest)
 
-/-- A zero bypass id is one byte 0; any other is a byte 1 and the id. -/
+/-- A zero bypass id is one byte 0; any other is a byte 1 and the id; an earlier list is a byte 2 and the list as a
+    `blob2`. -/
 def encLeaf (l : Leaf) : Option Bytes := do
   guard (l.ok && l.bypass.size = 64 && l.input.size = 64)
   let h ← leAll [1, 8, 1] [l.outcome, l.reasons, l.authority]
-  let bp := if l.bypass.toList == zeroDigest then [0] else 1 :: l.bypass.toList
+  let bp ← (if l.earlier.size != 0 then (2 :: ·) <$> blob2 l.earlier.toList
+    else some (if l.bypass.toList == zeroDigest then [0] else 1 :: l.bypass.toList))
   pure (h ++ bp ++ l.input.toList)
 
 def blob2Rec (bs : Bytes) : Option (Bytes × Bytes) := do
@@ -518,21 +542,25 @@ def blob2Rec (bs : Bytes) : Option (Bytes × Bytes) := do
 
 def decLeaf (bs : Bytes) : Option (Leaf × Bytes) := do
   let ([o, m, a, f], r) ← (nums [1, 8, 1, 1] bs).toOption | none
-  let (b, r) ← if f == 0 then pure (zeroDigest, r)
+  let (b, e, r) ← if f == 0 then pure (zeroDigest, [], r)
     else if f == 1 then do
       let (b, r) ← takeN 64 r
       guard (b != zeroDigest)
-      pure (b, r)
+      pure (b, [], r)
+    else if f == 2 then do
+      let (e, r) ← blob2Rec r
+      guard (e != [])
+      pure (zeroDigest, e, r)
     else none
   let (i, r) ← takeN 64 r
-  let l : Leaf := ⟨o, m, a, b.toByteArray, i.toByteArray⟩
+  let l : Leaf := ⟨o, m, a, b.toByteArray, i.toByteArray, e.toByteArray⟩
   guard l.ok
   pure (l, r)
 
 /-- Added by the implementer, rr-core to confirm: what the frame carries beyond the records, a 1:1 transcription of
     today's text fields.  `hold`: a grant refusal (16 bytes, zero padded, empty when none), in which case the batch
     decided nothing; `grant`: the admitted grant's id (zero when none), once for every leaf; `auth`: the shard's authority
-    record after the batch (`Worker.encAuth`, 208 bytes, zero on a refusal), which the batch digest binds; `notes`: the
+    record after the batch (`Worker.encAuth`, `authLen` bytes, zero on a refusal), which the batch digest binds; `notes`: the
     bypass notes;
     `leaves`: the payment leaves; `adds`: the rows the batch appended. -/
 structure Ext where
@@ -545,7 +573,7 @@ structure Ext where
   deriving DecidableEq
 
 def encExt (e : Ext) : Option Bytes := do
-  guard (e.hold.size = 16 && e.grant.size = 64 && e.auth.size = 208)
+  guard (e.hold.size = 16 && e.grant.size = 64 && e.auth.size = authLen)
   let ns ← e.notes.mapM (blob2 ·.toList)
   let ls ← e.leaves.mapM encLeaf
   let as ← e.adds.mapM (blob2 ·.toList)
@@ -555,7 +583,7 @@ def encExt (e : Ext) : Option Bytes := do
 def decExt (bs : Bytes) : Option (Ext × Bytes) := do
   let (hold, r) ← takeN 16 bs
   let (grant, r) ← takeN 64 r
-  let (auth, r) ← takeN 208 r
+  let (auth, r) ← takeN authLen r
   let (nn, r) ← (numRec 4 r).toOption
   let (notes, r) ← manyO blob2Rec nn r
   let (nl, r) ← (numRec 4 r).toOption
@@ -601,7 +629,7 @@ def encodeAns (a : AnsFrame) : Option Bytes := do
   guard (if a.word == .OK then a.head.size = 64 && a.root.size = 64 &&
       (a.recs.map (·.index)).mergeSort (fun i j => decide (i ≤ j)) == List.range a.recs.length
     else a.recs.isEmpty && a.head.isEmpty && a.root.isEmpty && a.ext == ⟨.empty, .empty, .empty, [], [], []⟩)
-  let h ← leAll [2, 1, 4, 8, 4] [ansVersion, a.word.code, a.shard, a.batch, a.recs.length]
+  let h ← leAll [2, 1, 4, 8, 4] [version, a.word.code, a.shard, a.batch, a.recs.length]
   let rs ← a.recs.mapM encRec
   let x ← if a.word == .OK then encExt a.ext else pure []
   pure (magicAns ++ h ++ a.digest.toList ++ rs.flatten ++ a.head.toList ++ a.root.toList ++ x)
@@ -619,7 +647,7 @@ def decodeAns (bs : Bytes) : Option AnsFrame := do
   let (h, r) ← takeN ansHdrBytes bs
   guard (h.take 4 == magicAns)
   let ([v, st, k, b, n], dg) ← (nums [2, 1, 4, 8, 4] (h.drop 4)).toOption | none
-  guard (v == ansVersion)
+  guard (v == version)
   let w ← words[st]?
   if w == .OK then
     let (recs, r) ← manyO decRec n r
@@ -679,7 +707,7 @@ def admit {σ : Type} (H : Bytes → Bytes) (e : Eng σ) (q : Req) (dg : Bytes) 
 def serve {σ : Type} (H : Bytes → Bytes) (dec : Eng σ → Req → Except Word (σ × Bytes × Bytes)) (e : Eng σ)
     (bs : Bytes) : Eng σ × Bytes :=
   let no (w : Word) : Eng σ × Bytes := (e, refusal w ((decodeHdr bs).toOption.map (·.1)))
-  match decodeReq H bs with
+  match decodeReq bs with
   | .error w => no w
   | .ok (q, _) => match admit H e q (ident H bs q) with
     | .refuse w => no w
@@ -905,6 +933,16 @@ theorem authRec_stab : Stab authRec := by
       rw [if_pos hP]
       obtain ⟨⟨kf, s0⟩, k0, h4⟩ := bind_ok _ _ _ h4
       refine ok_bind _ _ (kf, s0 ++ e) _ (numRec_stab _ _ e _ _ k0) ?_
+      obtain ⟨⟨rsv, sv⟩, kv, h4⟩ := bind_ok _ _ _ h4
+      refine ok_bind _ _ (rsv, sv ++ e) _ (numRec_stab _ _ e _ _ kv) ?_
+      obtain ⟨⟨rs, sr⟩, kr, h4⟩ := bind_ok _ _ _ h4
+      refine ok_bind _ _ (rs, sr ++ e) _ (cut_app _ _ e _ _ kr) ?_
+      dsimp only at h4 ⊢
+      split at h4
+      rotate_left
+      · cases h4
+      rename_i hV
+      rw [if_pos hV]
       obtain ⟨⟨grant, s1⟩, k1, k2⟩ := bind_ok _ _ _ h4
       obtain ⟨⟨keyset, s2⟩, k3, k4⟩ := bind_ok _ _ _ k2
       obtain ⟨⟨release, s3⟩, k5, k6⟩ := bind_ok _ _ _ k4
@@ -919,12 +957,16 @@ theorem authRec_stab : Stab authRec := by
         obtain ⟨⟨ksteps, t2⟩, m3, m4⟩ := bind_ok _ _ _ m2
         obtain ⟨⟨nb, t3⟩, m5, m6⟩ := bind_ok _ _ _ m4
         obtain ⟨⟨byps, t4⟩, m7, m8⟩ := bind_ok _ _ _ m6
+        obtain ⟨⟨ns, u1⟩, s1, s2⟩ := bind_ok _ _ _ m8
+        obtain ⟨⟨rsets, u2⟩, s3, m8⟩ := bind_ok _ _ _ s2
         obtain ⟨⟨nq, t5⟩, m9, m10⟩ := bind_ok _ _ _ m8
         obtain ⟨⟨reqs, t6⟩, m11, m12⟩ := bind_ok _ _ _ m10
         refine ok_bind _ _ (nk, t1 ++ e) _ (numRec_stab _ _ e _ _ m1) ?_
         refine ok_bind _ _ (ksteps, t2 ++ e) _ (many_stab kstepRec_stab _ _ e _ _ m3) ?_
         refine ok_bind _ _ (nb, t3 ++ e) _ (numRec_stab _ _ e _ _ m5) ?_
         refine ok_bind _ _ (byps, t4 ++ e) _ (many_stab blobRec_stab _ _ e _ _ m7) ?_
+        refine ok_bind _ _ (ns, u1 ++ e) _ (numRec_stab _ _ e _ _ s1) ?_
+        refine ok_bind _ _ (rsets, u2 ++ e) _ (many_stab blobRec_stab _ _ e _ _ s3) ?_
         refine ok_bind _ _ (nq, t5 ++ e) _ (numRec_stab _ _ e _ _ m9) ?_
         refine ok_bind _ _ (reqs, t6 ++ e) _ (many_stab reqRec_stab _ _ e _ _ m11) ?_
         rcases reqs with _ | ⟨e0, tl⟩
@@ -974,56 +1016,26 @@ theorem err_bind {α β : Type} (x : Except Word α) (f : α → Except Word β)
     (h2 : f a = .error w) : (x >>= f) = .error w := by
   subst h1; simpa [bind, Except.bind] using h2
 
-theorem decodeReq_trailing' (H : Bytes → Bytes) (bs dg : Bytes) (q : Req) (h : decodeReq H bs = .ok (q, dg))
-    (extra : Bytes) (hx : extra ≠ [])
-    (hdg : H (domain "FRAME" ++ (bs ++ extra).drop hdrBytes) = dg) : decodeReq H (bs ++ extra) = .error .LENGTH := by
+/-- A body whose sections end before or after the frame does is refused `LENGTH`. -/
+theorem decodeReq_trailing (bs dg : Bytes) (q : Req) (h : decodeReq bs = .ok (q, dg)) (extra : Bytes) (hx : extra ≠ []) :
+    decodeReq (bs ++ extra) = .error .LENGTH := by
   unfold decodeReq at h ⊢
   obtain ⟨⟨hd, body⟩, h1, h2⟩ := bind_ok _ _ _ h
-  obtain ⟨h1', hlen, hbody⟩ := decodeHdr_app extra h1
+  obtain ⟨h1', -, -⟩ := decodeHdr_app extra h1
   refine err_bind _ _ (hd, body ++ extra) _ h1' ?_
   dsimp only at h2 ⊢
-  split at h2
-  · rename_i hP
-    obtain ⟨⟨q', rest⟩, h3, h4⟩ := bind_ok _ _ _ h2
-    have h3' := decodeBody_stab hd _ extra _ _ h3
-    have hdig : hd.digest = dg := by
-      split at h4
-      · have := Except.ok.inj h4
-        simp only [Prod.mk.injEq] at this
-        exact this.2
-      · cases h4
-    have hd2 : (bs ++ extra).drop hdrBytes = body ++ extra := by
-      rw [hbody, List.drop_append_of_le_length hlen]
-    rw [hd2] at hdg
-    have hP2 : H (domain "FRAME" ++ (body ++ extra)) = hd.digest := by rw [hdg, hdig]
-    rw [if_pos (by simpa using hP2)]
-    refine err_bind _ _ (q', rest ++ extra) _ h3' ?_
-    split at h4
-    · rename_i hE
-      have : rest = [] := by simpa using hE
-      subst this
-      simp [hx] <;> rfl
-    · cases h4
-  · cases h2
+  obtain ⟨⟨q', rest⟩, h3, h4⟩ := bind_ok _ _ _ h2
+  refine err_bind _ _ (q', rest ++ extra) _ (decodeBody_stab hd _ extra _ _ h3) ?_
+  split at h4
+  · rename_i hE
+    have : rest = [] := by simpa using hE
+    subst this
+    simp [hx] <;> rfl
+  · cases h4
 
 
 section
 variable (H : Bytes → Bytes) (loc : Bool → Key → Option (Nat × Nat)) (s : St) (q : Req) (dv : Derived)
-
-/-- A body that does not hash to the header's digest is refused before it is read. -/
-theorem decodeReq_digest (bs : Bytes) (hd : Hdr) (body : Bytes) (h : decodeHdr bs = .ok (hd, body))
-    (hne : H (domain "FRAME" ++ body) ≠ hd.digest) : decodeReq H bs = .error .DIGEST := by
-  unfold decodeReq
-  rw [h]
-  have hb : (H (domain "FRAME" ++ body) == hd.digest) = false := by simpa using hne
-  simp only [hb, bind, Except.bind, pure, Except.pure, throwThe, MonadExceptOf.throw, Bool.false_eq_true,
-    if_false, ite_false]
-  rfl
-
-/-- A body whose sections end before or after the frame does is refused `LENGTH`. -/
-theorem decodeReq_trailing (bs dg : Bytes) (h : decodeReq H bs = .ok (q, dg)) (extra : Bytes) (hx : extra ≠ [])
-    (hdg : H (domain "FRAME" ++ (bs ++ extra).drop hdrBytes) = dg) : decodeReq H (bs ++ extra) = .error .LENGTH :=
-  decodeReq_trailing' H bs dg q h extra hx hdg
 
 /-! ### The answer frame round trip -/
 
@@ -1342,24 +1354,61 @@ private theorem nums_leaf {o m a : Nat} {hd : Bytes} (h : leAll [1, 8, 1] [o, m,
   rw [nums_byte] at this
   simpa [Except.map] using this
 
+private theorem blob2Rec_blob2 (x c r : Bytes) (h : blob2 x = some c) : blob2Rec (c ++ r) = some (x, r) := by
+  unfold blob2 at h
+  obtain ⟨l, hl, h⟩ := obind_some h
+  cases h
+  unfold blob2Rec
+  rw [List.append_assoc, numRec_le hl]
+  simp [Except.toOption, takeN_append]
+
+private theorem blob2_blob2Rec (bs x r : Bytes) (h : blob2Rec bs = some (x, r)) : ∃ c, blob2 x = some c ∧ bs = c ++ r := by
+  unfold blob2Rec at h
+  obtain ⟨⟨n, r1⟩, hn, h2⟩ := obind_some h
+  obtain ⟨b, hb, hbs⟩ := numRec_eq (toOption_ok hn)
+  dsimp only at h2
+  obtain ⟨hl, hr1⟩ := takeN_eq h2
+  refine ⟨b ++ x, ?_, by rw [hbs, hr1, List.append_assoc]⟩
+  simp [blob2, hl, hb]
+
 private theorem decLeaf_encLeaf (l : Leaf) (b r : Bytes) (h : encLeaf l = some b) : decLeaf (b ++ r) = some (l, r) := by
-  obtain ⟨o, m, a, byp, inp⟩ := l
+  obtain ⟨o, m, a, byp, inp, ear⟩ := l
   unfold encLeaf at h
   obtain ⟨hg, h⟩ := guard_bind_some h
   simp only [Bool.and_eq_true, decide_eq_true_eq] at hg
   obtain ⟨⟨hok, hbs⟩, his⟩ := hg
   obtain ⟨hd, hh, h⟩ := obind_some h
+  obtain ⟨bp, hbp, h⟩ := obind_some h
   cases h
   have hil : inp.toList.length = 64 := by rw [← Flat.Bin.size_eq_length']; exact his
   have hbl : byp.toList.length = 64 := by rw [← Flat.Bin.size_eq_length']; exact hbs
   have h0 : (0 : UInt8).toNat = 0 := rfl
   have h1 : (1 : UInt8).toNat = 1 := rfl
-  unfold decLeaf
-  by_cases hz : byp.toList = zeroDigest
-  · rw [if_pos (by simp [hz])]
-    simp [nums_leaf hh, Except.toOption, h0, takeN_of_len hil, ← hz, ba_list, hok, guard]
-  · rw [if_neg (by simpa using hz)]
-    simp [nums_leaf hh, Except.toOption, h1, takeN_of_len hil, takeN_of_len hbl, hz, ba_list, hok, guard]
+  have h2 : (2 : UInt8).toNat = 2 := rfl
+  by_cases he : ear.size = 0
+  · rw [if_neg (by simp [he])] at hbp
+    cases hbp
+    obtain rfl : ear = ByteArray.empty := by
+      have hl : ear.toList = [] := List.eq_nil_of_length_eq_zero (by rw [← Flat.Bin.size_eq_length']; exact he)
+      rw [← ba_list ear, hl]; rfl
+    unfold decLeaf
+    by_cases hz : byp.toList = zeroDigest
+    · rw [if_pos (by simp [hz])]
+      simp [nums_leaf hh, Except.toOption, h0, takeN_of_len hil, ← hz, ba_list, hok, guard]
+    · rw [if_neg (by simpa using hz)]
+      simp [nums_leaf hh, Except.toOption, h1, takeN_of_len hil, takeN_of_len hbl, hz, ba_list, hok, guard]
+  · rw [if_pos (by simpa using he)] at hbp
+    obtain ⟨c, hc, rfl⟩ : ∃ c, blob2 ear.toList = some c ∧ bp = 2 :: c := by
+      cases hc : blob2 ear.toList with
+      | none => rw [hc] at hbp; cases hbp
+      | some c => rw [hc] at hbp; exact ⟨c, rfl, (Option.some.inj hbp).symm⟩
+    have hz : byp.toList = zeroDigest := by
+      have := hok
+      simp only [Leaf.ok, Bool.and_eq_true, Bool.or_eq_true, beq_iff_eq] at this
+      exact this.2.resolve_left he
+    have hne : ear.toList ≠ [] := fun h => he (by rw [Flat.Bin.size_eq_length', h]; rfl)
+    unfold decLeaf
+    simp [nums_leaf hh, Except.toOption, h2, blob2Rec_blob2 _ _ _ hc, hne, takeN_of_len hil, ← hz, ba_list, hok, guard]
 
 private theorem encLeaf_decLeaf (bs : Bytes) (l : Leaf) (r : Bytes) (h : decLeaf bs = some (l, r)) :
     ∃ c, encLeaf l = some c ∧ bs = c ++ r := by
@@ -1389,6 +1438,7 @@ private theorem encLeaf_decLeaf (bs : Bytes) (l : Leaf) (r : Bytes) (h : decLeaf
       cases h
       obtain ⟨hil, rfl⟩ := takeN_eq hii
       rw [show le 1 0 = some [0] by decide] at h4; cases h4
+      rw [List.toByteArray_nil] at hok
       refine ⟨x1 ++ (x2 ++ (x3 ++ [])) ++ [0] ++ ii, ?_, by simp⟩
       simp [encLeaf, guard, hok, hzl, hil, hhd, list_ba, List.size_toByteArray]
     · split at h
@@ -1406,28 +1456,30 @@ private theorem encLeaf_decLeaf (bs : Bytes) (l : Leaf) (r : Bytes) (h : decLeaf
         obtain ⟨hbl, rfl⟩ := takeN_eq ht
         obtain ⟨hil, rfl⟩ := takeN_eq hii
         rw [show le 1 1 = some [1] by decide] at h4; cases h4
+        rw [List.toByteArray_nil] at hok
         refine ⟨x1 ++ (x2 ++ (x3 ++ [])) ++ (1 :: bb) ++ ii, ?_, by simp⟩
         have hz : (bb == zeroDigest) = false := by simpa using hne
         simp [encLeaf, guard, hok, hbl, hil, hhd, list_ba, hz, List.size_toByteArray]
-      · first | cases h | (obtain ⟨_, hbb, _⟩ := obind_some h; cases hbb)
+      · split at h
+        · rename_i hf0 hf1 hf2
+          obtain rfl : f = 2 := by simpa using hf2
+          replace h := obind_some h; obtain ⟨⟨ee, r2⟩, he2, h⟩ := h
+          dsimp only at h
+          replace h := guard_bind_some h; obtain ⟨hne, h⟩ := h
+          try rw [pure_bind] at h
+          try dsimp only at h
+          replace h := obind_some h; obtain ⟨⟨ii, r3⟩, hii, h⟩ := h
+          dsimp only at h
+          replace h := guard_bind_some h; obtain ⟨hok, h⟩ := h
+          cases h
+          obtain ⟨c, hc, rfl⟩ := blob2_blob2Rec _ _ _ he2
+          obtain ⟨hil, rfl⟩ := takeN_eq hii
+          rw [show le 1 2 = some [2] by decide] at h4; cases h4
+          refine ⟨x1 ++ (x2 ++ (x3 ++ [])) ++ (2 :: c) ++ ii, ?_, by simp⟩
+          have hne' : ee ≠ [] := by simpa using hne
+          simp [encLeaf, guard, hok, hzl, hil, hhd, list_ba, List.size_toByteArray, hc, hne']
+        · first | cases h | (obtain ⟨_, hbb, _⟩ := obind_some h; cases hbb)
 
-
-private theorem blob2Rec_blob2 (x c r : Bytes) (h : blob2 x = some c) : blob2Rec (c ++ r) = some (x, r) := by
-  unfold blob2 at h
-  obtain ⟨l, hl, h⟩ := obind_some h
-  cases h
-  unfold blob2Rec
-  rw [List.append_assoc, numRec_le hl]
-  simp [Except.toOption, takeN_append]
-
-private theorem blob2_blob2Rec (bs x r : Bytes) (h : blob2Rec bs = some (x, r)) : ∃ c, blob2 x = some c ∧ bs = c ++ r := by
-  unfold blob2Rec at h
-  obtain ⟨⟨n, r1⟩, hn, h2⟩ := obind_some h
-  obtain ⟨b, hb, hbs⟩ := numRec_eq (toOption_ok hn)
-  dsimp only at h2
-  obtain ⟨hl, hr1⟩ := takeN_eq h2
-  refine ⟨b ++ x, ?_, by rw [hbs, hr1, List.append_assoc]⟩
-  simp [blob2, hl, hb]
 
 private theorem mapM_toList {β : Type} (f : Bytes → Option β) (l : List ByteArray) :
     l.mapM (fun x => f x.toList) = (l.map (·.toList)).mapM f := by
@@ -1451,7 +1503,7 @@ private theorem decExt_encExt (e : Ext) (x r : Bytes) (h : encExt e = some x) : 
   rw [mapM_toList] at hns has
   have hhl : hold.toList.length = 16 := by rw [← Flat.Bin.size_eq_length']; exact hh
   have hgl : grant.toList.length = 64 := by rw [← Flat.Bin.size_eq_length']; exact hgr
-  have hal : auth.toList.length = 208 := by rw [← Flat.Bin.size_eq_length']; exact har
+  have hal : auth.toList.length = authLen := by rw [← Flat.Bin.size_eq_length']; exact har
   have m1 : ∀ r, manyO blob2Rec notes.length (ns.flatten ++ r) = some (notes.map (·.toList), r) := by
     intro r; have := manyO_enc blob2Rec_blob2 _ ns r hns; simpa using this
   have m2 : ∀ r, manyO decLeaf leaves.length (ls.flatten ++ r) = some (leaves, r) :=
@@ -1485,7 +1537,7 @@ private theorem encExt_decExt (bs : Bytes) (e : Ext) (r : Bytes) (h : decExt bs 
   obtain ⟨b7, hb7, rfl⟩ := numRec_eq (toOption_ok h7)
   obtain ⟨hn8, cs8, hcs8, rfl⟩ := manyO_dec blob2_blob2Rec _ _ _ _ h8
   refine ⟨hold ++ grant ++ auth ++ b3 ++ cs4.flatten ++ b5 ++ cs6.flatten ++ b7 ++ cs8.flatten, ?_, by simp⟩
-  have hg : (hold.toByteArray.size = 16 && grant.toByteArray.size = 64 && auth.toByteArray.size = 208) = true := by
+  have hg : (hold.toByteArray.size = 16 && grant.toByteArray.size = 64 && auth.toByteArray.size = authLen) = true := by
     simp [hl1, hl2, hl2a]
   unfold encExt
   rw [guard_pos hg]
@@ -1515,6 +1567,7 @@ abbrev reqsOk (reqs : List Run.Req) : Bool :=
 
 def AuthWF (a : Auth) : Prop :=
   (∀ e ∈ a.reqs, e.x.toList.length ≤ maxRequestBytes ∧ Run.reqOf e.x = some e) ∧
+  (a.rsv != 0 || a.rs == zeroDigest) = true ∧
   (a.release.length == 0 || a.release.length == 64) = true ∧ reqsOk a.reqs = true
 
 /-- The well-formedness every decodable request has. -/
@@ -1794,58 +1847,71 @@ private theorem floor_norm {fp fv : Nat} (h : (fp ≤ 1 && (fp == 1 || fv == 0))
     rcases (by omega : fp = 0 ∨ fp = 1) with rfl | rfl <;> simp
 
 private def encAuth' (a : Auth) : Option Bytes := do
-  guard (a.pin.length = 64)
+  guard (a.pin.length = 64 ∧ a.rs.length = 64)
   let f ← leAll [1, 8] [if a.floor.isSome then 1 else 0, a.floor.getD 0]
   let kf ← le 4 a.kfloor
+  let v ← le 4 a.rsv
   let g ← blob a.grant
   let k ← blob a.keyset
   let r ← blob a.release
   let ks ← a.ksteps.mapM ksEnc
   let bs ← a.byps.mapM blob
+  let ss ← a.rsets.mapM blob
   let rs ← a.reqs.mapM (fun e => blob e.x.toList)
   let n1 ← le 4 a.ksteps.length
   let n2 ← le 4 a.byps.length
+  let n4 ← le 4 a.rsets.length
   let n3 ← le 4 a.reqs.length
-  pure (a.pin ++ f ++ kf ++ g ++ k ++ r ++ n1 ++ ks.flatten ++ n2 ++ bs.flatten ++ n3 ++ rs.flatten)
+  pure (a.pin ++ f ++ kf ++ v ++ a.rs ++ g ++ k ++ r ++ n1 ++ ks.flatten ++ n2 ++ bs.flatten ++ n4 ++ ss.flatten ++ n3 ++
+    rs.flatten)
 
 private theorem encAuth_eq (a : Auth) : encAuth a = encAuth' a := rfl
 
 private theorem encAuth_some {a : Auth} {b : Bytes} (h : encAuth a = some b) :
-    a.pin.length = 64 ∧ ∃ fb kf g k rr n1 n2 n3 : Bytes, ∃ ks bs rs : List Bytes,
+    (a.pin.length = 64 ∧ a.rs.length = 64) ∧ ∃ fb kf v g k rr n1 n2 n4 n3 : Bytes, ∃ ks bs ss rs : List Bytes,
       leAll [1, 8] [if a.floor.isSome then 1 else 0, a.floor.getD 0] = some fb ∧ le 4 a.kfloor = some kf ∧
-      blob a.grant = some g ∧ blob a.keyset = some k ∧ blob a.release = some rr ∧
-      a.ksteps.mapM ksEnc = some ks ∧ a.byps.mapM blob = some bs ∧ a.reqs.mapM (fun e => blob e.x.toList) = some rs ∧
-      le 4 a.ksteps.length = some n1 ∧ le 4 a.byps.length = some n2 ∧ le 4 a.reqs.length = some n3 ∧
-      b = a.pin ++ fb ++ kf ++ g ++ k ++ rr ++ n1 ++ ks.flatten ++ n2 ++ bs.flatten ++ n3 ++ rs.flatten := by
+      le 4 a.rsv = some v ∧ blob a.grant = some g ∧ blob a.keyset = some k ∧ blob a.release = some rr ∧
+      a.ksteps.mapM ksEnc = some ks ∧ a.byps.mapM blob = some bs ∧ a.rsets.mapM blob = some ss ∧
+      a.reqs.mapM (fun e => blob e.x.toList) = some rs ∧
+      le 4 a.ksteps.length = some n1 ∧ le 4 a.byps.length = some n2 ∧ le 4 a.rsets.length = some n4 ∧
+      le 4 a.reqs.length = some n3 ∧
+      b = a.pin ++ fb ++ kf ++ v ++ a.rs ++ g ++ k ++ rr ++ n1 ++ ks.flatten ++ n2 ++ bs.flatten ++ n4 ++ ss.flatten ++ n3 ++
+        rs.flatten := by
   rw [encAuth_eq] at h
   unfold encAuth' at h
   obtain ⟨hp, h⟩ := guard_bind_some h
   obtain ⟨fb, hfb, h⟩ := obind_some h
   obtain ⟨kf, hkf, h⟩ := obind_some h
+  obtain ⟨v, hv, h⟩ := obind_some h
   obtain ⟨g, hg, h⟩ := obind_some h
   obtain ⟨k, hk, h⟩ := obind_some h
   obtain ⟨rr, hrr, h⟩ := obind_some h
   obtain ⟨ks, hks, h⟩ := obind_some h
   obtain ⟨bs, hbs, h⟩ := obind_some h
+  obtain ⟨ss, hss, h⟩ := obind_some h
   obtain ⟨rs, hrs, h⟩ := obind_some h
   obtain ⟨n1, hn1, h⟩ := obind_some h
   obtain ⟨n2, hn2, h⟩ := obind_some h
+  obtain ⟨n4, hn4, h⟩ := obind_some h
   obtain ⟨n3, hn3, h⟩ := obind_some h
   cases h
-  exact ⟨hp, fb, kf, g, k, rr, n1, n2, n3, ks, bs, rs, hfb, hkf, hg, hk, hrr, hks, hbs, hrs, hn1, hn2, hn3, rfl⟩
+  exact ⟨hp, fb, kf, v, g, k, rr, n1, n2, n4, n3, ks, bs, ss, rs, hfb, hkf, hv, hg, hk, hrr, hks, hbs, hss, hrs, hn1, hn2,
+    hn4, hn3, rfl⟩
 
-private theorem encAuth_of {a : Auth} {fb kf g k rr n1 n2 n3 : Bytes} {ks bs rs : List Bytes}
-    (hp : a.pin.length = 64)
+private theorem encAuth_of {a : Auth} {fb kf v g k rr n1 n2 n4 n3 : Bytes} {ks bs ss rs : List Bytes}
+    (hp : a.pin.length = 64 ∧ a.rs.length = 64)
     (hfb : leAll [1, 8] [if a.floor.isSome then 1 else 0, a.floor.getD 0] = some fb) (hkf : le 4 a.kfloor = some kf)
-    (hg : blob a.grant = some g) (hk : blob a.keyset = some k) (hrr : blob a.release = some rr)
-    (hks : a.ksteps.mapM ksEnc = some ks) (hbs : a.byps.mapM blob = some bs)
+    (hv : le 4 a.rsv = some v) (hg : blob a.grant = some g) (hk : blob a.keyset = some k) (hrr : blob a.release = some rr)
+    (hks : a.ksteps.mapM ksEnc = some ks) (hbs : a.byps.mapM blob = some bs) (hss : a.rsets.mapM blob = some ss)
     (hrs : a.reqs.mapM (fun e => blob e.x.toList) = some rs)
-    (hn1 : le 4 a.ksteps.length = some n1) (hn2 : le 4 a.byps.length = some n2) (hn3 : le 4 a.reqs.length = some n3) :
-    encAuth a = some (a.pin ++ fb ++ kf ++ g ++ k ++ rr ++ n1 ++ ks.flatten ++ n2 ++ bs.flatten ++ n3 ++ rs.flatten) := by
+    (hn1 : le 4 a.ksteps.length = some n1) (hn2 : le 4 a.byps.length = some n2) (hn4 : le 4 a.rsets.length = some n4)
+    (hn3 : le 4 a.reqs.length = some n3) :
+    encAuth a = some (a.pin ++ fb ++ kf ++ v ++ a.rs ++ g ++ k ++ rr ++ n1 ++ ks.flatten ++ n2 ++ bs.flatten ++ n4 ++
+      ss.flatten ++ n3 ++ rs.flatten) := by
   rw [encAuth_eq]
   unfold encAuth'
   rw [guard_pos hp]
-  simp [hfb, hkf, hg, hk, hrr, hks, hbs, hrs, hn1, hn2, hn3]
+  simp [hfb, hkf, hv, hg, hk, hrr, hks, hbs, hss, hrs, hn1, hn2, hn4, hn3]
 
 private theorem authRec_dec {bs r : Bytes} {a : Auth} (h : authRec bs = .ok (a, r)) :
     ∃ b, encAuth a = some b ∧ bs = b ++ r ∧ AuthWF a := by
@@ -1861,6 +1927,13 @@ private theorem authRec_dec {bs r : Bytes} {a : Auth} (h : authRec bs = .ok (a, 
     split at h4
     · rename_i hP
       obtain ⟨⟨kf, s0⟩, k0, h4⟩ := bind_ok _ _ _ h4
+      obtain ⟨⟨rsv, sv⟩, kv, h4⟩ := bind_ok _ _ _ h4
+      obtain ⟨⟨rs, sr⟩, kr, h4⟩ := bind_ok _ _ _ h4
+      dsimp only at h4
+      split at h4
+      rotate_left
+      · cases h4
+      rename_i hV
       obtain ⟨⟨grant, s1⟩, k1, k2⟩ := bind_ok _ _ _ h4
       obtain ⟨⟨keyset, s2⟩, k3, k4⟩ := bind_ok _ _ _ k2
       obtain ⟨⟨release, s3⟩, k5, k6⟩ := bind_ok _ _ _ k4
@@ -1871,6 +1944,8 @@ private theorem authRec_dec {bs r : Bytes} {a : Auth} (h : authRec bs = .ok (a, 
         obtain ⟨⟨ksteps, t2⟩, m3, m4⟩ := bind_ok _ _ _ m2
         obtain ⟨⟨nb, t3⟩, m5, m6⟩ := bind_ok _ _ _ m4
         obtain ⟨⟨byps, t4⟩, m7, m8⟩ := bind_ok _ _ _ m6
+        obtain ⟨⟨ns, u1⟩, s1, s2⟩ := bind_ok _ _ _ m8
+        obtain ⟨⟨rsets, u2⟩, s3, m8⟩ := bind_ok _ _ _ s2
         obtain ⟨⟨nq, t5⟩, m9, m10⟩ := bind_ok _ _ _ m8
         obtain ⟨⟨reqs, t6⟩, m11, m12⟩ := bind_ok _ _ _ m10
         dsimp only at m12
@@ -1881,6 +1956,8 @@ private theorem authRec_dec {bs r : Bytes} {a : Auth} (h : authRec bs = .ok (a, 
           simp only [Prod.mk.injEq] at m13
           obtain ⟨rfl, rfl⟩ := m13
           obtain ⟨bkf, hbkf, rfl⟩ := numRec_eq k0
+          obtain ⟨bv, hbv, rfl⟩ := numRec_eq kv
+          obtain ⟨hrsl, rfl⟩ := cut_inv kr
           obtain ⟨bg, hbg, rfl⟩ := blobRec_dec k1
           obtain ⟨bk, hbk, rfl⟩ := blobRec_dec k3
           obtain ⟨brr, hbrr, rfl⟩ := blobRec_dec k5
@@ -1888,19 +1965,21 @@ private theorem authRec_dec {bs r : Bytes} {a : Auth} (h : authRec bs = .ok (a, 
           obtain ⟨hlk, cks, hcks, rfl⟩ := manyE_dec (enc := ksEnc) (fun bs x r h => kstepRec_dec h) _ _ _ _ m3
           obtain ⟨bn2, hbn2, rfl⟩ := numRec_eq m5
           obtain ⟨hlb, cbs, hcbs, rfl⟩ := manyE_dec (enc := blob) (fun bs x r h => blobRec_dec h) _ _ _ _ m7
+          obtain ⟨bn4, hbn4, rfl⟩ := numRec_eq s1
+          obtain ⟨hls, css, hcss, rfl⟩ := manyE_dec (enc := blob) (fun bs x r h => blobRec_dec h) _ _ _ _ s3
           obtain ⟨bn3, hbn3, rfl⟩ := numRec_eq m9
           obtain ⟨hlr, crs, hcrs, rfl⟩ := manyE_dec (enc := fun e => blob e.x.toList)
             (fun bs x r h => let ⟨b, hb, hbs, _, _⟩ := reqRec_dec h; ⟨b, hb, hbs⟩) _ _ _ _ m11
           have hall := many_all (P := fun e : Run.Req => e.x.toList.length ≤ maxRequestBytes ∧ Run.reqOf e.x = some e)
             (fun bs x r h => let ⟨_, _, _, h1, h2⟩ := reqRec_dec h; ⟨h1, h2⟩) _ _ _ _ m11
           obtain ⟨hf1, hf2⟩ := floor_norm hP
-          subst hlk hlb hlr
+          subst hlk hlb hls hlr
           have hfb' : leAll [1, 8] [if (if fp == 1 then some fv else none).isSome then 1 else 0,
               (if fp == 1 then some fv else none).getD 0] = some fb := by
             rw [hf1, hf2]; exact hfb
-          have henc := encAuth_of (a := ⟨pin, (if fp == 1 then some fv else none), kf, grant, keyset, release, ksteps,
-            byps, reqs⟩) hpl hfb' hbkf hbg hbk hbrr hcks hcbs hcrs hbn1 hbn2 hbn3
-          refine ⟨_, henc, ?_, hall, hQ, hR⟩
+          have henc := encAuth_of (a := ⟨pin, (if fp == 1 then some fv else none), kf, rsv, rs, grant, keyset, release,
+            ksteps, byps, rsets, reqs⟩) ⟨hpl, hrsl⟩ hfb' hbkf hbv hbg hbk hbrr hcks hcbs hcss hcrs hbn1 hbn2 hbn4 hbn3
+          refine ⟨_, henc, ?_, hall, hV, hQ, hR⟩
           simp [List.append_assoc]
         · rw [if_neg hR] at m12
           cases m12
@@ -1910,23 +1989,28 @@ private theorem authRec_dec {bs r : Bytes} {a : Auth} (h : authRec bs = .ok (a, 
 
 private theorem authRec_enc {a : Auth} {b : Bytes} (h : encAuth a = some b) (hw : AuthWF a) (r : Bytes) :
     authRec (b ++ r) = .ok (a, r) := by
-  obtain ⟨hp, fb, kf, g, k, rr, n1, n2, n3, ks, bs, rs, hfb, hkf, hg, hk, hrr, hks, hbs, hrs, hn1, hn2, hn3, rfl⟩ :=
-    encAuth_some h
-  obtain ⟨hreq, hrel, hcond⟩ := hw
+  obtain ⟨⟨hp, hrsl⟩, fb, kf, v, g, k, rr, n1, n2, n4, n3, ks, bs, ss, rs, hfb, hkf, hv, hg, hk, hrr, hks, hbs, hss, hrs,
+    hn1, hn2, hn4, hn3, rfl⟩ := encAuth_some h
+  obtain ⟨hreq, hV, hrel, hcond⟩ := hw
   have hP : ((if a.floor.isSome then 1 else 0) ≤ 1 &&
       ((if a.floor.isSome then 1 else 0) == 1 || a.floor.getD 0 == 0)) = true := by
     rcases hfl : a.floor with _ | v <;> simp [hfl]
   have hA : a.floor = (if (if a.floor.isSome then 1 else 0) == 1 then some (a.floor.getD 0) else none) := by
     rcases hfl : a.floor with _ | v <;> simp [hfl]
   unfold authRec
-  rw [show a.pin ++ fb ++ kf ++ g ++ k ++ rr ++ n1 ++ ks.flatten ++ n2 ++ bs.flatten ++ n3 ++ rs.flatten ++ r =
-    a.pin ++ (fb ++ (kf ++ (g ++ (k ++ (rr ++ (n1 ++ (ks.flatten ++ (n2 ++ (bs.flatten ++ (n3 ++ (rs.flatten ++ r))))))))))) by
-      simp]
+  rw [show a.pin ++ fb ++ kf ++ v ++ a.rs ++ g ++ k ++ rr ++ n1 ++ ks.flatten ++ n2 ++ bs.flatten ++ n4 ++ ss.flatten ++
+      n3 ++ rs.flatten ++ r =
+    a.pin ++ (fb ++ (kf ++ (v ++ (a.rs ++ (g ++ (k ++ (rr ++ (n1 ++ (ks.flatten ++ (n2 ++ (bs.flatten ++ (n4 ++
+      (ss.flatten ++ (n3 ++ (rs.flatten ++ r))))))))))))))) by simp]
   refine ok_bind _ _ (a.pin, _) _ (cut_enc hp _) ?_
   refine ok_bind _ _ ([if a.floor.isSome then 1 else 0, a.floor.getD 0], _) _ (nums_leAll' hfb _) ?_
   dsimp only
   rw [if_pos hP]
   refine ok_bind _ _ (a.kfloor, _) _ (numRec_le hkf _) ?_
+  refine ok_bind _ _ (a.rsv, _) _ (numRec_le hv _) ?_
+  refine ok_bind _ _ (a.rs, _) _ (cut_enc hrsl _) ?_
+  dsimp only
+  rw [if_pos hV]
   refine ok_bind _ _ (a.grant, _) _ (blobRec_enc hg _) ?_
   refine ok_bind _ _ (a.keyset, _) _ (blobRec_enc hk _) ?_
   refine ok_bind _ _ (a.release, _) _ (blobRec_enc hrr _) ?_
@@ -1940,6 +2024,9 @@ private theorem authRec_enc {a : Auth} {b : Bytes} (h : encAuth a = some b) (hw 
   refine ok_bind _ _ (a.byps.length, _) _ (numRec_le hn2 _) ?_
   refine ok_bind _ _ (a.byps, _) _
     (manyE_enc (enc := blob) (f := blobRec) a.byps (fun x _ b r h => blobRec_enc h r) bs _ hbs) ?_
+  refine ok_bind _ _ (a.rsets.length, _) _ (numRec_le hn4 _) ?_
+  refine ok_bind _ _ (a.rsets, _) _
+    (manyE_enc (enc := blob) (f := blobRec) a.rsets (fun x _ b r h => blobRec_enc h r) ss _ hss) ?_
   refine ok_bind _ _ (a.reqs.length, _) _ (numRec_le hn3 _) ?_
   refine ok_bind _ _ (a.reqs, _) _
     (manyE_enc (enc := fun e => blob e.x.toList) (f := reqRec) a.reqs
@@ -1949,7 +2036,7 @@ private theorem authRec_enc {a : Auth} {b : Bytes} (h : encAuth a = some b) (hw 
   rotate_left
   · rename_i hn; exact absurd hcond hn
   have hfin : (⟨a.pin, (if (if a.floor.isSome then 1 else 0) == 1 then some (a.floor.getD 0) else none), a.kfloor,
-      a.grant, a.keyset, a.release, a.ksteps, a.byps, a.reqs⟩ : Auth) = a := by
+      a.rsv, a.rs, a.grant, a.keyset, a.release, a.ksteps, a.byps, a.rsets, a.reqs⟩ : Auth) = a := by
     rw [← hA]
   exact congrArg (fun x => (Except.ok (x, r) : Except Word (Auth × Bytes))) hfin
 
@@ -2095,7 +2182,7 @@ private theorem decodeBody_enc {hd : Hdr} {q : Req} {b : Bytes} (h : encodeBody 
 /-! #### The header -/
 
 private theorem decodeHdr_dec {bs body : Bytes} {hd : Hdr} (h : decodeHdr bs = .ok (hd, body)) :
-    ∃ hh, leAll [2, 4, 8] [version, hd.shard, hd.batch] = some hh ∧ hd.digest.length = 64 ∧
+    ∃ hh, leAll [2, 4, 8] [reqVersion, hd.shard, hd.batch] = some hh ∧ hd.digest.length = 64 ∧
       bs = magicReq ++ hh ++ hd.digest ++ body := by
   unfold decodeHdr at h
   rcases ht : takeN hdrBytes bs with _ | ⟨hh, body'⟩
@@ -2140,7 +2227,7 @@ private theorem decodeHdr_dec {bs body : Bytes} {hd : Hdr} (h : decodeHdr bs = .
         rw [e]
     · cases h
 
-private theorem decodeHdr_enc {sh bt : Nat} {hh dg : Bytes} (h : leAll [2, 4, 8] [version, sh, bt] = some hh)
+private theorem decodeHdr_enc {sh bt : Nat} {hh dg : Bytes} (h : leAll [2, 4, 8] [reqVersion, sh, bt] = some hh)
     (hdl : dg.length = 64) (body : Bytes) :
     decodeHdr (magicReq ++ hh ++ dg ++ body) = .ok (⟨sh, bt, dg⟩, body) := by
   obtain ⟨x1, y1, h1, hy1, rfl⟩ := leAll_cons_some h
@@ -2175,31 +2262,27 @@ private theorem decodeHdr_enc {sh bt : Nat} {hh dg : Bytes} (h : leAll [2, 4, 8]
   simp [bind, Except.bind, pure, Except.pure, t4, hx1, hx2, hx3, d18, unle_le _ _ _ h1, unle_le _ _ _ h2,
     unle_le _ _ _ h3]
 
-private theorem decodeReq_inv {H : Bytes → Bytes} {bs dg : Bytes} {q : Req} (h : decodeReq H bs = .ok (q, dg)) :
-    ∃ hh b, leAll [2, 4, 8] [version, q.shard, q.batch] = some hh ∧ encodeBody q = some b ∧
-      dg = H (domain "FRAME" ++ b) ∧ dg.length = 64 ∧ bs = magicReq ++ hh ++ dg ++ b ∧ ReqWF q := by
+private theorem decodeReq_inv {bs dg : Bytes} {q : Req} (h : decodeReq bs = .ok (q, dg)) :
+    ∃ hh b, leAll [2, 4, 8] [reqVersion, q.shard, q.batch] = some hh ∧ encodeBody q = some b ∧
+      dg.length = 64 ∧ bs = magicReq ++ hh ++ dg ++ b ∧ ReqWF q := by
   unfold decodeReq at h
   obtain ⟨⟨hd, body⟩, h1, h2⟩ := bind_ok _ _ _ h
   obtain ⟨hh, hhh, hdl, hbs⟩ := decodeHdr_dec h1
   dsimp only at h2
-  split at h2
-  · rename_i hP
-    obtain ⟨⟨q', rest⟩, h3, h4⟩ := bind_ok _ _ _ h2
-    obtain ⟨b, hb, hbody, hsh, hba, hwf⟩ := decodeBody_dec h3
-    split at h4
-    · rename_i hE
-      have hE' : rest = [] := by simpa using hE
-      have h4' := Except.ok.inj h4
-      simp only [Prod.mk.injEq] at h4'
-      obtain ⟨rfl, rfl⟩ := h4'
-      subst hE'
-      rw [List.append_nil] at hbody
-      subst hbody
-      have hP' : H (domain "FRAME" ++ body) = hd.digest := by simpa using hP
-      refine ⟨hh, body, ?_, hb, hP'.symm, hdl, hbs, hwf⟩
-      rw [hsh, hba]; exact hhh
-    · cases h4
-  · cases h2
+  obtain ⟨⟨q', rest⟩, h3, h4⟩ := bind_ok _ _ _ h2
+  obtain ⟨b, hb, hbody, hsh, hba, hwf⟩ := decodeBody_dec h3
+  split at h4
+  · rename_i hE
+    have hE' : rest = [] := by simpa using hE
+    have h4' := Except.ok.inj h4
+    simp only [Prod.mk.injEq] at h4'
+    obtain ⟨rfl, rfl⟩ := h4'
+    subst hE'
+    rw [List.append_nil] at hbody
+    subst hbody
+    refine ⟨hh, body, ?_, hb, hdl, hbs, hwf⟩
+    rw [hsh, hba]; exact hhh
+  · cases h4
 
 private theorem mapM_len {β γ : Type} {g : β → Option (List γ)} {w : Nat} (hg : ∀ x b, g x = some b → b.length = w) :
     ∀ (xs : List β) (cs : List (List γ)), xs.mapM g = some cs → cs.flatten.length = w * xs.length
@@ -2242,53 +2325,100 @@ private theorem encodeBody_length {q : Req} {b : Bytes} (h : encodeBody q = some
 /-- Round trip, both ways: the request bytes are canonical, so the digest names the request.  The request must be
     one the decoder can read (`ReqWF`): the encoder does not check that each payment request decodes from its bytes. -/
 theorem decodeReq_encodeReq (hH : ∀ x, (H x).length = 64) (hw : ReqWF q) (bs : Bytes) (h : encodeReq H q = some bs) :
-    decodeReq H bs = .ok (q, H (domain "FRAME" ++ bs.drop hdrBytes)) := by
+    decodeReq bs = .ok (q, frameDigest H (bs.drop hdrBytes)) := by
   unfold encodeReq at h
   obtain ⟨b, hb, h⟩ := obind_some h
   obtain ⟨hh, hhh, h⟩ := obind_some h
   cases h
-  have hhl : (magicReq ++ hh ++ H (domain "FRAME" ++ b)).length = hdrBytes := by
-    simp [magicReq_length, leAll_length _ _ _ hhh, hH, hdrBytes]
-  have hdrop : (magicReq ++ hh ++ H (domain "FRAME" ++ b) ++ b).drop hdrBytes = b := by
+  have hhl : (magicReq ++ hh ++ frameDigest H b).length = hdrBytes := by
+    simp [magicReq_length, leAll_length _ _ _ hhh, hH, hdrBytes, frameDigest]
+  have hdrop : (magicReq ++ hh ++ frameDigest H b ++ b).drop hdrBytes = b := by
     rw [← hhl]; exact List.drop_left' rfl
   rw [hdrop]
   unfold decodeReq
-  refine ok_bind _ _ (⟨q.shard, q.batch, H (domain "FRAME" ++ b)⟩, b) _ (decodeHdr_enc hhh (hH _) b) ?_
+  refine ok_bind _ _ (⟨q.shard, q.batch, frameDigest H b⟩, b) _ (decodeHdr_enc (dg := frameDigest H b) hhh (hH (framePre b)) b) ?_
   dsimp only
-  split
-  rotate_left
-  · rename_i hn; exact absurd (by simp) hn
   refine ok_bind _ _ (q, []) _
-    (by simpa using decodeBody_enc (hd := ⟨q.shard, q.batch, H (domain "FRAME" ++ b)⟩) hb rfl rfl hw []) ?_
+    (by simpa using decodeBody_enc (hd := ⟨q.shard, q.batch, frameDigest H b⟩) hb rfl rfl hw []) ?_
   dsimp only
   split
   rotate_left
   · rename_i hn; exact absurd (by simp) hn
   rfl
 
-theorem encodeReq_decodeReq (bs dg : Bytes) (h : decodeReq H bs = .ok (q, dg)) : encodeReq H q = some bs := by
-  obtain ⟨hh, b, hhh, hb, hdg, hdl, hbs, hwf⟩ := decodeReq_inv h
-  subst hbs hdg
+/-- The decoder does not compare the digest, so this direction needs it said: a frame that decodes, and whose header
+    carries the digest of its body (what the host writes and the checker recomputes), is the encoding of its request. -/
+theorem encodeReq_decodeReq (bs dg : Bytes) (h : decodeReq bs = .ok (q, dg))
+    (hdg : frameDigest H (bs.drop hdrBytes) = dg) : encodeReq H q = some bs := by
+  obtain ⟨hh, b, hhh, hb, hdl, hbs, hwf⟩ := decodeReq_inv h
+  subst hbs
+  have hhl : (magicReq ++ hh ++ dg).length = hdrBytes := by
+    simp [magicReq_length, leAll_length _ _ _ hhh, hdl, hdrBytes]
+  have hdrop : (magicReq ++ hh ++ dg ++ b).drop hdrBytes = b := by
+    rw [← hhl]; exact List.drop_left' rfl
+  rw [hdrop] at hdg
+  subst hdg
   unfold encodeReq
   rw [hb, hhh]
   rfl
 
 /-- Every request the decoder returns is well-formed, so the round trip above covers every decodable request. -/
-theorem decodeReq_wf (bs dg : Bytes) (h : decodeReq H bs = .ok (q, dg)) : ReqWF q := by
-  obtain ⟨hh, b, hhh, hb, hdg, hdl, hbs, hwf⟩ := decodeReq_inv h
+theorem decodeReq_wf (bs dg : Bytes) (h : decodeReq bs = .ok (q, dg)) : ReqWF q := by
+  obtain ⟨hh, b, hhh, hb, hdl, hbs, hwf⟩ := decodeReq_inv h
   exact hwf
 
 /-- An accepted frame has exactly the length its counts give. -/
-theorem decodeReq_length (bs dg : Bytes) (h : decodeReq H bs = .ok (q, dg)) :
+theorem decodeReq_length (bs dg : Bytes) (h : decodeReq bs = .ok (q, dg)) :
     bs.length = hdrBytes + bodyBytes q := by
-  obtain ⟨hh, b, hhh, hb, hdg, hdl, hbs, hwf⟩ := decodeReq_inv h
+  obtain ⟨hh, b, hhh, hb, hdl, hbs, hwf⟩ := decodeReq_inv h
   rw [hbs, ← encodeBody_length hb]
   simp [leAll_length _ _ _ hhh, magicReq_length, hdl, hdrBytes]
   omega
 
+/-! ### The frame digest (XI.2: one hash of the whole body, which the engine carries) -/
+
+/-- The digest's preimage fixes the body, byte for byte. -/
+theorem framePre_inj (a b : Bytes) : framePre a = framePre b ↔ a = b := by
+  simp [framePre]
+
+private theorem decodeReq_body {bs dg : Bytes} {q : Req} (h : decodeReq bs = .ok (q, dg)) :
+    encodeBody q = some (bs.drop hdrBytes) ∧ ReqWF q := by
+  obtain ⟨hh, b, hhh, hb, hdl, rfl, hwf⟩ := decodeReq_inv h
+  have hhl : (magicReq ++ hh ++ dg).length = hdrBytes := by
+    simp [magicReq_length, leAll_length _ _ _ hhh, hdl, hdrBytes]
+  have hdrop : (magicReq ++ hh ++ dg ++ b).drop hdrBytes = b := by
+    rw [← hhl]; exact List.drop_left' rfl
+  rw [hdrop]
+  exact ⟨hb, hwf⟩
+
+/-- A body encodes the same under any shard, and as a first batch (whose genesis date is free). -/
+private theorem encodeBody_first {q : Req} {b : Bytes} (h : encodeBody q = some b) :
+    encodeBody { q with shard := 0, batch := 1 } = some b := by
+  obtain ⟨hp, -, c, n, d1, r1, d2, r2, d3, r3, d4, r4, au, rs, hc, hn, e1, e2, e3, e4, hrs, hau, rfl⟩ :=
+    encodeBody_some h
+  exact encodeBody_of (q := { q with shard := 0, batch := 1 }) hp (by simp) hc hn e1 e2 e3 e4 hrs hau
+
+/-- The digest binds the frame it is carried in.  Two frames the decoder reads (so within every bound of the format)
+    whose bodies have the same preimage have the same body bytes and the same request: the context, the feeds, the
+    authority section and every payment request's bytes, in the order sent.  Shard and batch are header fields: the
+    digest does not cover them, and never did. -/
+theorem frameDigest_binds (bs1 bs2 dg1 dg2 : Bytes) (q1 q2 : Req) (h1 : decodeReq bs1 = .ok (q1, dg1))
+    (h2 : decodeReq bs2 = .ok (q2, dg2)) (h : framePre (bs1.drop hdrBytes) = framePre (bs2.drop hdrBytes)) :
+    bs1.drop hdrBytes = bs2.drop hdrBytes ∧ q2 = { q1 with shard := q2.shard, batch := q2.batch } := by
+  have hb := (framePre_inj _ _).mp h
+  refine ⟨hb, ?_⟩
+  obtain ⟨e1, w1⟩ := decodeReq_body h1
+  obtain ⟨e2, w2⟩ := decodeReq_body h2
+  rw [← hb] at e2
+  have k1 := decodeBody_enc (hd := ⟨0, 1, []⟩) (encodeBody_first e1) rfl rfl w1 []
+  have k2 := decodeBody_enc (hd := ⟨0, 1, []⟩) (encodeBody_first e2) rfl rfl w2 []
+  have k := (Prod.mk.inj (Except.ok.inj (k1.symm.trans k2))).1
+  cases q1
+  cases q2
+  simp at k
+  simp [k]
+
 /-! ### The answer -/
-
-
 
 theorem decodeAns_encodeAns (a : AnsFrame) (bs : Bytes) (h : encodeAns a = some bs) : decodeAns bs = some a := by
   obtain ⟨w, k, b, dg, recs, head, root, ext⟩ := a
@@ -2359,7 +2489,7 @@ theorem encodeAns_decodeAns (a : AnsFrame) (bs : Bytes) (h : decodeAns bs = some
     replace h := obind_some h; obtain ⟨w, hw, h⟩ := h
     have hc := code_of hw
     subst hc
-    obtain rfl : v = ansVersion := by simpa using hv
+    obtain rfl : v = version := by simpa using hv
     have hbl : hb.length = 19 := leAll_length _ _ _ hhb
     have hsplit : hh = magicAns ++ hb ++ dg := by
       rw [← List.take_append_drop 4 hh, hdrop, (by simpa using hm : hh.take 4 = magicAns)]; simp
@@ -3191,12 +3321,12 @@ theorem answer_encodes (hn : dv.lines.length < 2 ^ 24)
   have e24 : (2 : Nat) ^ 24 = 16777216 := by decide
   have e32 : (2 : Nat) ^ 32 = 4294967296 := by decide
   have e64 : (2 : Nat) ^ 64 = 18446744073709551616 := by decide
-  have hh : (leAll [2, 1, 4, 8, 4] [ansVersion, Word.OK.code, q.shard, q.batch, (records H loc s q dv).length]).isSome := by
+  have hh : (leAll [2, 1, 4, 8, 4] [version, Word.OK.code, q.shard, q.batch, (records H loc s q dv).length]).isSome := by
     refine leAll_isSome _ _ rfl ?_
     intro p hp
     simp only [List.zip_cons_cons, List.zip_nil_left, List.mem_cons, List.not_mem_nil, or_false] at hp
     rcases hp with rfl | rfl | rfl | rfl | rfl
-    · show ansVersion < 256 ^ 2
+    · show version < 256 ^ 2
       rw [e2]; decide
     · show Word.OK.code < 256 ^ 1
       rw [e1]; decide
@@ -3247,13 +3377,13 @@ private theorem refusal_word {w : Word} (hw : w ≠ .OK) {bs body : Bytes} {hd :
   obtain ⟨hs, hb, hg⟩ := decodeHdr_fits h
   have hc : w.code < 256 ^ 1 := by cases w <;> decide
   have hm : (decodeHdr bs).toOption.map (·.1) = some hd := by rw [h]; rfl
-  have hL : leAll [2, 1, 4, 8, 4] [ansVersion, w.code, hd.shard, hd.batch, 0] =
-      some (((List.range 2).map fun i => (ansVersion / 256 ^ i % 256).toUInt8) ++
+  have hL : leAll [2, 1, 4, 8, 4] [version, w.code, hd.shard, hd.batch, 0] =
+      some (((List.range 2).map fun i => (version / 256 ^ i % 256).toUInt8) ++
         (((List.range 1).map fun i => (w.code / 256 ^ i % 256).toUInt8) ++
         (((List.range 4).map fun i => (hd.shard / 256 ^ i % 256).toUInt8) ++
         (((List.range 8).map fun i => (hd.batch / 256 ^ i % 256).toUInt8) ++
         (((List.range 4).map fun i => (0 / 256 ^ i % 256).toUInt8) ++ []))))) := by
-    simp only [leAll_cons, le_some (w := 2) (n := ansVersion) (by decide), le_some hc, le_some hs, le_some hb,
+    simp only [leAll_cons, le_some (w := 2) (n := version) (by decide), le_some hc, le_some hs, le_some hb,
       le_some (w := 4) (n := 0) (by decide), leAll_nil, Option.bind_some, Option.map_some]
   obtain ⟨x, hx⟩ : ∃ x, encodeAns ⟨w, hd.shard, hd.batch, hd.digest.toByteArray, [], .empty, .empty,
       ⟨.empty, .empty, .empty, [], [], []⟩⟩ = some x := by
@@ -3286,7 +3416,7 @@ private theorem admit_decide {σ : Type} {H : Bytes → Bytes} {e : Eng σ} {q :
       · cases h
 
 /-- A decoded request's header decoded. -/
-private theorem decodeReq_hdr {H : Bytes → Bytes} {bs dg : Bytes} {q : Req} (h : decodeReq H bs = .ok (q, dg)) :
+private theorem decodeReq_hdr {bs dg : Bytes} {q : Req} (h : decodeReq bs = .ok (q, dg)) :
     ∃ hd body, decodeHdr bs = .ok (hd, body) := by
   unfold decodeReq at h
   obtain ⟨⟨hd, body⟩, hh, -⟩ := bind_ok _ _ _ h
@@ -3300,7 +3430,7 @@ theorem serve_retry (e' : Eng σ) (a : Bytes) (h : serve H dec e bs = (e', a))
     (hd : e'.log.length = e.log.length + 1) : serve H dec e' bs = (e', a) := by
   -- only a decided batch grows the log; resent, it is the logged batch with the logged identity
   unfold serve at h
-  cases hq : decodeReq H bs with
+  cases hq : decodeReq bs with
   | error w => simp only [hq] at h; cases h; omega
   | ok p =>
     obtain ⟨q, dg⟩ := p
@@ -3320,7 +3450,7 @@ theorem serve_retry (e' : Eng σ) (a : Bytes) (h : serve H dec e bs = (e', a))
         simp [serve, hq, admit, h1, h2]
 
 /-- The logged batch number with another identity is refused. -/
-theorem serve_conflict (q : Req) (dg : Bytes) (h : decodeReq H bs = .ok (q, dg)) (hk : q.shard = e.shard)
+theorem serve_conflict (q : Req) (dg : Bytes) (h : decodeReq bs = .ok (q, dg)) (hk : q.shard = e.shard)
     (hb : q.batch = e.log.length) (h0 : 0 < q.batch) (hne : e.log.getLast?.map (·.1) ≠ some (ident H bs q)) :
     (serve H dec e bs).1 = e ∧ (decodeAns (serve H dec e bs).2).map (·.word) = some .CONFLICT := by
   obtain ⟨hd, body, hh⟩ := decodeReq_hdr h
@@ -3341,7 +3471,7 @@ theorem serve_conflict (q : Req) (dg : Bytes) (h : decodeReq H bs = .ok (q, dg))
   exact ⟨rfl, refusal_word (by decide) hh⟩
 
 /-- Any batch number but the next or the last logged is refused. -/
-theorem serve_not_next (q : Req) (dg : Bytes) (h : decodeReq H bs = .ok (q, dg)) (hk : q.shard = e.shard)
+theorem serve_not_next (q : Req) (dg : Bytes) (h : decodeReq bs = .ok (q, dg)) (hk : q.shard = e.shard)
     (hb : q.batch ≠ e.log.length + 1) (hl : q.batch ≠ e.log.length ∨ q.batch = 0) :
     (serve H dec e bs).1 = e ∧ (decodeAns (serve H dec e bs).2).map (·.word) = some .NOT_NEXT := by
   obtain ⟨hd, body, hh⟩ := decodeReq_hdr h
@@ -3365,10 +3495,10 @@ theorem serve_not_next (q : Req) (dg : Bytes) (h : decodeReq H bs = .ok (q, dg))
 
 /-- The log changes only by the next batch, following the engine's head, logged with its identity and the bytes sent. -/
 theorem serve_log :
-    (serve H dec e bs).1 = e ∨ ∃ q dg, decodeReq H bs = .ok (q, dg) ∧ q.shard = e.shard ∧
+    (serve H dec e bs).1 = e ∨ ∃ q dg, decodeReq bs = .ok (q, dg) ∧ q.shard = e.shard ∧
       q.batch = e.log.length + 1 ∧ q.prev = e.head.getD (chainStart H q.shard q.auth.pin (genesis q.asOf)) ∧
       (serve H dec e bs).1.log = e.log ++ [(ident H bs q, (serve H dec e bs).2)] := by
-  cases hq : decodeReq H bs with
+  cases hq : decodeReq bs with
   | error w => left; simp [serve, hq]
   | ok p =>
     obtain ⟨q, dg⟩ := p

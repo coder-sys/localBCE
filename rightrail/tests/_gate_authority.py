@@ -17,7 +17,7 @@ TENANT = fx.TENANT
 STATE = H(b"TEST/STATE")
 TODAY = 20270315
 NB, NA = 20270301, 20270331  # the genesis key set's life; the grant and bypass windows default to it
-SOURCE, APPROVER, ROSTER = 1, 2, 5
+SOURCE, APPROVER, ROSTER, POLICY = 1, 2, 5, 6
 # name -> (role, employee, identity-provider subject); a3 shares a1's subject
 KEYS = {"r1": (ROSTER, "ann", "ann"), "r2": (ROSTER, "bo", "bo"), "a1": (APPROVER, "cy", "sso-cy"),
         "a2": (APPROVER, "di", "sso-di"), "a3": (APPROVER, "ed", "sso-cy"), "s1": (SOURCE, "fay", "fay"),
@@ -47,19 +47,27 @@ def sig_block(signers: tuple[str, ...], msg: bytes) -> bytes:
     return be(len(recs), 1) + b"".join(k + s for k, s in recs)
 
 
-def entry(name: str, revoked: int = LIVE) -> bytes:
-    role, emp, idp = KEYS[name]
+def entry(name: str, revoked: int = LIVE, keys: dict = KEYS) -> bytes:
+    """A key's entry; `keys[name]` is (role, employee, subject) or, with its own validity window, (role, employee,
+    subject, valid_from, valid_until)."""
+    role, emp, idp, *window = keys[name]
+    valid_from, valid_until = window or (20270101, 20271231)
     src = role == SOURCE
     return (key_id(name) + H(b"TEST/EMPLOYEE\x00" + emp.encode()) + H(b"TEST/IDP\x00" + idp.encode()) + be(role, 1)
-            + be(1 if src else 0, 1) + be(1 if src else 0, 1) + be(20270101, 4) + be(20271231, 4) + be(revoked, 4)
+            + be(1 if src else 0, 1) + be(1 if src else 0, 1) + be(valid_from, 4) + be(valid_until, 4) + be(revoked, 4)
             + be(0, 2) + be(0, 8) + be(len(pk(name)), 2) + pk(name))
 
 
-def keyset_body(epoch: int = 0, prev: bytes = bytes(64), nb: int = NB, na: int = NA, revoked: dict | None = None) -> bytes:
-    """KEYSET/v2 body: roster keys r1, r2 (employees ann, bo; quorum 2), approvers a1..a3, sources s1, s2."""
-    names = sorted(KEYS, key=key_id)
+def keyset_body(epoch: int = 0, prev: bytes = bytes(64), nb: int = NB, na: int = NA, revoked: dict | None = None,
+                extra: dict | None = None, k_policy: int = 2) -> bytes:
+    """KEYSET/v2 body: roster keys r1, r2 (employees ann, bo; quorum 2), approvers a1..a3, sources s1, s2, and the keys
+    `extra` names (as KEYS does).  The POLICY threshold byte `k_policy` follows the entries only when some key is POLICY,
+    so without `extra` the body is the one every gate suite signs."""
+    keys = KEYS | (extra or {})
+    names = sorted(keys, key=key_id)
+    tail = be(k_policy, 1) if any(keys[n][0] == POLICY for n in names) else b""
     return (b"RR/KEYSET/v2\x00" + STATE + be(epoch, 4) + prev + be(nb, 4) + be(na, 4) + be(2, 1) + be(2, 1) + be(len(names), 4)
-            + b"".join(entry(n, (revoked or {}).get(n, LIVE)) for n in names))
+            + b"".join(entry(n, (revoked or {}).get(n, LIVE), keys) for n in names) + tail)
 
 
 def keyset_doc(body: bytes, signers: tuple[str, ...] = ("r1", "r2")) -> bytes:
@@ -98,6 +106,17 @@ def bypass(program: str, payment: str, request: bytes, overrides: int, tenant: s
     return _signed(_doc(2, tenant, nb, na, ident(program) + ident(payment) + request + be(overrides, 4), state), signers)
 
 
+def cause(reason: int, entries: list[tuple[str, bytes, int]], flows: int = 1 << 1, dates: tuple[int, int] = (NB, NA),
+          total: int | None = None, tenant: str = TENANT, nb: int = NB, na: int = NA, signers: tuple[str, ...] = ("a1", "a2"),
+          state: bytes = STATE) -> bytes:
+    """A release by cause of the harness program: the reason's fixed bit number, the flow mask, the service-date range, the
+    total (the amounts' sum unless given) and the entries (payment id, request digest, amount in cents) in the order given."""
+    body = (be(reason, 1) + ident(fx.PROGRAM) + be(flows, 1) + be(dates[0], 4) + be(dates[1], 4)
+            + be(sum(a for _, _, a in entries) if total is None else total, 8) + be(len(entries), 2)
+            + b"".join(ident(p) + d + be(a, 8) for p, d, a in entries))
+    return _signed(_doc(3, tenant, nb, na, body, state), signers)
+
+
 def grant_id(doc: bytes) -> bytes:
     """A grant's id: the digest of its unsigned bytes (the id Lean prints in each `RULES_PAY` line)."""
     return H(fx.unsigned(doc))
@@ -108,13 +127,15 @@ def standing() -> tuple[bytes, decider.Keys]:
     return grant([(fx.PROGRAM, 1 << 1 | 1 << 3, 3, 0)]), decider.Keys(genesis()[1])
 
 
-def tenant(floor_path, shards, pin: bytes | None = None, tenant_id: str = TENANT) -> decider.TenantAuthority:
+def tenant(floor_path, shards, pin: bytes | None = None, tenant_id: str = TENANT, rulesets=(),
+           ruleset_folder=None) -> decider.TenantAuthority:
     """The tenant's authority over ``shards`` (every shard of the tenant, open): its deployment slot naming the genesis key
-    set's pin (or ``pin``), its grant floor file (provisioned the first time)."""
+    set's pin (or ``pin``), its grant floor file (provisioned the first time), and its signed rule-set records (given, and
+    in ``ruleset_folder``)."""
     pack = {"GATE_KEYSET_PIN": [[tenant_id, (genesis()[0] if pin is None else pin).hex()]]}
     if not Path(floor_path).exists():
         decider.TenantAuthority.provision(floor_path, tenant_id, shards)
-    return decider.TenantAuthority(slots.Slots(pack), tenant_id, floor_path, shards)
+    return decider.TenantAuthority(slots.Slots(pack), tenant_id, floor_path, shards, rulesets, ruleset_folder)
 
 
 def digest(request_bytes: bytes) -> bytes:

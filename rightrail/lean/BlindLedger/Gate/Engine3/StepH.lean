@@ -1,6 +1,7 @@
 import BlindLedger.Gate.Engine3.Step
 import BlindLedger.Gate.Engine3.Hist
 import BlindLedger.Gate.Engine3.AdmitB
+import BlindLedger.Gate.Engine3.RuleGate
 
 /-! One batch on the rows-file history (`Hist`): the request frame's lines are read through the rows files and their
     tables (`Hist.read`), decided by the fixed-row decider (`decideRows`), and the answer and the batch digest are built
@@ -29,55 +30,27 @@ inductive SteppedH
   | refused (hold : ByteArray)
   | done (d : DoneH)
 
-/-- Each request's payment number, or none, and the count: a covered request (`covR`) whose lines fit (`unfR` false)
-    and are ruled and not empty gets the next number, in request order.  The loop `stepH` ran inline, moved here unchanged
-    so a lemma can name it (`Flat.PayNum.payIdx_spec`). -/
-def payIdx (reqs : Array Run.Req) (covR unfR : Array Bool) : Array (Option Nat) × Nat := Id.run do
-  let mut ix : Array (Option Nat) := Array.mkEmpty reqs.size
-  let mut n := 0
-  for x in reqs, c in covR, u in unfR do
-    if c && !u && x.ra.flow.ruled && !x.ra.lines.isEmpty then
-      ix := ix.push (some n)
-      n := n + 1
-    else ix := ix.push none
-  pure (ix, n)
-
-/-- Per payment of the decided batch `out` on `lay` (`np` payments): its flags (1 a HOLD line, 2 a line that is not an
-    own ALLOW, 4 any line, 8 a released line that was not ALLOW, 16 a bypass releases it, 32 it goes at HOLD authority)
-    and the OR of its decided lines' reason masks, which `leafIn` turns into the leaf's reasons field.  The loop `stepH`
-    ran inline, moved here unchanged so a lemma can name it (`Flat.Rows.payFlags_msk`).  `inRel`: per line, whether it
-    joined the released set. -/
-def payFlags (lay : Rows.Lay) (out : Rows.Out) (inRel : Array Bool) (np : Nat) : ByteArray × Array UInt32 := Id.run do
-  let mut fl : ByteArray := ⟨Array.replicate np 0⟩
-  let mut msk : Array UInt32 := Array.replicate np 0
-  for d in out.ds do
-    let li := lay.lines[d.line]!
-    let p := li.pay
-    let sl := lay.slots[li.ki]!
-    let own := lay.pRedo[p]! && Rows.anySame lay.relP sl.rs sl.rn li.row
-    let mut f := fl[p]! ||| 4
-    if d.out == 1 then f := f ||| 1
-    if !(d.out == 0 && (!lay.pRedo[p]! || own)) then f := f ||| 2
-    if inRel[d.line]! && d.out != 0 then f := f ||| 8
-    if out.byd[p]! then f := f ||| 16
-    if out.lft[d.line]! then f := f ||| 32
-    fl := fl.set! p f
-    msk := msk.set! p (msk[p]! ||| d.mask)
-  pure (fl, msk)
-
 /-- The batch of request `q` (digest `dg`, bytes `bs`) on `h`, whose last authority record is `au0b`. -/
 def stepH (h : Hist.Hist) (au0b : ByteArray) (q : Frame.Req) (dg bs : ByteArray) : IO (Except Word SteppedH) := do
   let ts ← IO.monoNanosNow
   let au := q.auth
-  if !au.reqs.isEmpty && au.release.isEmpty then return .error .RECORD
+  -- requests commit to the release; rule-set records are presented for requests
+  if !au.reqs.isEmpty && au.release.isEmpty || au.reqs.isEmpty && !au.rsets.isEmpty then return .error .RECORD
   let hsh (x : List UInt8) : List UInt8 := Run.hB ⟨x.toArray⟩
   let some au0 := decAuth au0b.toList | return .error .CORRUPT
   let opt (b : Bytes) : Option Bytes := if b.isEmpty then none else some b
   let st : Run.St :=
     { today := q.today, redo := q.redo, reqs := au.reqs.toArray, grant := opt au.grant, release := opt au.release
       byps := au.byps, floorIn := au.floor, kfloorIn := some au.kfloor, keyset := opt au.keyset, ksteps := au.ksteps }
+  -- the rule set (`RuleGate.after`) before the authority: a frame it holds is held whole
+  let rg : Except String (Bytes × Nat) := if st.reqs.isEmpty then .ok (au0.rs, au0.rsv) else
+    RuleGate.after mlDsaMemo
+      (fun _ => st.keyset.bind fun ks => (SnapshotV2.admitBatchHead mlDsaMemo au0.pin q.today au0.rat ks au.ksteps).map (·.1))
+      ((au.reqs.head?.map (·.r.tenantId)).getD []) q.batch au0 au
   let adm : Except String Run.Admitted ←
-    if st.reqs.isEmpty then pure (.error "") else admitC au0.pin au0.rat au0.floor st
+    if st.reqs.isEmpty then pure (.error "") else match rg with
+      | .error why => pure (.error why)
+      | .ok _ => admitC au0.pin au0.rat au0.floor st
   if !st.reqs.isEmpty then
     if let .error why := adm then
       return .ok (.refused ((why.toUTF8.toList ++ List.replicate 16 0).take 16).toByteArray)
@@ -87,13 +60,12 @@ def stepH (h : Hist.Hist) (au0b : ByteArray) (q : Frame.Req) (dg bs : ByteArray)
   let ens := entsB adm reqs
   -- the lines the rules decide are counted, not built: `Hist.read` takes the number of them
   let b : Array Line := Array.replicate bPos.size Rows.nilLine
-  -- a bypass or a HOLD-level entry names a payment by its number, built (from the payment key) only when the batch has one
-  let reqsQ : Array Run.Req := match adm with
-    | .ok a => if a.byps.isEmpty && !ens.any (·.any (·.authority == .HOLD)) then reqs else reqs.map fun x => { x with q := Frame.Fast.idNatA (Frame.Fast.payKeyOf x.ra) }
-    | .error _ => reqs
-  let (bps, byp, notes) := match adm with
-    | .ok a => (a.byps, Run.bypOf hsh a.byps reqsQ.toList, a.notes)
-    | .error _ => ([], [], [])
+  -- a bypass, a cause record or a HOLD-level entry names a payment by its number, built (from the payment key) only
+  -- when the batch has one
+  let some (reqsQ, ap) := approvalsB hsh adm reqs ens st.redo | return .error .CORRUPT
+  let (byp, notes) := match adm with
+    | .ok a => (ap.byp, a.notes ++ ap.notes)
+    | .error _ => ([], [])
   let lim := limB reqsQ ens
   -- the first batch and every `RR_E3_SPEC`-th (default 64) is also admitted from the requests' lines, which must agree
   let ts ← if ← specDue q.batch then do
@@ -106,7 +78,7 @@ def stepH (h : Hist.Hist) (au0b : ByteArray) (q : Frame.Req) (dg bs : ByteArray)
           let sa := specAdm adm' rs
           sameReqs reqs rs && sameAdm adm adm' && ab.cov == sa.cov && ab.fit == sa.fit && ab.unf == sa.unf && ab.bPos == sa.bPos &&
             (match adm' with
-              | .ok a => Run.bypOf hsh a.byps rs.toList == byp && Run.limOf a.grant rs.toList == lim
+              | .ok a => (Run.approvals hsh a.grant a.byps a.causes rs.toList st.redo).byp == byp && Run.limOf a.grant rs.toList == lim
               | .error _ => true)
       let td ← tick 41 tc
       if !ok then
@@ -135,11 +107,38 @@ def stepH (h : Hist.Hist) (au0b : ByteArray) (q : Frame.Req) (dg bs : ByteArray)
   let t1b ← tick 1 t1
   let out := Rows.decideRows lay
   let t2 ← if out.ds.size == 0xFFFFFFFFFF then pure 0 else tick 19 t1b
-  let (payIx, np) := payIdx reqs covR unfR
+  let (payIx, np) := Id.run do
+    let mut ix : Array (Option Nat) := Array.mkEmpty reqs.size
+    let mut n := 0
+    for x in reqs, c in covR, u in unfR do
+      if c && !u && x.ra.flow.ruled && !x.ra.lines.isEmpty then
+        ix := ix.push (some n)
+        n := n + 1
+      else ix := ix.push none
+    pure (ix, n)
+  -- an exact repeat of a paid line, its sender not contesting, is answered at once and joins neither set
+  let some (ax, pa) := answeringB q.today q.redo reqs lay out | return .error .CORRUPT
+  let unr1 := if ax.pays.isEmpty then out.unr else out.unr.filter fun i => !pa[lay.lines[i]!.pay]!
   let nb := lay.lines.size
   let inRel : Array Bool := out.rel.foldl (fun a i => a.set! i true) (Array.replicate nb false)
-  let inUnr : Array Bool := out.unr.foldl (fun a i => a.set! i true) (Array.replicate nb false)
-  let (fl, msk) := payFlags lay out inRel np
+  let inUnr : Array Bool := unr1.foldl (fun a i => a.set! i true) (Array.replicate nb false)
+  let (fl, msk) := Id.run do
+    let mut fl : ByteArray := ⟨Array.replicate np 0⟩
+    let mut msk : Array UInt32 := Array.replicate np 0
+    for d in out.ds do
+      let li := lay.lines[d.line]!
+      let p := li.pay
+      let sl := lay.slots[li.ki]!
+      let own := lay.pRedo[p]! && Rows.anySame lay.relP sl.rs sl.rn li.row
+      let mut f := fl[p]! ||| 4
+      if d.out == 1 then f := f ||| 1
+      if !(d.out == 0 && (!lay.pRedo[p]! || own)) then f := f ||| 2
+      if inRel[d.line]! && d.out != 0 then f := f ||| 8
+      if out.byd[p]! then f := f ||| 16
+      if out.lft[d.line]! then f := f ||| 32
+      fl := fl.set! p f
+      msk := msk.set! p (msk[p]! ||| d.mask)
+    pure (fl, msk)
   let flOf (pix : Option Nat) : UInt8 × UInt32 := match pix with
     | some p => (fl[p]!, msk[p]!)
     | none => (0, 0)
@@ -170,23 +169,24 @@ def stepH (h : Hist.Hist) (au0b : ByteArray) (q : Frame.Req) (dg bs : ByteArray)
       let gid := a.grant.id.toByteArray
       (reqs.zip (ens.zip (unfR.zip payIx))).map fun (x, en, u, pix) =>
         let (f, m) := flOf pix
-        leafIn a gid x en u f m
+        leafIn ap ax gid x en u f m
   let bydQ (p : Nat) : Bool := match reqsQ.findIdx? (·.q == p) with
     | some i => (flOf payIx[i]!).1 &&& 16 != 0
     | none => false
   let bn := notes ++ (match adm with
-    | .ok _ => Run.bypNotes hsh bps reqsQ.toList bydQ
+    | .ok _ => Run.bypNotes hsh ap.byps reqsQ.toList bydQ ++ Run.causeNotes ap bydQ
     | .error _ => [])
   let notesB := bn.map (·.toUTF8)
-  let (lb, rel1, unr1, shard, batch, ce) := (g.lb, out.rel, out.unr, q.shard, q.batch, Frame.Fast.ctxEnd bs q)
+  let (lb, rel1, shard, batch, ce) := (g.lb, out.rel, q.shard, q.batch, Frame.Fast.ctxEnd bs q)
   -- the answer and the digest hold byte arrays, the leaves and index arrays only: not the layout or the reads
   -- bench (`RR_E3_MEMDIAG`): the two tasks and the stages of the answer are timed
   let tm := (← IO.getEnv "RR_E3_MEMDIAG").isSome
   let prof := if tm then some phases else none
-  -- the record after the batch: a batch with admitted requests moves the ratchet and the floor, any other keeps it
-  let au' : AuthRec := match adm with
-    | .ok a => ⟨au0.pin, a.ratchet, a.grant.serial⟩
-    | .error _ => au0
+  -- the record after the batch: a batch with admitted requests moves the ratchet, the floor and the rule-set head and
+  -- version, any other keeps it
+  let au' : AuthRec := match adm, rg with
+    | .ok a, .ok (rs, rsv) => { au0 with rat := a.ratchet, floor := a.grant.serial, rs, rsv }
+    | _, _ => au0
   let auB := (encAuth au').toByteArray
   let ans ← spawnT prof 28 Option.isSome fun _ =>
     let rel2 := if tm then stamp 36 rel1 else rel1

@@ -51,7 +51,7 @@ def run(exe: Path, tmp: Path):
     eng.p = subprocess.Popen([str(exe), str(store).replace("\\", "/"), "0"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     reader = threading.Thread(target=drain, args=(eng.p.stderr,))
     reader.start()
-    data = decider.request_frame(g.HEAD, 0, 1, g.ASOF, fw.GENESIS, g.PIN, (0, 0), g.KEYS, g.GRANT, eng.release, (), [])
+    data = decider.request_frame(g.HEAD, 0, 1, g.ASOF, fw.GENESIS, g.PIN, (0, 0, 0, bytes(64)), g.KEYS, g.GRANT, eng.release, (), [])
     why, _, head, _, _, _, _ = fw.read(data, eng.send(data))
     got, rows_by_batch = [], []
     for start in range(0, LINES, BATCH):

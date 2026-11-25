@@ -301,7 +301,7 @@ class ReceiverCashFileTests(unittest.TestCase):
                     check.CashFileCheck(commands, {**context, "source_bytes": raw, "expected_source_sha256": sha(raw)})
 
     def test_two_thousand_rows_in_files_within_writer_timeout_and_size(self):
-        # docs/CORE_REDESIGN.md "Cash-file capacity": the largest state's month (~1,800 lines, taken as 2,000) as full files,
+        # ARCHITECTURE.md "Cash-file capacity": the largest state's month (~1,800 lines, taken as 2,000) as full files,
         # spread then concentrated. The manifest baseline stays constant and a preview is a copy plus one open verify.
         ids = self._wide_store()
         shapes = (ids, ids[:-(-check.MAX_ROWS // check.MAX_ITEM_ROWS)])
@@ -370,7 +370,7 @@ class ReceiverCashFileTests(unittest.TestCase):
     def _quarter_end(self, label, writer):
         """A quarter's last file on 5,500 earlier payments (6,000 in all), written through an already-open owner by the callable
         ``writer(prepared)`` returns: the lock of a warm apply, not of a fresh CLI open (its verify adds seconds,
-        docs/CORE_REDESIGN.md "Cash-file capacity") or of one 84-item history. Returns the seconds the lock was held."""
+        ARCHITECTURE.md "Cash-file capacity") or of one 84-item history. Returns the seconds the lock was held."""
         ids = self._seeded_quarter_store()
         shapes = (ids, ids[:-(-check.MAX_ROWS // check.MAX_ITEM_ROWS)])
         write, verified, real = writer(self._prepare(self._file_of(shapes[1], check.MAX_ROWS, prefix="quarter-end"))), [], independent._verify_evaluation_row
@@ -385,7 +385,7 @@ class ReceiverCashFileTests(unittest.TestCase):
 
     def test_quarter_end_file_within_writer_timeout(self):
         # The production route (design (d)): plan on a copy, then commit; its longest live write is under the 5 s writer busy timeout.
-        # If it fails, MAX_ROWS drops again (docs/CORE_REDESIGN.md "Cash-file capacity").
+        # If it fails, MAX_ROWS drops again (ARCHITECTURE.md "Cash-file capacity").
         self.assertLess(self._quarter_end("CASH_FILE_QUARTER_END", lambda prepared: lambda: cash.apply_cash_file(self.store, *prepared)), 5.0)
 
     def test_quarter_end_planned_commit_within_bound(self):

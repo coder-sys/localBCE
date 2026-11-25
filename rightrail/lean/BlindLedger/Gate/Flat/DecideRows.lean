@@ -46,16 +46,6 @@ structure SpanF where
   mOk : Bool
   deriving Inhabited
 
-/-- An eligibility row as read under one member (G2): whether its member is that member, whether its aid code is
-    allowed (`allowedAid`, precomputed so the scan reads words only, like `SpanF`), its level and dates. -/
-structure EligF where
-  mOk : Bool
-  aidOk : Bool
-  level : Nat
-  start : Nat
-  stop : Nat
-  deriving Inhabited
-
 /-- A key read: its kind, its released heads `[rs, rs + rn)` of `rc` rows and unresolved heads `[us, us + un)` of
     `uc` rows; a count is the key's core's when the core holds more than `capN` rows (`capCount`). -/
 structure Slot where
@@ -80,7 +70,6 @@ structure LineIn where
   pdR : Rg
   exP : Rg
   exR : Rg
-  elig : Rg
   fseen : Bool
   deriving Inhabited
 
@@ -92,12 +81,10 @@ structure Lay where
   pdSome : Bool
   exclSome : Bool
   spanSome : Bool
-  eligSome : Bool
   dmfOk : Bool
   pdOk : Bool
   exclOk : Bool
   spanOk : Bool
-  eligOk : Bool
   lines : Array LineIn
   slots : Array Slot
   relP : Array RowX
@@ -112,7 +99,6 @@ structure Lay where
   pdeath : Array Death
   excl : Array Exclusion
   spans : Array SpanF
-  eligs : Array EligF
   redo : HashSet W9
   pRedo : Array Bool
   pByp : Array (Option UInt32)
@@ -143,8 +129,6 @@ def readFacts {α : Type} (g : Nat → List α) (st : Facts α) (i : Nat) : Rg �
 
 def spanF (i : Nat) (s : Span) : SpanF :=
   ⟨s.plan, decide (s.plan < 2 ^ 192), word s.plan 2, word s.plan 1, word s.plan 0, s.start, s.stop, s.member == i⟩
-
-def eligF (i : Nat) (e : Elig) : EligF := ⟨e.member == i, allowedAid.contains e.aid, e.level, e.start, e.stop⟩
 
 def layout (s : St) (fc : FCtx) (f : List Nat) (b : List Line) : Lay := Id.run do
   let fe := fetch s fc.redo b
@@ -190,7 +174,6 @@ def layout (s : St) (fc : FCtx) (f : List Nat) (b : List Line) : Lay := Id.run d
   let mut dm : Facts Death := (∅, #[])
   let mut pd : Facts Death := (∅, #[])
   let mut ex : Facts Exclusion := (∅, #[])
-  let mut el : Facts EligF := (∅, #[])
   let mut payOf : HashMap Nat Nat := ∅
   let mut pRedo : Array Bool := #[]
   let mut pByp : Array (Option UInt32) := #[]
@@ -207,8 +190,6 @@ def layout (s : St) (fc : FCtx) (f : List Nat) (b : List Line) : Lay := Id.run d
     ex := ex''
     let (rs, sp') := readFacts (fun i => (fd.span i).map (spanF i)) sp l.member
     sp := sp'
-    let (re, el') := readFacts (fun i => (fd.elig i).map (eligF i)) el l.member
-    el := el'
     let mut pj := 0
     match payOf.get? l.pay with
     | some j => pj := j
@@ -220,13 +201,11 @@ def layout (s : St) (fc : FCtx) (f : List Nat) (b : List Line) : Lay := Id.run d
     lines := lines.push
       { row := RowX.of l, ke := slotOf.getD (exactKey l) 0, kn := slotOf.getD (nearKey l) 0,
         ki := slotOf.getD (idKey l) 0, pay := pj, dmf := rd, span := rs, pdP := rp, pdR := rr, exP := xp,
-        exR := xr, elig := re, fseen := fs.contains l.id }
+        exR := xr, fseen := fs.contains l.id }
   { today := fc.today, relCh := s.rel.head.chained fc.today, unrCh := s.unr.head.chained fc.today,
     dmfSome := fd.dmfSome, pdSome := fd.pdSome, exclSome := fd.exclSome, spanSome := fd.spanSome,
-    eligSome := fd.eligSome,
-    dmfOk := fd.dmfOk, pdOk := fd.pdOk, exclOk := fd.exclOk, spanOk := fd.spanOk, eligOk := fd.eligOk,
+    dmfOk := fd.dmfOk, pdOk := fd.pdOk, exclOk := fd.exclOk, spanOk := fd.spanOk,
     lines, slots, relP, relSeq, unrP, unrSeq, uSpan, uId, dmf := dm.2, pdeath := pd.2, excl := ex.2, spans := sp.2,
-    eligs := el.2,
     redo := redoW fc.redo, pRedo, pByp,
     lLim := b.toArray.map fun l => (fc.lim.lookup l.pay).map fun m => (m % 2 ^ 32).toUInt32,
     src := b.toArray, relSrc, unrSrc }
@@ -262,11 +241,6 @@ def bStaleExcl : UInt32 := bit .STALE_EXCLUSION
 def bStalePd : UInt32 := bit .STALE_PROVIDER_DEATH
 def bStaleRel : UInt32 := bit .STALE_RELEASED
 def bStaleUnr : UInt32 := bit .STALE_UNRESOLVED
-def bBenMiss : UInt32 := bit .BENEFIT_LEVEL_MISSING
-def bBenMissU : UInt32 := bit .BENEFIT_LEVEL_MISSING_UNVERIFIED
-def bProgNE : UInt32 := bit .PROGRAM_NOT_ELIGIBLE
-def bProgNEU : UInt32 := bit .PROGRAM_NOT_ELIGIBLE_UNVERIFIED
-def bStaleElig : UInt32 := bit .STALE_ELIGIBILITY
 
 /-- 0 ALLOW, 1 HOLD, 2 HUMAN_REVIEW (`outcomeOf`). -/
 @[inline] def outOf (m : UInt32) : UInt8 := if m == 0 then 0 else if m &&& ~~~reviewM != 0 then 1 else 2
@@ -296,20 +270,6 @@ def enrolledIn (ss : Array SpanF) (g : Rg) (r : RowX) : Bool := Id.run do
   for j in [g.s:g.s + g.n] do
     let s := ss[j]!
     if s.mOk && s.start ≤ d && d ≤ s.stop && (!r.cap || s.small && s.p0 == r.a0 && s.p1 == r.a1 && s.p2 == r.a2) then return true
-  return false
-
-/-- G2: some row of the member covering date `d` has an allowed aid code (`Ix.aidEligible`). -/
-def aidIn (es : Array EligF) (g : Rg) (d : Nat) : Bool := Id.run do
-  for j in [g.s:g.s + g.n] do
-    let e := es[j]!
-    if e.mOk && e.start ≤ d && d ≤ e.stop && e.aidOk then return true
-  return false
-
-/-- G2: some row of the member covering date `d` has an allowed aid code and level 1 (`Ix.levelEligible`). -/
-def levelIn (es : Array EligF) (g : Rg) (d : Nat) : Bool := Id.run do
-  for j in [g.s:g.s + g.n] do
-    let e := es[j]!
-    if e.mOk && e.start ≤ d && d ≤ e.stop && e.aidOk && e.level == 1 then return true
   return false
 
 def overlapIn (ss : Array SpanF) (g : Rg) (d : Nat) : Bool := Id.run do
@@ -393,8 +353,6 @@ def decideRows (x : Lay) : Out := Id.run do
     let md := deadIn x.dmf li.dmf d
     let pdd := deadIn x.pdeath li.pdP d || deadIn x.pdeath li.pdR d
     let exd := exclIn x.excl li.exP d || exclIn x.excl li.exR d
-    let aid := aidIn x.eligs li.elig d
-    let lvl := levelIn x.eligs li.elig d
     base := base.push (
       on (x.dmfOk && v && md) bMemDead ||| on (x.dmfSome && !x.dmfOk && v && md) bMemDeadU |||
       on ne bNotEnr ||| on (x.spanSome && !x.spanOk && v && !enr) bNotEnrU |||
@@ -402,12 +360,8 @@ def decideRows (x : Lay) : Out := Id.run do
       on (x.exclOk && v && exd) bExcl ||| on (x.exclSome && !x.exclOk && v && exd) bExclU |||
       on (x.today < d) bFuture ||| on (!v) bInvalid ||| on (!x.dmfOk) bStaleDmf ||| on (!x.spanOk) bStaleEnr |||
       on (!x.exclOk) bStaleExcl ||| on (!x.pdOk) bStalePd ||| on (!x.relCh) bStaleRel ||| on (!x.unrCh) bStaleUnr |||
-      on (r.cap && x.spanOk && v && overlapIn x.spans li.span d) bCapMM |||
-      on (x.eligOk && v && aid && !lvl) bBenMiss ||| on (x.eligSome && !x.eligOk && v && aid && !lvl) bBenMissU |||
-      on (x.eligOk && v && !aid) bProgNE ||| on (x.eligSome && !x.eligOk && v && !aid) bProgNEU |||
-      on (!x.eligOk) bStaleElig)
-    fcap := fcap.push (li.dmf.over || li.span.over || li.pdP.over || li.exP.over || li.pdR.over || li.exR.over ||
-      li.elig.over)
+      on (r.cap && x.spanOk && v && overlapIn x.spans li.span d) bCapMM)
+    fcap := fcap.push (li.dmf.over || li.span.over || li.pdP.over || li.exP.over || li.pdR.over || li.exR.over)
   -- Per unresolved row: its claim drops the near key (CAP, not enrolled, not its own payment's released row).
   let mut capClaim : Array Bool := Array.emptyWithCapacity x.unrP.size
   for j in [0:x.unrP.size] do
@@ -597,9 +551,7 @@ structure Rep (L : Lay) (s : St) (fc : FCtx) (f : List Nat) (b : List Line) : Pr
     (Slice L.excl li.exR (facts (fc.feeds.excl l.rendering)) ∧
       li.exR.over = feedOver (fc.feeds.excl l.rendering)) ∧
     (Slice L.spans li.span (facts ((fc.feeds.span l.member).map (spanF l.member))) ∧
-      li.span.over = feedOver (fc.feeds.span l.member)) ∧
-    (Slice L.eligs li.elig (facts ((fc.feeds.elig l.member).map (eligF l.member))) ∧
-      li.elig.over = feedOver (fc.feeds.elig l.member))
+      li.span.over = feedOver (fc.feeds.span l.member))
   unrSpan : ∀ j (h : j < L.unrP.size),
     let g := L.uSpan[j]!
     let m := (L.unrSrc.getD j nilLine).member
@@ -616,7 +568,7 @@ structure Rep (L : Lay) (s : St) (fc : FCtx) (f : List Nat) (b : List Line) : Pr
   fseen : ∀ i (h : i < b.length), L.lines[i]!.fseen = (idSeen f).contains (idKey b[i])
   flags : L.dmfOk = fc.feeds.dmfOk ∧ L.pdOk = fc.feeds.pdOk ∧ L.exclOk = fc.feeds.exclOk ∧ L.spanOk = fc.feeds.spanOk ∧
     L.dmfSome = fc.feeds.dmfSome ∧ L.pdSome = fc.feeds.pdSome ∧ L.exclSome = fc.feeds.exclSome ∧
-    L.spanSome = fc.feeds.spanSome ∧ L.eligOk = fc.feeds.eligOk ∧ L.eligSome = fc.feeds.eligSome
+    L.spanSome = fc.feeds.spanSome
   redoEq : L.redo = redoW fc.redo
   lim : ∀ i (h : i < b.length), L.lLim[i]! = (fc.lim.lookup b[i].pay).map fun m => (m % 2 ^ 32).toUInt32
 
@@ -973,7 +925,7 @@ theorem PayInv_new (fc : FCtx) (po : HashMap Nat Nat) (pr : Array Bool) (pb : Ar
     · exact h3 q q' j hq hq'
 
 def LineOk (fc : FCtx) (f : List Nat) (m : HashMap Key Nat) (sp : Facts SpanF) (dm pd : Facts Death)
-    (ex : Facts Exclusion) (el : Facts EligF) (po : HashMap Nat Nat) (l : Line) (li : LineIn) : Prop :=
+    (ex : Facts Exclusion) (po : HashMap Nat Nat) (l : Line) (li : LineIn) : Prop :=
   li.row = BlindLedger.Gate.Engine3.RowX.of l ∧ li.ke = m.getD (exactKey l) 0 ∧ li.kn = m.getD (nearKey l) 0 ∧
   li.ki = m.getD (idKey l) 0 ∧ po.get? l.pay = some li.pay ∧ li.fseen = (HashSet.ofList f).contains l.id ∧
   (Slice dm.2 li.dmf (facts (fc.feeds.dmf l.member)) ∧ li.dmf.over = feedOver (fc.feeds.dmf l.member)) ∧
@@ -982,36 +934,31 @@ def LineOk (fc : FCtx) (f : List Nat) (m : HashMap Key Nat) (sp : Facts SpanF) (
   (Slice ex.2 li.exP (facts (fc.feeds.excl l.payee)) ∧ li.exP.over = feedOver (fc.feeds.excl l.payee)) ∧
   (Slice ex.2 li.exR (facts (fc.feeds.excl l.rendering)) ∧ li.exR.over = feedOver (fc.feeds.excl l.rendering)) ∧
   (Slice sp.2 li.span (facts ((fc.feeds.span l.member).map (spanF l.member))) ∧
-    li.span.over = feedOver ((fc.feeds.span l.member).map (spanF l.member))) ∧
-  (Slice el.2 li.elig (facts ((fc.feeds.elig l.member).map (eligF l.member))) ∧
-    li.elig.over = feedOver ((fc.feeds.elig l.member).map (eligF l.member)))
+    li.span.over = feedOver ((fc.feeds.span l.member).map (spanF l.member)))
 
 theorem LineOk_mono {fc : FCtx} {f : List Nat} {m : HashMap Key Nat} {sp sp' : Facts SpanF} {dm dm' pd pd' : Facts Death}
-    {ex ex' : Facts Exclusion} {el el' : Facts EligF} {po po' : HashMap Nat Nat} {l : Line} {li : LineIn}
-    (h : LineOk fc f m sp dm pd ex el po l li) (hsp : sp.2.toList <+: sp'.2.toList) (hdm : dm.2.toList <+: dm'.2.toList)
-    (hpd : pd.2.toList <+: pd'.2.toList) (hex : ex.2.toList <+: ex'.2.toList) (hel : el.2.toList <+: el'.2.toList)
-    (hpo : ∀ p j, po.get? p = some j → po'.get? p = some j) : LineOk fc f m sp' dm' pd' ex' el' po' l li := by
-  obtain ⟨a1, a2, a3, a4, a5, a6, ⟨b1, b2⟩, ⟨c1, c2⟩, ⟨d1, d2⟩, ⟨e1, e2⟩, ⟨g1, g2⟩, ⟨h1, h2⟩, ⟨k1, k2⟩⟩ := h
+    {ex ex' : Facts Exclusion} {po po' : HashMap Nat Nat} {l : Line} {li : LineIn}
+    (h : LineOk fc f m sp dm pd ex po l li) (hsp : sp.2.toList <+: sp'.2.toList) (hdm : dm.2.toList <+: dm'.2.toList)
+    (hpd : pd.2.toList <+: pd'.2.toList) (hex : ex.2.toList <+: ex'.2.toList)
+    (hpo : ∀ p j, po.get? p = some j → po'.get? p = some j) : LineOk fc f m sp' dm' pd' ex' po' l li := by
+  obtain ⟨a1, a2, a3, a4, a5, a6, ⟨b1, b2⟩, ⟨c1, c2⟩, ⟨d1, d2⟩, ⟨e1, e2⟩, ⟨g1, g2⟩, ⟨h1, h2⟩⟩ := h
   exact ⟨a1, a2, a3, a4, hpo _ _ a5, a6, ⟨b1.mono hdm, b2⟩, ⟨c1.mono hpd, c2⟩, ⟨d1.mono hpd, d2⟩,
-    ⟨e1.mono hex, e2⟩, ⟨g1.mono hex, g2⟩, ⟨h1.mono hsp, h2⟩, ⟨k1.mono hel, k2⟩⟩
+    ⟨e1.mono hex, e2⟩, ⟨g1.mono hex, g2⟩, ⟨h1.mono hsp, h2⟩⟩
 
 def Inv3 (fc : FCtx) (f : List Nat) (m : HashMap Key Nat) (sp0 : Array SpanF) (pre : List Line)
-    (st : Facts SpanF × Facts Death × Facts Death × Facts Exclusion × Facts EligF × HashMap Nat Nat × Array Bool ×
+    (st : Facts SpanF × Facts Death × Facts Death × Facts Exclusion × HashMap Nat Nat × Array Bool ×
       Array (Option UInt32) × Array LineIn) : Prop :=
   FOk (fun i => (fc.feeds.span i).map (spanF i)) st.1 ∧ FOk fc.feeds.dmf st.2.1 ∧ FOk fc.feeds.pdeath st.2.2.1 ∧
-  FOk fc.feeds.excl st.2.2.2.1 ∧ FOk (fun i => (fc.feeds.elig i).map (eligF i)) st.2.2.2.2.1 ∧
-  sp0.toList <+: st.1.2.toList ∧
-  PayInv fc st.2.2.2.2.2.1 st.2.2.2.2.2.2.1 st.2.2.2.2.2.2.2.1 ∧
-  st.2.2.2.2.2.2.2.2.size = pre.length ∧
-  ∀ i (h : i < pre.length), LineOk fc f m st.1 st.2.1 st.2.2.1 st.2.2.2.1 st.2.2.2.2.1 st.2.2.2.2.2.1 pre[i]
-    st.2.2.2.2.2.2.2.2[i]!
+  FOk fc.feeds.excl st.2.2.2.1 ∧ sp0.toList <+: st.1.2.toList ∧
+  PayInv fc st.2.2.2.2.1 st.2.2.2.2.2.1 st.2.2.2.2.2.2.1 ∧
+  st.2.2.2.2.2.2.2.size = pre.length ∧
+  ∀ i (h : i < pre.length), LineOk fc f m st.1 st.2.1 st.2.2.1 st.2.2.2.1 st.2.2.2.2.1 pre[i] st.2.2.2.2.2.2.2[i]!
 
 theorem Inv3_step (fc : FCtx) (f : List Nat) (m : HashMap Key Nat) (sp0 : Array SpanF) (pre : List Line) (l : Line)
-    (sp : Facts SpanF) (dm pd : Facts Death) (ex : Facts Exclusion) (el : Facts EligF) (po : HashMap Nat Nat)
-    (pr : Array Bool)
+    (sp : Facts SpanF) (dm pd : Facts Death) (ex : Facts Exclusion) (po : HashMap Nat Nat) (pr : Array Bool)
     (pb : Array (Option UInt32)) (ls : Array LineIn) (po' : HashMap Nat Nat) (pr' : Array Bool)
     (pb' : Array (Option UInt32)) (pj : Nat)
-    (h : Inv3 fc f m sp0 pre (sp, dm, pd, ex, el, po, pr, pb, ls))
+    (h : Inv3 fc f m sp0 pre (sp, dm, pd, ex, po, pr, pb, ls))
     (hpay : PayInv fc po' pr' pb') (hl : po'.get? l.pay = some pj)
     (hmono : ∀ p j, po.get? p = some j → po'.get? p = some j) :
     Inv3 fc f m sp0 (pre ++ [l])
@@ -1019,7 +966,6 @@ theorem Inv3_step (fc : FCtx) (f : List Nat) (m : HashMap Key Nat) (sp0 : Array 
         (readFacts fc.feeds.dmf dm l.member).2,
         (readFacts fc.feeds.pdeath (readFacts fc.feeds.pdeath pd l.payee).2 l.rendering).2,
         (readFacts fc.feeds.excl (readFacts fc.feeds.excl ex l.payee).2 l.rendering).2,
-        (readFacts (fun i => (fc.feeds.elig i).map (eligF i)) el l.member).2,
         po', pr', pb',
         ls.push
           { row := BlindLedger.Gate.Engine3.RowX.of l, ke := m.getD (exactKey l) 0, kn := m.getD (nearKey l) 0,
@@ -1030,30 +976,27 @@ theorem Inv3_step (fc : FCtx) (f : List Nat) (m : HashMap Key Nat) (sp0 : Array 
             pdR := (readFacts fc.feeds.pdeath (readFacts fc.feeds.pdeath pd l.payee).2 l.rendering).1,
             exP := (readFacts fc.feeds.excl ex l.payee).1,
             exR := (readFacts fc.feeds.excl (readFacts fc.feeds.excl ex l.payee).2 l.rendering).1,
-            elig := (readFacts (fun i => (fc.feeds.elig i).map (eligF i)) el l.member).1,
             fseen := (HashSet.ofList f).contains l.id }) := by
-  obtain ⟨hF1, hF2, hF3, hF4, hF5, hpre, hP, hsz, hL⟩ := h
-  simp only at hF1 hF2 hF3 hF4 hF5 hpre hP hsz hL
+  obtain ⟨hF1, hF2, hF3, hF4, hpre, hP, hsz, hL⟩ := h
+  simp only at hF1 hF2 hF3 hF4 hpre hP hsz hL
   obtain ⟨s1, s2, s3, s4⟩ := readFacts_ok _ sp l.member hF1
   obtain ⟨d1, d2, d3, d4⟩ := readFacts_ok _ dm l.member hF2
   obtain ⟨p1, p2, p3, p4⟩ := readFacts_ok _ pd l.payee hF3
   obtain ⟨q1, q2, q3, q4⟩ := readFacts_ok _ (readFacts fc.feeds.pdeath pd l.payee).2 l.rendering p1
   obtain ⟨e1, e2, e3, e4⟩ := readFacts_ok _ ex l.payee hF4
   obtain ⟨g1, g2, g3, g4⟩ := readFacts_ok _ (readFacts fc.feeds.excl ex l.payee).2 l.rendering e1
-  obtain ⟨k1, k2, k3, k4⟩ := readFacts_ok _ el l.member hF5
-  refine ⟨s1, d1, q1, g1, k1, hpre.trans s2, hpay, by simp [hsz], ?_⟩
+  refine ⟨s1, d1, q1, g1, hpre.trans s2, hpay, by simp [hsz], ?_⟩
   intro i hi
   simp only [List.length_append, List.length_singleton] at hi
   by_cases hi' : i < pre.length
   · simp only [List.getElem_append_left hi']
     rw [arr_push_get, if_pos (hsz ▸ hi')]
-    exact LineOk_mono (hL i hi') s2 d2 (p2.trans q2) (e2.trans g2) k2 hmono
+    exact LineOk_mono (hL i hi') s2 d2 (p2.trans q2) (e2.trans g2) hmono
   · have : i = pre.length := by omega
     subst this
     simp only [List.getElem_append_right (Nat.le_refl _), Nat.sub_self, List.getElem_singleton]
     rw [arr_push_get, if_neg (by omega), if_pos (by omega)]
-    exact ⟨rfl, rfl, rfl, rfl, hl, rfl, ⟨d3, d4⟩, ⟨p3.mono q2, p4⟩, ⟨q3, q4⟩, ⟨e3.mono g2, e4⟩, ⟨g3, g4⟩, ⟨s3, s4⟩,
-      ⟨k3, k4⟩⟩
+    exact ⟨rfl, rfl, rfl, rfl, hl, rfl, ⟨d3, d4⟩, ⟨p3.mono q2, p4⟩, ⟨q3, q4⟩, ⟨e3.mono g2, e4⟩, ⟨g3, g4⟩, ⟨s3, s4⟩⟩
 
 theorem new_notin {α : Type} (f : α → Key) (pre post : List α) (x : α) (hnd : ((pre ++ x :: post).map f).Nodup) :
     f x ∉ pre.map f := by
@@ -1177,19 +1120,18 @@ theorem layout_rep (s : St) (fc : FCtx) (f : List Nat) (b : List Line) : Rep (la
   rotate_left
   · obtain ⟨-, -, hP2⟩ := h2
     exact ⟨hP2.1, fun j r h => by simp at h, fun j r h => by simp at h, fun j r h => by simp at h,
-      fun j r h => by simp at h,
       List.prefix_refl _, ⟨rfl, fun p j h => by simp at h, fun p p' j h => by simp at h⟩, by simp,
       fun i hi => by simp at hi⟩
   · intro pre x post st hl hP
-    obtain ⟨sp, dm, pd, ex, el, po, pr, pb, ls⟩ := st
-    have hPay : PayInv fc po pr pb := hP.2.2.2.2.2.2.1
+    obtain ⟨sp, dm, pd, ex, po, pr, pb, ls⟩ := st
+    have hPay : PayInv fc po pr pb := hP.2.2.2.2.2.1
     dsimp only
     cases hg : po.get? x.pay with
     | some j =>
-      refine ⟨_, ?_, Inv3_step fc f r2.1 _ pre x sp dm pd ex el po pr pb ls po pr pb j hP hPay hg (fun p j h => h)⟩
+      refine ⟨_, ?_, Inv3_step fc f r2.1 _ pre x sp dm pd ex po pr pb ls po pr pb j hP hPay hg (fun p j h => h)⟩
       rfl
     | none =>
-      refine ⟨_, ?_, Inv3_step fc f r2.1 _ pre x sp dm pd ex el po pr pb ls (po.insert x.pay pr.size)
+      refine ⟨_, ?_, Inv3_step fc f r2.1 _ pre x sp dm pd ex po pr pb ls (po.insert x.pay pr.size)
         (pr.push (fc.redo.contains x.pay)) (pb.push ((fc.byp.lookup x.pay).map fun m => (m % 2 ^ 32).toUInt32))
         pr.size hP (PayInv_new fc po pr pb x.pay hPay) (by simp) ?_⟩
       · rfl
@@ -1199,7 +1141,7 @@ theorem layout_rep (s : St) (fc : FCtx) (f : List Nat) (b : List Line) : Rep (la
         · rename_i e; obtain rfl := beq_iff_eq.1 e; rw [hg] at hpj; cases hpj
         · exact hpj
   obtain ⟨hm, hS, hP2⟩ := h2
-  obtain ⟨F1, F2, F3, F4, F5, hpre, hPay, hsz, hL⟩ := h3
+  obtain ⟨F1, F2, F3, F4, hpre, hPay, hsz, hL⟩ := h3
   obtain ⟨g1, g2, g3, g4, g5, g6, g7⟩ := hP2
   have hkeys : ∀ i (hi : i < b.length), ∀ k ∈ keys b[i], ∃ j, ∃ hj : j < (RL).length, (RL)[j].1 = k :=
     fun i hi k hk => key_in_rel s fc.redo b (List.getElem_mem hi) hk
@@ -1207,8 +1149,7 @@ theorem layout_rep (s : St) (fc : FCtx) (f : List Nat) (b : List Line) : Rep (la
     have := congrArg List.length g2; simp only [Array.length_toList, List.length_map] at this; omega
   have hrow : ∀ q (hq : q < ((UL).flatMap fun ke => heads ke.2).length), r2.snd.snd.snd.snd.snd.fst.getD q nilLine = ((UL).flatMap fun ke => heads ke.2)[q].row := fun q hq =>
     arr_getD_map _ ((UL).flatMap fun ke => heads ke.2) (·.row) nilLine g4 q hq
-  refine ⟨rfl, ?_, ⟨rfl, rfl, rfl⟩, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_,
-    ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩, rfl, ?_⟩
+  refine ⟨rfl, ?_, ⟨rfl, rfl, rfl⟩, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩, rfl, ?_⟩
   · apply List.ext_getElem
     · simp [hsz]
     · intro i h1 h2
@@ -1310,9 +1251,8 @@ theorem layout_rep (s : St) (fc : FCtx) (f : List Nat) (b : List Line) : Rep (la
     exact hi2
   · intro i hi
     dsimp only
-    obtain ⟨-, -, -, -, -, -, ⟨b1, b2⟩, ⟨c1', c2'⟩, ⟨d1, d2⟩, ⟨e1, e2⟩, ⟨x1, x2⟩, ⟨h1, h2⟩, ⟨k1', k2'⟩⟩ := hL i hi
-    exact ⟨⟨b1, b2⟩, ⟨c1', c2'⟩, ⟨d1, d2⟩, ⟨e1, e2⟩, ⟨x1, x2⟩, ⟨h1, by rw [h2]; simp [feedOver]⟩,
-      ⟨k1', by rw [k2']; simp [feedOver]⟩⟩
+    obtain ⟨-, -, -, -, -, -, ⟨b1, b2⟩, ⟨c1', c2'⟩, ⟨d1, d2⟩, ⟨e1, e2⟩, ⟨x1, x2⟩, ⟨h1, h2⟩⟩ := hL i hi
+    exact ⟨⟨b1, b2⟩, ⟨c1', c2'⟩, ⟨d1, d2⟩, ⟨e1, e2⟩, ⟨x1, x2⟩, ⟨h1, by rw [h2]; simp [feedOver]⟩⟩
   · intro q hq
     dsimp only
     have hq' := hqs q hq
@@ -1454,30 +1394,6 @@ theorem exclIn_eq (es : Array Exclusion) (g : Rg) (xs : List Exclusion) (d : Nat
   refine (rangeAny1 g.s g.n (fun j => (es[j]!.start ≤ d && d ≤ es[j]!.stop) = true)).trans ?_
   rw [any_range'_get es g.s g.n hs (fun e => decide ((e.start ≤ d && d ≤ e.stop) = true)), hg]
   simp
-
-theorem aidIn_eq (es : Array EligF) (g : Rg) (xs : List Elig) (l : Line) (hs : g.s + g.n ≤ es.size)
-    (hg : (es.toList.drop g.s).take g.n = xs.map (eligF l.member)) :
-    aidIn es g l.date = xs.any fun e => eligCovers l e && allowedAid.contains e.aid := by
-  unfold aidIn
-  refine (rangeAny1 g.s g.n (fun j => (es[j]!.mOk && es[j]!.start ≤ l.date && l.date ≤ es[j]!.stop &&
-    es[j]!.aidOk) = true)).trans ?_
-  rw [any_range'_get es g.s g.n hs (fun e => decide ((e.mOk && e.start ≤ l.date && l.date ≤ e.stop &&
-    e.aidOk) = true)), hg, List.any_map]
-  congr 1
-  funext e
-  simp [eligF, eligCovers]
-
-theorem levelIn_eq (es : Array EligF) (g : Rg) (xs : List Elig) (l : Line) (hs : g.s + g.n ≤ es.size)
-    (hg : (es.toList.drop g.s).take g.n = xs.map (eligF l.member)) :
-    levelIn es g l.date = xs.any fun e => eligCovers l e && allowedAid.contains e.aid && e.level == 1 := by
-  unfold levelIn
-  refine (rangeAny1 g.s g.n (fun j => (es[j]!.mOk && es[j]!.start ≤ l.date && l.date ≤ es[j]!.stop &&
-    es[j]!.aidOk && es[j]!.level == 1) = true)).trans ?_
-  rw [any_range'_get es g.s g.n hs (fun e => decide ((e.mOk && e.start ≤ l.date && l.date ≤ e.stop &&
-    e.aidOk && e.level == 1) = true)), hg, List.any_map]
-  congr 1
-  funext e
-  by_cases h : e.level = 1 <;> simp [eligF, eligCovers, h]
 
 theorem any_range'_get2 {α : Type} [Inhabited α] (a : Array α) (s n : Nat) (h : s + n ≤ a.size) (P : α → α → Bool) :
     (List.range' s n).any (fun j => (List.range' s n).any fun k => P a[j]! a[k]!) =
@@ -1684,10 +1600,8 @@ theorem mem_reasons (r : Reason) : r ∈ reasons := by cases r <;> decide
 
 theorem idx_len (r : Reason) : r.idx < reasons.length := BlindLedger.Gate.Rules.idx_len r
 
-/-- The UInt32 line-mask width until step 5; not a total-count guard. -/
-theorem reasons_len_le32 : reasons.length ≤ 32 := by decide
-
-theorem idx_lt32 (r : Reason) : r.idx < 32 := Nat.lt_of_lt_of_le (idx_len r) reasons_len_le32
+/-- A line's reason mask is a UInt32: every reason's bit fits it. -/
+theorem idx_lt32 (r : Reason) : r.idx < 32 := Nat.lt_of_lt_of_le (idx_len r) (by decide)
 
 theorem idx_inj {r r' : Reason} (h : r.idx = r'.idx) : r = r' := Reason.idx_inj h
 
@@ -1750,7 +1664,6 @@ theorem Lo_on (c : Bool) (r : Reason) : Lo (on c (bit r)) := by
   cases c <;> simp [on, Lo_zero, Lo_bit]
 
 theorem reasons_nodup : reasons.Nodup := BlindLedger.Gate.Rules.reasons_list_nodup
-
 
 theorem eq_zero_of_has {m : UInt32} (hm : Lo m) (h : ∀ r, has m r = false) : m = 0 := by
   rw [← UInt32.toNat_inj, UInt32.toNat_zero]
@@ -2018,10 +1931,6 @@ theorem loc_span {l : Line} (hl : l ∈ b) : (locIx s fc b).span.getD l.member [
   rw [idMap_getD, if_pos]
   exact List.mem_append_left _ (List.mem_map.2 ⟨l, hl, rfl⟩)
 
-theorem loc_elig {l : Line} (hl : l ∈ b) : (locIx s fc b).elig.getD l.member [] = facts (fc.feeds.elig l.member) := by
-  show (idMap fc.feeds.elig (members b)).getD _ [] = _
-  rw [idMap_getD, if_pos]; exact List.mem_map.2 ⟨l, hl, rfl⟩
-
 theorem dead_line (R : Rep (layout s fc f b) s fc f b) (i : Nat) (hi : i < b.length) :
     deadIn (layout s fc f b).dmf (layout s fc f b).lines[i]!.dmf b[i].date = (locIx s fc b).memberDead b[i] := by
   obtain ⟨⟨⟨hs1, hs2⟩, -⟩, -⟩ := R.feeds i hi
@@ -2049,31 +1958,9 @@ theorem span_slice (R : Rep (layout s fc f b) s fc f b) (i : Nat) (hi : i < b.le
     (layout s fc f b).lines[i]!.span.s + (layout s fc f b).lines[i]!.span.n ≤ (layout s fc f b).spans.size ∧
     (((layout s fc f b).spans.toList.drop (layout s fc f b).lines[i]!.span.s).take (layout s fc f b).lines[i]!.span.n =
       (facts (fc.feeds.span b[i].member)).map (spanF b[i].member)) := by
-  obtain ⟨-, -, -, -, -, ⟨⟨hs1, hs2⟩, -⟩, -⟩ := R.feeds i hi
+  obtain ⟨-, -, -, -, -, ⟨⟨hs1, hs2⟩, -⟩⟩ := R.feeds i hi
   refine ⟨hs1, ?_⟩
   rw [hs2]; simp [facts, List.map_take]
-
-theorem elig_slice (R : Rep (layout s fc f b) s fc f b) (i : Nat) (hi : i < b.length) :
-    (layout s fc f b).lines[i]!.elig.s + (layout s fc f b).lines[i]!.elig.n ≤ (layout s fc f b).eligs.size ∧
-    (((layout s fc f b).eligs.toList.drop (layout s fc f b).lines[i]!.elig.s).take (layout s fc f b).lines[i]!.elig.n =
-      (facts (fc.feeds.elig b[i].member)).map (eligF b[i].member)) := by
-  obtain ⟨-, -, -, -, -, -, ⟨⟨hs1, hs2⟩, -⟩⟩ := R.feeds i hi
-  refine ⟨hs1, ?_⟩
-  rw [hs2]; simp [facts, List.map_take]
-
-theorem aid_line (R : Rep (layout s fc f b) s fc f b) (i : Nat) (hi : i < b.length) :
-    aidIn (layout s fc f b).eligs (layout s fc f b).lines[i]!.elig b[i].date = (locIx s fc b).aidEligible b[i] := by
-  obtain ⟨h1, h2⟩ := elig_slice R i hi
-  rw [aidIn_eq _ _ _ _ h1 h2]
-  unfold Ix.aidEligible
-  rw [loc_elig (List.getElem_mem hi)]
-
-theorem level_line (R : Rep (layout s fc f b) s fc f b) (i : Nat) (hi : i < b.length) :
-    levelIn (layout s fc f b).eligs (layout s fc f b).lines[i]!.elig b[i].date = (locIx s fc b).levelEligible b[i] := by
-  obtain ⟨h1, h2⟩ := elig_slice R i hi
-  rw [levelIn_eq _ _ _ _ h1 h2]
-  unfold Ix.levelEligible
-  rw [loc_elig (List.getElem_mem hi)]
 
 theorem enr_line (R : Rep (layout s fc f b) s fc f b) (hb : ∀ l ∈ b, fitsLine2 l = true) (i : Nat) (hi : i < b.length) :
     enrolledIn (layout s fc f b).spans (layout s fc f b).lines[i]!.span (RowX.of b[i]) =
@@ -2103,18 +1990,13 @@ def baseOf (x : Lay) (li : LineIn) : UInt32 :=
   let md := deadIn x.dmf li.dmf d
   let pdd := deadIn x.pdeath li.pdP d || deadIn x.pdeath li.pdR d
   let exd := exclIn x.excl li.exP d || exclIn x.excl li.exR d
-  let aid := aidIn x.eligs li.elig d
-  let lvl := levelIn x.eligs li.elig d
   on (x.dmfOk && v && md) bMemDead ||| on (x.dmfSome && !x.dmfOk && v && md) bMemDeadU |||
     on ne bNotEnr ||| on (x.spanSome && !x.spanOk && v && !enr) bNotEnrU |||
     on (x.pdOk && v && pdd) bProvDead ||| on (x.pdSome && !x.pdOk && v && pdd) bProvDeadU |||
     on (x.exclOk && v && exd) bExcl ||| on (x.exclSome && !x.exclOk && v && exd) bExclU |||
     on (x.today < d) bFuture ||| on (!v) bInvalid ||| on (!x.dmfOk) bStaleDmf ||| on (!x.spanOk) bStaleEnr |||
     on (!x.exclOk) bStaleExcl ||| on (!x.pdOk) bStalePd ||| on (!x.relCh) bStaleRel ||| on (!x.unrCh) bStaleUnr |||
-    on (r.cap && x.spanOk && v && overlapIn x.spans li.span d) bCapMM |||
-    on (x.eligOk && v && aid && !lvl) bBenMiss ||| on (x.eligSome && !x.eligOk && v && aid && !lvl) bBenMissU |||
-    on (x.eligOk && v && !aid) bProgNE ||| on (x.eligSome && !x.eligOk && v && !aid) bProgNEU |||
-    on (!x.eligOk) bStaleElig
+    on (r.cap && x.spanOk && v && overlapIn x.spans li.span d) bCapMM
 
 theorem Lo_baseOf (x : Lay) (li : LineIn) : Lo (baseOf x li) := by
   unfold baseOf
@@ -2171,25 +2053,21 @@ theorem locIx_dmfSome : (locIx s fc b).dmfSome = fc.feeds.dmfSome := rfl
 theorem locIx_pdSome : (locIx s fc b).pdSome = fc.feeds.pdSome := rfl
 theorem locIx_exclSome : (locIx s fc b).exclSome = fc.feeds.exclSome := rfl
 theorem locIx_spanSome : (locIx s fc b).spanSome = fc.feeds.spanSome := rfl
-theorem locIx_eligOk : (locIx s fc b).eligOk = fc.feeds.eligOk := rfl
-theorem locIx_eligSome : (locIx s fc b).eligSome = fc.feeds.eligSome := rfl
 theorem locIx_relChained : (locIx s fc b).relChained = s.rel.head.chained fc.today := rfl
 theorem locIx_unrChained : (locIx s fc b).unrChained = s.unr.head.chained fc.today := rfl
 
 theorem base_has (R : Rep (layout s fc f b) s fc f b) (hb : ∀ l ∈ b, fitsLine2 l = true) (i : Nat) (hi : i < b.length)
     (r : Reason) : has (baseOf (layout s fc f b) (layout s fc f b).lines[i]!) r = baseF (locIx s fc b) b[i] r := by
   have hbi : fitsLine2 b[i] = true := hb _ (List.getElem_mem hi)
-  obtain ⟨f1, f2, f3, f4, f5, f6, f7, f8, f9, f10⟩ := R.flags
+  obtain ⟨f1, f2, f3, f4, f5, f6, f7, f8⟩ := R.flags
   obtain ⟨t1, t2, t3⟩ := R.scalars
   unfold baseOf
   simp only [line_row R i hi, date_toNat hbi, enr_line R hb i hi, dead_line R i hi, pdead_line R i hi, excl_line R i hi,
-    overlap_line R i hi, aid_line R i hi, level_line R i hi, f1, f2, f3, f4, f5, f6, f7, f8, f9, f10, t1, t2, t3,
-    Engine3.cap_of, has_or]
+    overlap_line R i hi, f1, f2, f3, f4, f5, f6, f7, f8, t1, t2, t3, Engine3.cap_of, has_or]
   cases r <;> simp [baseF, Ix.fires, Ix.notEnrolled, locIx_today, locIx_dmfOk, locIx_pdOk, locIx_exclOk, locIx_spanOk,
-    locIx_dmfSome, locIx_pdSome, locIx_exclSome, locIx_spanSome, locIx_eligOk, locIx_eligSome, locIx_relChained,
-    locIx_unrChained, bMemDead, bMemDeadU,
+    locIx_dmfSome, locIx_pdSome, locIx_exclSome, locIx_spanSome, locIx_relChained, locIx_unrChained, bMemDead, bMemDeadU,
     bNotEnr, bNotEnrU, bProvDead, bProvDeadU, bExcl, bExclU, bFuture, bInvalid, bStaleDmf, bStaleEnr, bStaleExcl, bStalePd,
-    bStaleRel, bStaleUnr, bCapMM, bBenMiss, bBenMissU, bProgNE, bProgNEU, bStaleElig, has_on, Bool.and_assoc] <;> try rfl
+    bStaleRel, bStaleUnr, bCapMM, has_on, Bool.and_assoc] <;> try rfl
 
 
 theorem notEnr_line (R : Rep (layout s fc f b) s fc f b) (hb : ∀ l ∈ b, fitsLine2 l = true) (i : Nat) (hi : i < b.length) :
@@ -2201,11 +2079,10 @@ theorem notEnr_line (R : Rep (layout s fc f b) s fc f b) (hb : ∀ l ∈ b, fits
 
 theorem fcap_line (R : Rep (layout s fc f b) s fc f b) (i : Nat) (hi : i < b.length) :
     ((layout s fc f b).lines[i]!.dmf.over || (layout s fc f b).lines[i]!.span.over || (layout s fc f b).lines[i]!.pdP.over ||
-      (layout s fc f b).lines[i]!.exP.over || (layout s fc f b).lines[i]!.pdR.over || (layout s fc f b).lines[i]!.exR.over ||
-      (layout s fc f b).lines[i]!.elig.over) =
+      (layout s fc f b).lines[i]!.exP.over || (layout s fc f b).lines[i]!.pdR.over || (layout s fc f b).lines[i]!.exR.over) =
       feedCapped fc.feeds b[i] := by
-  obtain ⟨⟨-, a1⟩, ⟨-, a2⟩, ⟨-, a3⟩, ⟨-, a4⟩, ⟨-, a5⟩, ⟨-, a6⟩, ⟨-, a7⟩⟩ := R.feeds i hi
-  rw [a1, a2, a3, a4, a5, a6, a7]
+  obtain ⟨⟨-, a1⟩, ⟨-, a2⟩, ⟨-, a3⟩, ⟨-, a4⟩, ⟨-, a5⟩, ⟨-, a6⟩⟩ := R.feeds i hi
+  rw [a1, a2, a3, a4, a5, a6]
   simp only [feedCapped, List.any_cons, List.any_nil, Bool.or_false]
   generalize feedOver (fc.feeds.dmf b[i].member) = p1
   generalize feedOver (fc.feeds.span b[i].member) = p2
@@ -2213,8 +2090,7 @@ theorem fcap_line (R : Rep (layout s fc f b) s fc f b) (i : Nat) (hi : i < b.len
   generalize feedOver (fc.feeds.excl b[i].payee) = p4
   generalize feedOver (fc.feeds.pdeath b[i].rendering) = p5
   generalize feedOver (fc.feeds.excl b[i].rendering) = p6
-  generalize feedOver (fc.feeds.elig b[i].member) = p7
-  cases p1 <;> cases p2 <;> cases p3 <;> cases p4 <;> cases p5 <;> cases p6 <;> cases p7 <;> rfl
+  cases p1 <;> cases p2 <;> cases p3 <;> cases p4 <;> cases p5 <;> cases p6 <;> rfl
 
 theorem forIn_push5 {α A B C D E : Type} (l : Array α) (a : Array A) (b : Array B) (c : Array C) (d : Array D)
     (e : Array E) (f1 : α → A) (f2 : α → B) (f3 : α → C) (f4 : α → D) (f5 : α → E) :
@@ -3009,7 +2885,7 @@ theorem unr_slot_some (R : Rep (layout s fc f b) s fc f b) {k : Nat} (hk : k < (
 theorem line_cap (R : Rep (layout s fc f b) s fc f b) (i : Nat) (hi : i < b.length) :
     ((layout s fc f b).lines[i]!.row.cap && (layout s fc f b).lines[i]!.span.over) =
       (isCap b[i] && feedOver (fc.feeds.span b[i].member)) := by
-  have h := (R.feeds i hi).2.2.2.2.2.1.2
+  have h := (R.feeds i hi).2.2.2.2.2.2
   rw [line_row R i hi, Engine3.cap_of, h]
 
 theorem ov_eq (R : Rep (layout s fc f b) s fc f b) (j : Nat) (hj : j < (layout s fc f b).unrP.size) :

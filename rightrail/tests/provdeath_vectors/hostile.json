@@ -1,0 +1,213 @@
+[
+ {
+  "name": "empty file",
+  "cause": "unterminated_record",
+  "data": ""
+ },
+ {
+  "name": "no final line feed",
+  "cause": "unterminated_record",
+  "data": "HRRPDTH01SYNSTATE-PE         00000000006120261031FSYNTHETIC-STATE                                                       \nD199990001620260315                                                                                                     \nD199990002420240229                                                                                                     \nD199990005719991231                                                                                                     \nD199990007320261031                                                                                                     \nT000000004                                                                                                              "
+ },
+ {
+  "name": "carriage returns",
+  "cause": "bad_record_length",
+  "data": "HRRPDTH01SYNSTATE-PE         00000000006120261031FSYNTHETIC-STATE                                                       \r\nD199990001620260315                                                                                                     \r\nD199990002420240229                                                                                                     \r\nD199990005719991231                                                                                                     \r\nD199990007320261031                                                                                                     \r\nT000000004                                                                                                              \r\n"
+ },
+ {
+  "name": "row one byte short",
+  "cause": "bad_record_length",
+  "data": "HRRPDTH01SYNSTATE-PE         00000000006120261031FSYNTHETIC-STATE                                                       \nD199990001620260315                                                                                                     \nD199990002420240229                                                                                                    \nD199990005719991231                                                                                                     \nD199990007320261031                                                                                                     \nT000000004                                                                                                              \n"
+ },
+ {
+  "name": "row of 130 bytes",
+  "cause": "bad_record_length",
+  "data": "HRRPDTH01SYNSTATE-PE         00000000006120261031FSYNTHETIC-STATE                                                       \nD199990001620260315                                                                                                     \nD199990002420240229                                                                                                     XXXXXXXXXX\nD199990005719991231                                                                                                     \nD199990007320261031                                                                                                     \nT000000004                                                                                                              \n"
+ },
+ {
+  "name": "first record a row",
+  "cause": "no_header",
+  "data": "D199990001620260315                                                                                                     \nD199990002420240229                                                                                                     \nD199990005719991231                                                                                                     \nD199990007320261031                                                                                                     \nT000000004                                                                                                              \n"
+ },
+ {
+  "name": "no trailer",
+  "cause": "no_trailer",
+  "data": "HRRPDTH01SYNSTATE-PE         00000000006120261031FSYNTHETIC-STATE                                                       \nD199990001620260315                                                                                                     \nD199990002420240229                                                                                                     \nD199990005719991231                                                                                                     \nD199990007320261031                                                                                                     \n"
+ },
+ {
+  "name": "second trailer",
+  "cause": "unknown_record_type",
+  "data": "HRRPDTH01SYNSTATE-PE         00000000006120261031FSYNTHETIC-STATE                                                       \nD199990001620260315                                                                                                     \nD199990002420240229                                                                                                     \nD199990005719991231                                                                                                     \nD199990007320261031                                                                                                     \nT000000004                                                                                                              \nT000000004                                                                                                              \n"
+ },
+ {
+  "name": "unknown record type",
+  "cause": "unknown_record_type",
+  "data": "HRRPDTH01SYNSTATE-PE         00000000006120261031FSYNTHETIC-STATE                                                       \nD199990001620260315                                                                                                     \nD199990002420240229                                                                                                     \nX199990005719991231                                                                                                     \nD199990007320261031                                                                                                     \nT000000004                                                                                                              \n"
+ },
+ {
+  "name": "truncated inside a row",
+  "cause": "unterminated_record",
+  "data": "HRRPDTH01SYNSTATE-PE         00000000006120261031FSYNTHETIC-STATE                                                       \nD199990001620260315                                                                                                     \nD199990002420240229                                         "
+ },
+ {
+  "name": "eligibility layout",
+  "cause": "unknown_layout",
+  "data": "HRRELIG01SYNSTATE-PE         00000000006120261031FSYNTHETIC-STATE                                                       \nD199990001620260315                                                                                                     \nD199990002420240229                                                                                                     \nD199990005719991231                                                                                                     \nD199990007320261031                                                                                                     \nT000000004                                                                                                              \n"
+ },
+ {
+  "name": "state death layout",
+  "cause": "unknown_layout",
+  "data": "HRRDETH01SYNSTATE-PE         00000000006120261031FSYNTHETIC-STATE                                                       \nD199990001620260315                                                                                                     \nD199990002420240229                                                                                                     \nD199990005719991231                                                                                                     \nD199990007320261031                                                                                                     \nT000000004                                                                                                              \n"
+ },
+ {
+  "name": "state exclusion layout",
+  "cause": "unknown_layout",
+  "data": "HRRSEXC01SYNSTATE-PE         00000000006120261031FSYNTHETIC-STATE                                                       \nD199990001620260315                                                                                                     \nD199990002420240229                                                                                                     \nD199990005719991231                                                                                                     \nD199990007320261031                                                                                                     \nT000000004                                                                                                              \n"
+ },
+ {
+  "name": "NPI check digit wrong",
+  "cause": "bad_npi",
+  "data": "HRRPDTH01SYNSTATE-PE         00000000006120261031FSYNTHETIC-STATE                                                       \nD199990001720260315                                                                                                     \nD199990002420240229                                                                                                     \nD199990005719991231                                                                                                     \nD199990007320261031                                                                                                     \nT000000004                                                                                                              \n"
+ },
+ {
+  "name": "NPI of nine digits",
+  "cause": "bad_npi",
+  "data": "HRRPDTH01SYNSTATE-PE         00000000006120261031FSYNTHETIC-STATE                                                       \nD199990001 20260315                                                                                                     \nD199990002420240229                                                                                                     \nD199990005719991231                                                                                                     \nD199990007320261031                                                                                                     \nT000000004                                                                                                              \n"
+ },
+ {
+  "name": "NPI with a letter",
+  "cause": "bad_npi",
+  "data": "HRRPDTH01SYNSTATE-PE         00000000006120261031FSYNTHETIC-STATE                                                       \nDA99990001620260315                                                                                                     \nD199990002420240229                                                                                                     \nD199990005719991231                                                                                                     \nD199990007320261031                                                                                                     \nT000000004                                                                                                              \n"
+ },
+ {
+  "name": "blank NPI",
+  "cause": "bad_text",
+  "data": "HRRPDTH01SYNSTATE-PE         00000000006120261031FSYNTHETIC-STATE                                                       \nD199990001620260315                                                                                                     \nD          20240229                                                                                                     \nD199990005719991231                                                                                                     \nD199990007320261031                                                                                                     \nT000000004                                                                                                              \n"
+ },
+ {
+  "name": "partial date, day unknown",
+  "cause": "bad_date",
+  "data": "HRRPDTH01SYNSTATE-PE         00000000006120261031FSYNTHETIC-STATE                                                       \nD199990001620260300                                                                                                     \nD199990002420240229                                                                                                     \nD199990005719991231                                                                                                     \nD199990007320261031                                                                                                     \nT000000004                                                                                                              \n"
+ },
+ {
+  "name": "partial date, month and day unknown",
+  "cause": "bad_date",
+  "data": "HRRPDTH01SYNSTATE-PE         00000000006120261031FSYNTHETIC-STATE                                                       \nD199990001620260315                                                                                                     \nD199990002420240000                                                                                                     \nD199990005719991231                                                                                                     \nD199990007320261031                                                                                                     \nT000000004                                                                                                              \n"
+ },
+ {
+  "name": "blank date of death",
+  "cause": "bad_date",
+  "data": "HRRPDTH01SYNSTATE-PE         00000000006120261031FSYNTHETIC-STATE                                                       \nD199990001620260315                                                                                                     \nD199990002420240229                                                                                                     \nD1999900057                                                                                                             \nD199990007320261031                                                                                                     \nT000000004                                                                                                              \n"
+ },
+ {
+  "name": "30 February",
+  "cause": "bad_date",
+  "data": "HRRPDTH01SYNSTATE-PE         00000000006120261031FSYNTHETIC-STATE                                                       \nD199990001620260315                                                                                                     \nD199990002420240229                                                                                                     \nD199990005719991231                                                                                                     \nD199990007320260230                                                                                                     \nT000000004                                                                                                              \n"
+ },
+ {
+  "name": "death after as-of",
+  "cause": "death_after_as_of",
+  "data": "HRRPDTH01SYNSTATE-PE         00000000006120261031FSYNTHETIC-STATE                                                       \nD199990001620260315                                                                                                     \nD199990002420240229                                                                                                     \nD199990005719991231                                                                                                     \nD199990007320261101                                                                                                     \nT000000004                                                                                                              \n"
+ },
+ {
+  "name": "same NPI twice with two dates",
+  "cause": "duplicate_key",
+  "data": "HRRPDTH01SYNSTATE-PE         00000000006120261031FSYNTHETIC-STATE                                                       \nD199990001620260315                                                                                                     \nD199990001620260316                                                                                                     \nD199990002420240229                                                                                                     \nD199990005719991231                                                                                                     \nD199990007320261031                                                                                                     \nT000000005                                                                                                              \n"
+ },
+ {
+  "name": "same NPI twice with one date",
+  "cause": "duplicate_key",
+  "data": "HRRPDTH01SYNSTATE-PE         00000000006120261031FSYNTHETIC-STATE                                                       \nD199990001620260315                                                                                                     \nD199990001620260315                                                                                                     \nD199990002420240229                                                                                                     \nD199990005719991231                                                                                                     \nD199990007320261031                                                                                                     \nT000000005                                                                                                              \n"
+ },
+ {
+  "name": "count too high",
+  "cause": "count_mismatch",
+  "data": "HRRPDTH01SYNSTATE-PE         00000000006120261031FSYNTHETIC-STATE                                                       \nD199990001620260315                                                                                                     \nD199990002420240229                                                                                                     \nD199990005719991231                                                                                                     \nD199990007320261031                                                                                                     \nT000000005                                                                                                              \n"
+ },
+ {
+  "name": "count too low",
+  "cause": "count_mismatch",
+  "data": "HRRPDTH01SYNSTATE-PE         00000000006120261031FSYNTHETIC-STATE                                                       \nD199990001620260315                                                                                                     \nD199990002420240229                                                                                                     \nD199990005719991231                                                                                                     \nD199990007320261031                                                                                                     \nT000000003                                                                                                              \n"
+ },
+ {
+  "name": "row filler",
+  "cause": "bad_filler",
+  "data": "HRRPDTH01SYNSTATE-PE         00000000006120261031FSYNTHETIC-STATE                                                       \nD199990001620260315                                                                                                     \nD199990002420240229                                                                                                    Z\nD199990005719991231                                                                                                     \nD199990007320261031                                                                                                     \nT000000004                                                                                                              \n"
+ },
+ {
+  "name": "header filler",
+  "cause": "bad_filler",
+  "data": "HRRPDTH01SYNSTATE-PE         00000000006120261031FSYNTHETIC-STATE     V                                                 \nD199990001620260315                                                                                                     \nD199990002420240229                                                                                                     \nD199990005719991231                                                                                                     \nD199990007320261031                                                                                                     \nT000000004                                                                                                              \n"
+ },
+ {
+  "name": "letter in fseq",
+  "cause": "bad_number",
+  "data": "HRRPDTH01SYNSTATE-PE         00000000006O20261031FSYNTHETIC-STATE                                                       \nD199990001620260315                                                                                                     \nD199990002420240229                                                                                                     \nD199990005719991231                                                                                                     \nD199990007320261031                                                                                                     \nT000000004                                                                                                              \n"
+ },
+ {
+  "name": "as-of on no calendar day",
+  "cause": "bad_date",
+  "data": "HRRPDTH01SYNSTATE-PE         00000000006120261331FSYNTHETIC-STATE                                                       \nD199990001620260315                                                                                                     \nD199990002420240229                                                                                                     \nD199990005719991231                                                                                                     \nD199990007320261031                                                                                                     \nT000000004                                                                                                              \n"
+ },
+ {
+  "name": "as-of with a month of zero",
+  "cause": "bad_date",
+  "data": "HRRPDTH01SYNSTATE-PE         00000000006120261000FSYNTHETIC-STATE                                                       \nD199990001620260315                                                                                                     \nD199990002420240229                                                                                                     \nD199990005719991231                                                                                                     \nD199990007320261031                                                                                                     \nT000000004                                                                                                              \n"
+ },
+ {
+  "name": "blank as-of",
+  "cause": "bad_date",
+  "data": "HRRPDTH01SYNSTATE-PE         000000000061        FSYNTHETIC-STATE                                                       \nD199990001620260315                                                                                                     \nD199990002420240229                                                                                                     \nD199990005719991231                                                                                                     \nD199990007320261031                                                                                                     \nT000000004                                                                                                              \n"
+ },
+ {
+  "name": "unknown cover byte",
+  "cause": "unknown_code",
+  "data": "HRRPDTH01SYNSTATE-PE         00000000006120261031XSYNTHETIC-STATE                                                       \nD199990001620260315                                                                                                     \nD199990002420240229                                                                                                     \nD199990005719991231                                                                                                     \nD199990007320261031                                                                                                     \nT000000004                                                                                                              \n"
+ },
+ {
+  "name": "blank sender",
+  "cause": "bad_text",
+  "data": "HRRPDTH01                    00000000006120261031FSYNTHETIC-STATE                                                       \nD199990001620260315                                                                                                     \nD199990002420240229                                                                                                     \nD199990005719991231                                                                                                     \nD199990007320261031                                                                                                     \nT000000004                                                                                                              \n"
+ },
+ {
+  "name": "blank scope",
+  "cause": "bad_text",
+  "data": "HRRPDTH01SYNSTATE-PE         00000000006120261031F                                                                      \nD199990001620260315                                                                                                     \nD199990002420240229                                                                                                     \nD199990005719991231                                                                                                     \nD199990007320261031                                                                                                     \nT000000004                                                                                                              \n"
+ },
+ {
+  "name": "letter in the trailer count",
+  "cause": "bad_number",
+  "data": "HRRPDTH01SYNSTATE-PE         00000000006120261031FSYNTHETIC-STATE                                                       \nD199990001620260315                                                                                                     \nD199990002420240229                                                                                                     \nD199990005719991231                                                                                                     \nD199990007320261031                                                                                                     \nT00000000X                                                                                                              \n"
+ },
+ {
+  "name": "no identity for kind 4",
+  "cause": "kind_not_registered",
+  "data": "HRRPDTH01SYNSTATE-PE         00000000006120261031FSYNTHETIC-STATE                                                       \nD199990001620260315                                                                                                     \nD199990002420240229                                                                                                     \nD199990005719991231                                                                                                     \nD199990007320261031                                                                                                     \nT000000004                                                                                                              \n",
+  "entry": {
+   "ids": [
+    [
+     2,
+     [
+      1
+     ]
+    ]
+   ]
+  }
+ },
+ {
+  "name": "identity code 2",
+  "cause": "unknown_identity_field",
+  "data": "HRRPDTH01SYNSTATE-PE         00000000006120261031FSYNTHETIC-STATE                                                       \nD199990001620260315                                                                                                     \nD199990002420240229                                                                                                     \nD199990005719991231                                                                                                     \nD199990007320261031                                                                                                     \nT000000004                                                                                                              \n",
+  "entry": {
+   "ids": [
+    [
+     4,
+     [
+      1,
+      2
+     ]
+    ]
+   ]
+  }
+ }
+]

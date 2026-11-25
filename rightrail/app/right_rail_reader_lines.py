@@ -15,6 +15,23 @@ from typing import Any, Iterator, NamedTuple
 BOM = b"\xef\xbb\xbf"
 MAX_FILE_BYTES = 1 << 30
 MAX_LINE_BYTES = 1 << 16
+_NOT_NAME = frozenset("JR SR II III IV MD DO NP RN PA LLC INC CORP CO LTD PC PLLC LLP".split())  # a name's suffix or company words
+
+
+class Words(frozenset):
+    """A name's words.  ``order``: those words as written; ``every``: all the words as written, suffix and company words too; ``bare``:
+    the name is only such words, so ``order`` keeps them (a surname DO or CO is a name, not a title)."""
+
+
+def name_tokens(*parts) -> Words:
+    """A name's words as two files can be compared: accents folded, upper case, punctuation dropped, suffix and company words left out
+    (unless nothing else is left), order ignored."""
+    text = "".join(c for c in unicodedata.normalize("NFKD", " ".join(p or "" for p in parts).upper()) if not unicodedata.combining(c))
+    every = "".join(c if c.isalnum() else " " for c in text).split()
+    kept = [w for w in every if w not in _NOT_NAME]
+    found = Words(kept or every)
+    found.order, found.every, found.bare = tuple(kept or every), tuple(every), not kept
+    return found
 
 
 class ReaderError(ValueError):
@@ -29,6 +46,7 @@ class Quarantine(NamedTuple):
     offset: int  # byte offset of the record's first byte in the raw file
     field: str | None  # None when the whole record is set aside
     cause: str
+    detail: str = ""  # what a set-aside record still names that a caller needs (the exclusion list: its NPI), else ""
 
 
 class Finding(NamedTuple):

@@ -22,17 +22,17 @@ class PublishTreeTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls._tmp = tempfile.TemporaryDirectory()
         cls.addClassCleanup(cls._tmp.cleanup)
-        cls.handle, cls.root_pk, cls.cert = fx.custody(cls._tmp.name)
+        cls.handle, cls.held, cls.cert = fx.custody(cls._tmp.name)
 
     def batch(self, first_seq: int, n: int, prev: bytes = gate.ZERO_DIGEST, counter: int = 1):
         """A signed batch of ``n`` tokens from ``first_seq`` taking ``counter``: (signed checkpoint, header, token objects)."""
         cp, tokens = fx.build(fx.batch_leaves(first_seq, n, first_seq), prev, prev, counter)
         header = gate.encode_checkpoint_header(cp)
         tokens = [replace(t, checkpoint_digest=gate.sha3_512(header)) for t in tokens]
-        return gate.attach_signature(header, signer.sign(self.handle, header)), header, tokens
+        return gate.attach_signature(header, signer.sign(self.handle, header)) + fx.cosign_record(header), header, tokens
 
     def head(self, last: bytes | None, signed: bytes) -> bytes:
-        return self.root_pk + signer.framed(self.cert) + signer.framed(last or b"") + signer.framed(signed)
+        return signer.framed(self.held) + signer.framed(self.cert) + signer.framed(last or b"") + signer.framed(signed)
 
     def publish(self, last: bytes | None, signed: bytes, tokens, tpm: int = 0) -> str:
         raw = [gate.encode_token(t) if isinstance(t, gate.Token) else t for t in tokens]
@@ -111,7 +111,7 @@ class PublishTreeTests(unittest.TestCase):
 
     def sign_checkpoint(self, cp: gate.Checkpoint) -> bytes:
         header = gate.encode_checkpoint_header(cp)
-        return gate.attach_signature(header, signer.sign(self.handle, header))
+        return gate.attach_signature(header, signer.sign(self.handle, header)) + fx.cosign_record(header)
 
     def test_refuses_tokens_whose_tree_is_not_the_signed_token_root(self) -> None:
         # Both batches are valid alone; B's self-consistent tokens carry A's checkpoint digest but build another tree
