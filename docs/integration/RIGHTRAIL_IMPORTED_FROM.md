@@ -21,13 +21,17 @@ documentation rule refuses hand-written Markdown that is not in its owners list.
 - **Changed in localBCE since the import:**
   - The maintainer's axiom-pin fix, taken from trunk merge commit `69dec25d` (its change to
     `lean/BlindLedger/Gate/AxiomCheck.lean` and `AXIOMS.txt`, 17 lines each): at `e5d0f36b` the Lean build fails on 17
-    stale pins. Applied as its own commit after the import.
+    stale pins. Applied as its own commit after the import (`291534ee`). This is upstream's text, not a localBCE
+    change.
+  - `tests/test_privacy_artifact_scan.py:188` splits its PEM header literal (`"-----BEGIN " "PRIVATE KEY-----\n"`) so
+    localBCE's secret scanner passes; the test's input is unchanged. **This is the only localBCE deviation from the
+    imported tree.** It repeats the same change made after the 2026-10 and 2026-11-14 imports.
 
 ## Previous imports (superseded)
 
 - 2026-11-14 to this import: trunk `fc89f9e5ceaacfbfb0cb50173a4fd870e3872a3f`, from the GitHub archive
   `rightrail-rightrail-main.zip` (SHA-256 `1afbc74dc3cf3f5a97c494a196f0c0e0a2d3938abdd16c76b8ce09d36ba0ab71`), with
-  one local change (a split PEM header literal in `tests/test_privacy_artifact_scan.py:188`).
+  the same one local change (the split PEM header literal).
   `scripts/check_rightrail_zip_import.py` checks that import, not this one.
 - 2026-10-17 to 2026-11-14: `rightrail-main` at `af020b268094ae3fd6ef5e68fe575b7e5ac40a23` (2026-10-15, "TRAIN-11"),
   from `RightRail.bundle` (SHA-256 `3b61a4ab8bd007ba02aef61db643b72d07b20ab3a71fbbd5b216152634c1c5fa`), imported by
