@@ -91,7 +91,7 @@ Owner's answers, 2026-11-24: (1) hold: M1 stays local and none of RightRail's cu
 
 The commit-by-commit review (2026-11-24, awaiting the owner's go-ahead) changes two points above. The signer-free harness is not needed on a machine that has the signer. The reason-bound proofs are not needed while trunk has 29 fixed reasons against a cap of 32 (`maxReasonCodes`), and they do not port as written: they classify the fixed `Rules.fires`, and on trunk new reasons come from rule sets.
 
-**M4. Outside `rightrail/`.** Retarget `scripts/elig_snapshot.py` from feed snapshots to fact records (read trunk's `conformance/ELIG_EXTRACT_V1.md` and the fact-record design first) or park it. Regenerate `G_RULE_PARITY_REPORT`.
+**M4. Outside `rightrail/`.** Done in part on 2026-11-24: the eligibility snapshot builder is parked (owner: superseded by answer 4), at `parked/localbce/scripts/elig_snapshot.py` with `parked/localbce/scripts/tests/test_elig_snapshot.py` and `parked/localbce/scripts/tests/fixtures/elig/roster_v1.json`. A builder for fact records, if wanted, starts from trunk's `conformance/ELIG_EXTRACT_V1.md` and the fact-record design. Still to do: regenerate `G_RULE_PARITY_REPORT`.
 
 **M5. Design, then draft, the new work.** An eligibility pack for rule set v2 (aid-code table and rules for reasons 24 to 28), checked through `ruleset_admit`. A draft of the links-file reasons widening, as a protected change with an XI.2 record, not merged without the founder's approval.
 

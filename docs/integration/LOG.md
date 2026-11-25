@@ -512,3 +512,22 @@
   right). Pass: validate_ops_scaffold, the review-queue check, the
   rightrail bloat budget test. The maintainer's axiom-pin fix follows as
   its own commit, taken from trunk merge 69dec25d.
+- 2026-11-24: owner: the go-ahead for M1 was not acceptance of the reds;
+  clear them before any push. Approved downloads: Rust (rustup, stable),
+  PyYAML, pypdf. Done: Rust 1.100.0 stable (x86_64-pc-windows-gnu, no PATH
+  change) and a Python 3.12 environment at C:\work\localbce-venv with
+  PyYAML 6.0.4 and pypdf 7.1.1. Then, each its own commit on
+  codex/rightrail-trunk-e5d0f36b: the maintainer's axiom-pin fix taken
+  from trunk merge 69dec25d (291534ee; rightrail's lake build 516 of 516);
+  the PEM header literal split at
+  rightrail/tests/test_privacy_artifact_scan.py:188, the only localBCE
+  deviation from the imported tree (aa5e691c); and the eligibility
+  snapshot builder parked, superseded by the maintainer's answer 4:
+  scripts/elig_snapshot.py, scripts/tests/test_elig_snapshot.py and
+  scripts/tests/fixtures/elig/roster_v1.json moved under parked/localbce/
+  at the same relative paths (this replaces "retarget or park" in
+  TRUNK_MOVE_PLAN.md step M4). Check set after these, all passing: cargo
+  check, cargo test (45) and cargo build; scripts/tests; tests (1 skip);
+  rightrail's bloat budget test; the workflow YAML parse;
+  validate_ops_scaffold; scan_secrets; the review-queue check; the
+  self-check with a real python3 (11 PASS, 0 FAIL, 4 NOT-YET). Not pushed.
