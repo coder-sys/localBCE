@@ -71,7 +71,7 @@ Owner, 2026-11-24: send the fixes as one pull request against `RightRail/rightra
 
 Owner's answers, 2026-11-24: (1) hold: M1 stays local and none of RightRail's current code is pushed until the owner confirms with the maintainer or makes the repository private; (3) yes, on a new branch, never force-pushed, after the owner's go-ahead on a commit-by-commit list; (4) yes, as a pull request whose text the owner sees first. No Node.js or Playwright download: the browser tests are listed as not run.
 
-1. **Visibility.** `coder-sys/localBCE` is public and `RightRail/rightrail` is private. Step M1 would push 769 files of current RightRail code. `HANDOFF.md` section 1 says to check the outcome first. This blocks every push below.
+1. **Visibility. Decided 2026-11-25:** the owner decided that RightRail's code may be imported into the public localBCE repository, which ends the hold in answer (1) above. `codex/rightrail-trunk-e5d0f36b` (step M1, 769 files of RightRail code, no history) was pushed to `coder-sys/localBCE` at `3fa1c83e` as a new branch, not forced. `coder-sys/localBCE` is public and `RightRail/rightrail` is private. Each later push still needs the owner's word (`HANDOFF.md` section 7).
 2. **Snapshot or history.** The history is now available from the private repository. Importing it into a public repository is the same visibility question; the default below is a snapshot, as on 2026-11-14.
 3. **Dropping the superseded work.** M1 replaces `rightrail/` wholesale, which removes localBCE's 14 commits of changes there from the tree (they stay in git history). `HANDOFF.md` section 3 says backing them out needs the owner's word.
 4. **Sending the trunk fixes upstream**, and by whom.

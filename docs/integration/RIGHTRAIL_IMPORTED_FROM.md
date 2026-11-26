@@ -8,9 +8,10 @@ documentation rule refuses hand-written Markdown that is not in its owners list.
 - **Source.** A clone of the private repository `github.com/RightRail/rightrail`. The imported tree is
   `86fdbe4eb3906a8aa71717995a8cc0b0662166ac`, 769 files.
 - **History: not imported.** The RightRail history is available from the private repository but is not in this
-  repository: localBCE is public and RightRail is private, and the owner is holding every push of this import until that
-  is settled (TRUNK_MOVE_PLAN.md, decision 1). Only the tree's files were brought in, through a parentless transfer
-  commit that is not on any branch.
+  repository. Only the tree's files were brought in, through a parentless transfer commit that is not on any branch.
+- **Visibility: decided.** localBCE is public and RightRail is private. The owner decided on 2026-11-25 that
+  RightRail's code may be imported into the public localBCE repository (TRUNK_MOVE_PLAN.md, decision 1), and
+  `codex/rightrail-trunk-e5d0f36b` was pushed to `coder-sys/localBCE` at `3fa1c83e` as a new branch, not forced.
 - **Method.** On `codex/rightrail-trunk-e5d0f36b`, branched from `codex/rightrail-trunk-step3` (`639c4a70`):
   `git rm -r rightrail`, then `git read-tree --prefix=rightrail/ -u 86fdbe4e`. No file is rewritten, so
   `git rev-parse HEAD:rightrail` at the import commit equals the tree hash above.

@@ -531,3 +531,9 @@
   rightrail's bloat budget test; the workflow YAML parse;
   validate_ops_scaffold; scan_secrets; the review-queue check; the
   self-check with a real python3 (11 PASS, 0 FAIL, 4 NOT-YET). Not pushed.
+- 2026-11-25: the owner decided that RightRail's code may be imported
+  into the public localBCE repository. With the owner's approval,
+  codex/rightrail-trunk-e5d0f36b was pushed to coder-sys/localBCE at
+  3fa1c83e as a plain push of a new branch (no force), confirmed with
+  ls-remote. RIGHTRAIL_IMPORTED_FROM.md, TRUNK_MOVE_PLAN.md decision 1 and
+  HANDOFF.md section 1 now say so in place of "push on hold".
