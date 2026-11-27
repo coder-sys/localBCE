@@ -1,0 +1,63 @@
+{
+  "about": "Pins for scripts/build_g2_ruleset_pack.py and scripts/tests/test_g2_ruleset_pack.py. Synthetic, not legally verified, nonpayment. Reasons: 26 PROGRAM_NOT_ELIGIBLE (hold), 27 PROGRAM_NOT_ELIGIBLE_UNVERIFIED (review), 28 STALE_ELIGIBILITY (review). A read: ans 0 present, 1 absent, 2 unknown, 3 conflict; status 1 eligible, 2 not eligible, 3 pending, 4 presumptive; an aid code is text, or hex for a raw 21-byte block.",
+  "records": {
+    "elig_only": {"rules": 3, "ages": 1, "cost": 20, "body_bytes": 343, "unbacked": [], "digest": "39e9373c2fcb5eb445c1cdd1f346c2eab95cb248c3e2933231e75dbd3c1de7805b0759f26cfb65f7a0009ac2b3f97fd1948eb3f241092094bb2f391d65f47349"},
+    "full": {"rules": 16, "ages": 5, "cost": 102, "body_bytes": 516, "unbacked": [], "digest": "5e48d41b567f755d71477053a148d6060e2add6f806525097f06d7305d5270bf4d5b550ff43849d56f96c57feee4d889a5d33173df77d728aa3b2afb68572c6f"}
+  },
+  "cases": [
+    {"name": "eligible_13", "from_bbd0e947": "cOk", "service": 20270310, "batch": 20270315, "read": {"ans": 0, "status": 1, "asof": 20270308, "aids": ["13"]}, "expect": [], "outcome": "allow", "note": "Eligible, listed aid code, read two days before the service date"},
+    {"name": "eligible_23", "service": 20270310, "batch": 20270315, "read": {"ans": 0, "status": 1, "asof": 20270308, "aids": ["23"]}, "expect": [], "outcome": "allow", "note": "Each listed code is allowed"},
+    {"name": "eligible_53", "service": 20270310, "batch": 20270315, "read": {"ans": 0, "status": 1, "asof": 20270308, "aids": ["53"]}, "expect": [], "outcome": "allow"},
+    {"name": "eligible_103", "service": 20270310, "batch": 20270315, "read": {"ans": 0, "status": 1, "asof": 20270308, "aids": ["103"]}, "expect": [], "outcome": "allow"},
+    {"name": "eligible_104", "service": 20270310, "batch": 20270315, "read": {"ans": 0, "status": 1, "asof": 20270308, "aids": ["104"]}, "expect": [], "outcome": "allow"},
+    {"name": "unlisted_999", "from_bbd0e947": "cNE", "service": 20270310, "batch": 20270315, "read": {"ans": 0, "status": 1, "asof": 20270308, "aids": ["999"]}, "expect": [26], "outcome": "hold", "note": "A well-formed aid code that is not on the list holds"},
+    {"name": "listed_and_unlisted", "service": 20270310, "batch": 20270315, "read": {"ans": 0, "status": 1, "asof": 20270308, "aids": ["13", "999"]}, "expect": [], "outcome": "allow", "note": "One cited row with a listed code is enough"},
+    {"name": "status_not_eligible", "service": 20270310, "batch": 20270315, "read": {"ans": 0, "status": 2, "asof": 20270308, "aids": ["13"]}, "expect": [26], "outcome": "hold", "note": "Status not eligible holds, listed code or not"},
+    {"name": "status_not_eligible_unlisted", "service": 20270310, "batch": 20270315, "read": {"ans": 0, "status": 2, "asof": 20270308, "aids": ["999"]}, "expect": [26], "outcome": "hold"},
+    {"name": "status_pending", "service": 20270310, "batch": 20270315, "read": {"ans": 0, "status": 3, "asof": 20270308, "aids": ["13"]}, "expect": [27], "outcome": "review", "note": "Pending goes to review (unverified policy choice)"},
+    {"name": "status_pending_unlisted", "service": 20270310, "batch": 20270315, "read": {"ans": 0, "status": 3, "asof": 20270308, "aids": ["999"]}, "expect": [26, 27], "outcome": "hold", "note": "Pending with an unlisted code: both reasons, so it holds"},
+    {"name": "status_presumptive", "service": 20270310, "batch": 20270315, "read": {"ans": 0, "status": 4, "asof": 20270308, "aids": ["13"]}, "expect": [], "outcome": "allow", "note": "Presumptive is allowed (unverified policy choice)"},
+    {"name": "status_presumptive_unlisted", "service": 20270310, "batch": 20270315, "read": {"ans": 0, "status": 4, "asof": 20270308, "aids": ["999"]}, "expect": [26], "outcome": "hold"},
+    {"name": "malformed_char", "service": 20270310, "batch": 20270315, "read": {"ans": 0, "status": 1, "asof": 20270308, "aids": [{"hex": "03612f620000000000000000000000000000000000"}]}, "expect": [26], "outcome": "hold", "note": "Forced difference 4: a malformed aid code holds, like an unlisted one"},
+    {"name": "malformed_empty", "service": 20270310, "batch": 20270315, "read": {"ans": 0, "status": 1, "asof": 20270308, "aids": [{"hex": "000000000000000000000000000000000000000000"}]}, "expect": [26], "outcome": "hold", "note": "Forced difference 4"},
+    {"name": "malformed_length", "service": 20270310, "batch": 20270315, "read": {"ans": 0, "status": 1, "asof": 20270308, "aids": [{"hex": "195151515151515151515151515151515151515151"}]}, "expect": [26], "outcome": "hold", "note": "Forced difference 4"},
+    {"name": "listed_and_malformed", "service": 20270310, "batch": 20270315, "read": {"ans": 0, "status": 1, "asof": 20270308, "aids": ["13", {"hex": "03612f620000000000000000000000000000000000"}]}, "expect": [], "outcome": "allow", "note": "A listed code beside a malformed one is allowed"},
+    {"name": "present_no_aid_rows", "service": 20270310, "batch": 20270315, "read": {"ans": 0, "status": 1, "asof": 20270308, "aids": []}, "expect": [26], "outcome": "hold", "note": "A present answer citing no aid code holds; the read from facts always cites at least one row"},
+    {"name": "absent", "from_bbd0e947": "none", "service": 20270310, "batch": 20270315, "read": {"ans": 1, "status": 0, "asof": null, "aids": []}, "expect": [27], "outcome": "review", "note": "Forced difference 1: no eligibility fact is a review, not a hold"},
+    {"name": "unknown", "service": 20270310, "batch": 20270315, "read": {"ans": 2, "status": 0, "asof": null, "aids": []}, "expect": [27], "outcome": "review"},
+    {"name": "conflict", "service": 20270310, "batch": 20270315, "read": {"ans": 3, "status": 0, "asof": null, "aids": []}, "expect": [27], "outcome": "review", "note": "Rows that disagree on status"},
+    {"name": "present_no_as_of", "service": 20270310, "batch": 20270315, "read": {"ans": 0, "status": 1, "asof": null, "aids": ["13"]}, "expect": [27], "outcome": "review"},
+    {"name": "absent_with_as_of", "service": 20270310, "batch": 20270315, "read": {"ans": 1, "status": 0, "asof": 20270308, "aids": []}, "expect": [27, 28], "outcome": "review", "note": "An answer that is not present is never fresh"},
+    {"name": "age_7_days", "from_bbd0e947": "c7", "service": 20270310, "batch": 20270315, "read": {"ans": 0, "status": 1, "asof": 20270303, "aids": ["13"]}, "expect": [], "outcome": "allow", "note": "As-of exactly the maximum age before the service date"},
+    {"name": "age_8_days", "from_bbd0e947": "c8", "service": 20270310, "batch": 20270315, "read": {"ans": 0, "status": 1, "asof": 20270302, "aids": ["13"]}, "expect": [27, 28], "outcome": "review", "note": "Forced difference 2: a stale read gives 27 and 28"},
+    {"name": "stale_unlisted", "from_bbd0e947": "cNEu", "service": 20270310, "batch": 20270315, "read": {"ans": 0, "status": 1, "asof": 20270302, "aids": ["999"]}, "expect": [27, 28], "outcome": "review", "note": "A stale read never holds"},
+    {"name": "stale_not_eligible", "service": 20270310, "batch": 20270315, "read": {"ans": 0, "status": 2, "asof": 20270302, "aids": ["13"]}, "expect": [27, 28], "outcome": "review"},
+    {"name": "month_edge_fresh", "service": 20270307, "batch": 20270315, "read": {"ans": 0, "status": 1, "asof": 20270228, "aids": ["13"]}, "expect": [], "outcome": "allow"},
+    {"name": "month_edge_stale", "service": 20270308, "batch": 20270315, "read": {"ans": 0, "status": 1, "asof": 20270228, "aids": ["13"]}, "expect": [27, 28], "outcome": "review"},
+    {"name": "leap_edge_fresh", "service": 20280307, "batch": 20280315, "read": {"ans": 0, "status": 1, "asof": 20280229, "aids": ["13"]}, "expect": [], "outcome": "allow"},
+    {"name": "leap_edge_stale", "service": 20280308, "batch": 20280315, "read": {"ans": 0, "status": 1, "asof": 20280229, "aids": ["13"]}, "expect": [27, 28], "outcome": "review"},
+    {"name": "as_of_after_service_date", "service": 20270310, "batch": 20270315, "read": {"ans": 0, "status": 1, "asof": 20270312, "aids": ["13"]}, "expect": [], "outcome": "allow", "note": "A later read about earlier coverage is within the age"},
+    {"name": "as_of_on_batch_date", "service": 20270310, "batch": 20270315, "read": {"ans": 0, "status": 1, "asof": 20270315, "aids": ["13"]}, "expect": [], "outcome": "allow"},
+    {"name": "as_of_after_batch_date", "service": 20270310, "batch": 20270315, "read": {"ans": 0, "status": 1, "asof": 20270316, "aids": ["13"]}, "expect": [27, 28], "outcome": "review", "note": "A read dated after the batch is not fresh"},
+    {"name": "as_of_after_batch_date_unlisted", "service": 20270310, "batch": 20270315, "read": {"ans": 0, "status": 1, "asof": 20270316, "aids": ["999"]}, "expect": [27, 28], "outcome": "review"},
+    {"name": "bad_service_date", "service": 20270230, "batch": 20270315, "read": {"ans": 0, "status": 1, "asof": 20270308, "aids": ["13"]}, "expect": [28], "outcome": "review", "note": "No rule can hold on a service date that is not a calendar date"},
+    {"name": "bad_service_date_unlisted", "service": 20270230, "batch": 20270315, "read": {"ans": 0, "status": 1, "asof": 20270308, "aids": ["999"]}, "expect": [28], "outcome": "review"},
+    {"name": "bad_service_date_absent", "service": 20270230, "batch": 20270315, "read": {"ans": 1, "status": 0, "asof": null, "aids": []}, "expect": [27], "outcome": "review", "note": "Rule 27's own conditions, with the gate's guard out of play"},
+    {"name": "bad_service_date_unknown", "service": 20270230, "batch": 20270315, "read": {"ans": 2, "status": 0, "asof": null, "aids": []}, "expect": [27], "outcome": "review"},
+    {"name": "bad_service_date_conflict", "service": 20270230, "batch": 20270315, "read": {"ans": 3, "status": 0, "asof": null, "aids": []}, "expect": [27], "outcome": "review"},
+    {"name": "bad_service_date_unknown_with_as_of", "service": 20270230, "batch": 20270315, "read": {"ans": 2, "status": 0, "asof": 20270308, "aids": []}, "expect": [27, 28], "outcome": "review", "note": "Rule 27's answer test alone; the read from facts gives an unknown or conflicting answer no as-of"},
+    {"name": "bad_service_date_conflict_with_as_of", "service": 20270230, "batch": 20270315, "read": {"ans": 3, "status": 0, "asof": 20270308, "aids": []}, "expect": [27, 28], "outcome": "review"},
+    {"name": "bad_batch_date", "service": 20270310, "batch": 20270230, "read": {"ans": 0, "status": 1, "asof": 20270308, "aids": ["13"]}, "expect": [27, 28], "outcome": "review"}
+  ],
+  "blocked": [
+    {"from_bbd0e947": "cBL", "blocked": "benefit level", "what": "Benefit level missing on a usable read: would fire 24"},
+    {"from_bbd0e947": "cPair", "blocked": "benefit level", "what": "Aid code not allowed and benefit level missing together: would fire 24 and 26"},
+    {"from_bbd0e947": "cLvl2", "blocked": "benefit level", "what": "A second benefit level value"},
+    {"from_bbd0e947": "cBLu", "blocked": "benefit level", "what": "Benefit level missing on an unusable read: would fire 25"}
+  ],
+  "not_the_packs": [
+    {"from_bbd0e947": "cStart", "what": "First covered day is inclusive", "where": "the fact store's belief and the extract reader, on the RightRail side"},
+    {"from_bbd0e947": "cStop", "what": "Last covered day is inclusive", "where": "the fact store's belief and the extract reader, on the RightRail side"},
+    {"from_bbd0e947": "cRev", "what": "A row whose start is after its end", "where": "the fact store's belief and the extract reader, on the RightRail side"}
+  ]
+}
