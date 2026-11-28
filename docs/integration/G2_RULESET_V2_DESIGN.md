@@ -199,8 +199,13 @@ Two things the mutants showed, both because the gate's guard already does part o
 The mutant of `bbd0e947` "program on an unusable snapshot" cannot be written in a pack: the gate's guard is what stops
 it, and trunk proves that (`elig_guard_hold`).
 
-Not done yet: the parity harness (`g_rule_parity.py`) mapping `G2_PROGRAM_ELIGIBILITY_FAILED` to bit 26 and reporting
-`G2_BENEFIT_LEVEL_MISSING` as not compared, and regenerating `G_RULE_PARITY_REPORT` (plan step M4).
+Parity harness (plan step M4, 2026-11-28): `g_rule_parity.py` maps `G2_PROGRAM_ELIGIBILITY_FAILED` to bit 26 and runs
+the Rust engine on the 43 cases, with claim flags derived from each case's read. `G2_BENEFIT_LEVEL_MISSING` is reported
+as not compared. Result in `G_RULE_PARITY_REPORT`: 19 agreements (13 allow, 6 hold) and 24 differences. The
+differences are the forced ones and the G1 flag: 14 cases RightRail sends to review and localBCE denies (no usable
+answer, or a stale read with a bad code), 7 it sends to review and localBCE approves (localBCE has no freshness test),
+and 3 both stop but localBCE names G1 (`eligibility_active`), not G2. The RightRail side of that comparison is the
+pack's pinned expected reasons, not a running gate.
 
 ## 6. Blocked on the RightRail side
 

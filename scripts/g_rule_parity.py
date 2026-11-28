@@ -45,10 +45,38 @@ G_TO_LEAN = {
     "G5_PROVIDER_NOT_ENROLLED": {"PROVIDER_EXCLUDED", "PROVIDER_DECEASED"},
     "G7_DUPLICATE_CLAIM": {"FFS_DUPLICATE_LINE"},
     "G9_RECIPIENT_DECEASED": {"MEMBER_DECEASED"},
+    # G2's aid code test, as the rule-set v2 pack writes it (reason bit 26; G2_RULESET_V2_DESIGN.md).  Compared
+    # only on the pack's own cases (G2_PACK_CASES): the v1 lines carry no eligibility.
+    "G2_PROGRAM_ELIGIBILITY_FAILED": {"PROGRAM_NOT_ELIGIBLE"},
 }
 MAPPED_LEAN = set().union(*G_TO_LEAN.values())
 
-# Flags for gates the harness does not compare (G2, G4, G6, G8, G10): always passing.
+# The G2 pack's case table: each case's eligibility read and the reasons the pack fires on it.  Those reasons are
+# pinned there and checked against RightRail's Python reference in CI and its Lean model locally
+# (scripts/tests/test_g2_ruleset_pack*.py); no gate runs the pack.
+G2_PACK_CASES = os.path.join(ROOT, "rules", "rightrail_packs", "g2_elig_v2.expected.json")
+G2_SET, V1_SET = "g2_pack", "rules_v1"
+G2_REASONS = {26: "PROGRAM_NOT_ELIGIBLE", 27: "PROGRAM_NOT_ELIGIBLE_UNVERIFIED", 28: "STALE_ELIGIBILITY"}
+G2_OUTCOMES = {"allow": "ALLOW", "hold": "HOLD", "review": "HUMAN_REVIEW"}
+G2_NOT_COMPARED = "G2_BENEFIT_LEVEL_MISSING"  # the eligibility fact has no benefit level; the pack cannot test it
+LOCAL_AID_CODES = (13, 23, 53, 103, 104)  # denial_reason()'s list; test_g2_ruleset_pack.py pins the pack's to it
+
+G2_ASSUMPTIONS = [
+    "G2 pack cases: the RightRail side is the pack's pinned expected reasons for the case's eligibility read "
+    "(26 PROGRAM_NOT_ELIGIBLE holds; 27 PROGRAM_NOT_ELIGIBLE_UNVERIFIED and 28 STALE_ELIGIBILITY send the line to a "
+    "person), not the result of a running gate.",
+    "G2 aid_code = the first cited aid code that is on localBCE's list; else the first cited code that is a "
+    "number; else 0 (no cited code, or only malformed ones), which is not on the list.",
+    "G1 eligibility_active = 1 when the read's answer is present with status eligible or presumptive; 0 for "
+    "not eligible, pending, or an absent, unknown or conflicting answer.  Presumptive and pending follow the "
+    "pack's own unverified policy choices.",
+    "The read's as-of, the batch date and whether the service date is a calendar date are not localBCE inputs: "
+    "localBCE has no freshness test.  The eligibility period is set to cover every date, so G3 passes.",
+    "G2_BENEFIT_LEVEL_MISSING is not compared: benefit_level_exists is set to 1, and the pack's four "
+    "benefit-level cases are listed as blocked, not run.",
+]
+
+# Flags for gates the harness does not compare (G2 on the v1 lines, G4, G6, G8, G10): always passing.
 PASSING_FLAGS = {
     "aid_code": 13,
     "benefit_level_exists": 1,
@@ -76,7 +104,8 @@ ASSUMPTIONS = [
     "being decided again (`redo`); a re-decided payment's own released line is not its own duplicate.",
     "The gate's own checkpoint of the released and unresolved sets (used when a set read does not chain) is not "
     "modelled: localBCE has no checkpoint, so only the rows of the set read count.",
-    "G2, G4, G6, G8 and G10 flags are set to passing values: no Lean rule exists for them yet (Phase 3).",
+    "On the v1 lines the G2, G4, G6, G8 and G10 flags are set to passing values: those lines carry no "
+    "eligibility, and no RightRail rule exists for G4, G6, G8 or G10 yet.",
     "A dropped snapshot, or one whose rows do not hash to its declared pin, contributes no rows: Lean treats "
     "both as missing (Run.lean `snapshot`).",
     "A line the vector gives no expected result is not compared, and is not counted as released for later "
@@ -320,6 +349,64 @@ def derive_claim(line, facts, earlier_keys, redo=frozenset()):
     return claim
 
 
+def load_g2_cases(path=G2_PACK_CASES):
+    """(cases, blocked) of the G2 pack's case table."""
+    with open(path, encoding="utf-8") as f:
+        table = json.load(f)
+    return table["cases"], table["blocked"]
+
+
+def g2_expect(case):
+    """What the pack decides for the case, as an `Expect`."""
+    return Expect(G2_OUTCOMES[case["outcome"]], tuple(G2_REASONS[b] for b in case["expect"]))
+
+
+def derive_g2_claim(case, index):
+    """ClaimInput flags for one G2 pack case, from its eligibility read (see G2_ASSUMPTIONS)."""
+    read = case["read"]
+    codes = [int(a) for a in read["aids"] if isinstance(a, str) and a.isascii() and a.isdigit()]
+    listed = [c for c in codes if c in LOCAL_AID_CODES]
+    claim = {
+        "claim_id": f"G2P-{index}",
+        "claim_amount": 100,
+        "member_id": "SYN-G2",
+        "provider_npi": "SYN-G2",
+        "eligibility_active": 1 if read["ans"] == 0 and read["status"] in (1, 4) else 0,
+        "date_of_service_from": case["service"],
+        "eligibility_period_from": 0,
+        "eligibility_period_thru": 99999999,
+        "provider_enrolled": 1,
+        "is_duplicate": 0,
+        "recipient_not_deceased": 1,
+    }
+    claim.update(PASSING_FLAGS)
+    claim["aid_code"] = (listed or codes or [0])[0]
+    return claim
+
+
+def compare_g2(cases, engine):
+    records = []
+    with tempfile.TemporaryDirectory(prefix="g_rule_parity_") as work:
+        for index, case in enumerate(cases, 1):
+            expect = g2_expect(case)
+            claim = derive_g2_claim(case, index)
+            status, reason = run_engine(engine, claim, work)
+            records.append({
+                "set": G2_SET,
+                "case": case["name"],
+                "batch": 0,
+                "line_id": index,
+                "flow": "-",
+                "lean_outcome": expect.outcome,
+                "lean_reasons": list(expect.reasons),
+                "localbce_status": status,
+                "localbce_reason": reason,
+                "category": classify(expect, status, reason),
+                "derived_flags": {k: claim[k] for k in ("eligibility_active", "aid_code", "benefit_level_exists")},
+            })
+    return records
+
+
 def run_engine(engine, claim, workdir):
     claim_path = os.path.join(workdir, "claim_input.json")
     config_path = os.path.join(workdir, "config.json")
@@ -399,6 +486,7 @@ def compare(cases, engine):
                     status, reason = run_engine(engine, claim, work)
                     earlier_in_batch.append(line.exact_key())
                     records.append({
+                        "set": V1_SET,
                         "case": case.name,
                         "batch": bi,
                         "line_id": line.id,
@@ -415,23 +503,43 @@ def compare(cases, engine):
     return records
 
 
-def summarize(records, vectors_path):
+def _counts(records):
     counts = {}
     for r in records:
         counts[r["category"]] = counts.get(r["category"], 0) + 1
     return {
-        "schema": "localbce.g_rule_parity_report.v1",
-        "authoritative": False,
-        "vectors": os.path.relpath(vectors_path, ROOT).replace(os.sep, "/"),
-        "compared_rules": {"localbce": sorted(G_TO_LEAN), "rightrail": sorted(MAPPED_LEAN)},
-        "assumptions": ASSUMPTIONS,
         "lines": len(records),
         "agreements": sum(v for k, v in counts.items() if k in AGREEMENT),
         "differences": sum(v for k, v in counts.items() if k not in AGREEMENT and k != "no_lean_expectation"),
         "not_compared": counts.get("no_lean_expectation", 0),
         "by_category": dict(sorted(counts.items())),
+    }
+
+
+def summarize(records, vectors_path, g2_blocked=None):
+    """The report.  The top-level counts cover every record; `sets` gives them per comparison set.  `g2_blocked`
+    (the pack's benefit-level cases) is given when the G2 pack cases were compared."""
+    sets = {}
+    for r in records:
+        sets.setdefault(r.get("set", V1_SET), []).append(r)
+    g2 = g2_blocked is not None
+    report = {
+        "schema": "localbce.g_rule_parity_report.v2",
+        "authoritative": False,
+        "vectors": os.path.relpath(vectors_path, ROOT).replace(os.sep, "/"),
+        "compared_rules": {"localbce": sorted(G_TO_LEAN), "rightrail": sorted(MAPPED_LEAN)},
+        "assumptions": ASSUMPTIONS + (G2_ASSUMPTIONS if g2 else []),
+        "sets": {name: _counts(rs) for name, rs in sets.items()},
         "records": records,
     }
+    report.update(_counts(records))
+    if g2:
+        report["g2_pack"] = {
+            "cases": os.path.relpath(G2_PACK_CASES, ROOT).replace(os.sep, "/"),
+            "not_compared_rule": G2_NOT_COMPARED,
+            "blocked_cases": g2_blocked,
+        }
+    return report
 
 
 def markdown(report):
@@ -447,16 +555,31 @@ def markdown(report):
         "",
     ]
     out += [f"- {a}" for a in report["assumptions"]]
+    out += ["", "## Counts by comparison set", "",
+            "| Set | Lines | Agreements | Differences | Not compared |", "|---|---|---|---|---|"]
+    for name, s in report["sets"].items():
+        out.append(f"| `{name}` | {s['lines']} | {s['agreements']} | {s['differences']} | {s['not_compared']} |")
+    out.append(f"| all | {report['lines']} | {report['agreements']} | {report['differences']} | {report['not_compared']} |")
     out += ["", "## Counts", "", "| Category | Lines | Meaning |", "|---|---|---|"]
     for cat, n in report["by_category"].items():
         out.append(f"| `{cat}` | {n} | {CATEGORY_NOTES[cat]} |")
-    out += ["", "## Differences", "", "| Case | Line | Flow | Lean | localBCE | Category |", "|---|---|---|---|---|---|"]
+    if "g2_pack" in report:
+        g2 = report["g2_pack"]
+        s = report["sets"].get(G2_SET, {"by_category": {}})
+        out += ["", "## G2 pack cases", "",
+                f"Cases: `{g2['cases']}`. RightRail side: the pack's pinned expected reasons, not a running gate "
+                "(no gate runs a rule-set v2 pack yet). Synthetic, not legally verified.",
+                f"`{g2['not_compared_rule']}` is not compared: the eligibility fact has no benefit level. "
+                f"Blocked cases, not run: {', '.join(b['from_bbd0e947'] for b in g2['blocked_cases'])}.",
+                "", "| Category | Cases |", "|---|---|"]
+        out += [f"| `{cat}` | {n} |" for cat, n in s["by_category"].items()]
+    out += ["", "## Differences", "", "| Set | Case | Line | Flow | Lean | localBCE | Category |", "|---|---|---|---|---|---|---|"]
     for r in report["records"]:
         if r["category"] in AGREEMENT:
             continue
         lean = (r["lean_outcome"] or "no result recorded") +(" " + ",".join(r["lean_reasons"]) if r["lean_reasons"] else "")
         local = r["localbce_status"] + (" " + r["localbce_reason"] if r["localbce_reason"] else "")
-        out.append(f"| {r['case']} | {r['line_id']} | {r['flow']} | {lean} | {local} | `{r['category']}` |")
+        out.append(f"| {r.get('set', V1_SET)} | {r['case']} | {r['line_id']} | {r['flow']} | {lean} | {local} | `{r['category']}` |")
     out.append("")
     return "\n".join(out)
 
@@ -467,10 +590,15 @@ def main(argv=None):
     p.add_argument("--vectors", default=DEFAULT_VECTORS)
     p.add_argument("--json", dest="json_out")
     p.add_argument("--markdown", dest="md_out")
+    p.add_argument("--no-g2-pack", action="store_true", help="compare the v1 lines only, not the G2 pack's cases")
     a = p.parse_args(argv)
     with open(a.vectors, encoding="utf-8") as f:
         cases = parse_vectors(f.read())
-    report = summarize(compare(cases, a.engine), a.vectors)
+    records, blocked = compare(cases, a.engine), None
+    if not a.no_g2_pack:
+        g2_cases, blocked = load_g2_cases()
+        records += compare_g2(g2_cases, a.engine)
+    report = summarize(records, a.vectors, blocked)
     if a.json_out:
         with open(a.json_out, "w", encoding="utf-8", newline="\n") as f:
             json.dump(report, f, indent=2, sort_keys=True)
@@ -478,7 +606,7 @@ def main(argv=None):
     if a.md_out:
         with open(a.md_out, "w", encoding="utf-8", newline="\n") as f:
             f.write(markdown(report))
-    print(json.dumps({k: report[k] for k in ("lines", "agreements", "differences", "not_compared", "by_category")},
+    print(json.dumps({k: report[k] for k in ("lines", "agreements", "differences", "not_compared", "by_category", "sets")},
                      sort_keys=True))
     return 0
 

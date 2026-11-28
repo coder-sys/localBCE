@@ -556,3 +556,15 @@
   admission line) was identical across five further runs. Nothing was
   written into either repository. The owner then approved committing the
   local-only checks as one local commit, not pushed.
+- 2026-11-28: with the owner's approval, 2cb875c0 (on 6e6ea7d4) was
+  pushed to codex/rightrail-trunk-e5d0f36b as a plain fast-forward (no
+  force), confirmed with ls-remote. Plan step M4, parity harness: G2's
+  aid code test is mapped to reason bit 26 (PROGRAM_NOT_ELIGIBLE) and
+  compared on the G2 pack's 43 cases, with claim flags derived from each
+  case's eligibility read; G2_BENEFIT_LEVEL_MISSING is not compared.
+  G_RULE_PARITY_REPORT regenerated: 308 lines, 159 agreements, 148
+  differences, 1 not compared. The 265 v1 lines are unchanged (140, 124,
+  1). The G2 cases: 19 agreements, 24 differences (14 review against a
+  localBCE denial, 7 review against a localBCE approval, 3 held by both
+  with localBCE naming G1). The RightRail side for the G2 cases is the
+  pack's pinned expected reasons, not a running gate.

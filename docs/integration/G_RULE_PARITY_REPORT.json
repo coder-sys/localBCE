@@ -1,5 +1,5 @@
 {
-  "agreements": 140,
+  "agreements": 159,
   "assumptions": [
     "G9 recipient_not_deceased = 0 when a DMF row for the member is dated strictly before the service date (the snapshot's rows, whether or not Lean finds the snapshot usable).",
     "G1 eligibility_active = 0 when the member has no enrollment span at all; otherwise 1.",
@@ -8,24 +8,30 @@
     "G7 is_duplicate = 1 when the line's exact key (flow kind, member, payee, date, procedure, units, cents) is on a released-set row, on an earlier ALLOW line of the same case, or on an earlier line of the same batch in Lean's canonical order.  The unresolved set and near keys are not localBCE inputs.",
     "An earlier commit releases a line only when every line of its payment is ALLOW and the payment is not being decided again (`redo`); a re-decided payment's own released line is not its own duplicate.",
     "The gate's own checkpoint of the released and unresolved sets (used when a set read does not chain) is not modelled: localBCE has no checkpoint, so only the rows of the set read count.",
-    "G2, G4, G6, G8 and G10 flags are set to passing values: no Lean rule exists for them yet (Phase 3).",
+    "On the v1 lines the G2, G4, G6, G8 and G10 flags are set to passing values: those lines carry no eligibility, and no RightRail rule exists for G4, G6, G8 or G10 yet.",
     "A dropped snapshot, or one whose rows do not hash to its declared pin, contributes no rows: Lean treats both as missing (Run.lean `snapshot`).",
-    "A line the vector gives no expected result is not compared, and is not counted as released for later commits (its Lean result is unknown here)."
+    "A line the vector gives no expected result is not compared, and is not counted as released for later commits (its Lean result is unknown here).",
+    "G2 pack cases: the RightRail side is the pack's pinned expected reasons for the case's eligibility read (26 PROGRAM_NOT_ELIGIBLE holds; 27 PROGRAM_NOT_ELIGIBLE_UNVERIFIED and 28 STALE_ELIGIBILITY send the line to a person), not the result of a running gate.",
+    "G2 aid_code = the first cited aid code that is on localBCE's list; else the first cited code that is a number; else 0 (no cited code, or only malformed ones), which is not on the list.",
+    "G1 eligibility_active = 1 when the read's answer is present with status eligible or presumptive; 0 for not eligible, pending, or an absent, unknown or conflicting answer.  Presumptive and pending follow the pack's own unverified policy choices.",
+    "The read's as-of, the batch date and whether the service date is a calendar date are not localBCE inputs: localBCE has no freshness test.  The eligibility period is set to cover every date, so G3 passes.",
+    "G2_BENEFIT_LEVEL_MISSING is not compared: benefit_level_exists is set to 1, and the pack's four benefit-level cases are listed as blocked, not run."
   ],
   "authoritative": false,
   "by_category": {
-    "agree_allow": 76,
-    "agree_hold": 64,
-    "hold_reason_differs": 3,
+    "agree_allow": 89,
+    "agree_hold": 70,
+    "hold_reason_differs": 6,
     "lean_holds_on_mapped_rule_local_approves": 1,
     "lean_holds_on_unmapped_rule_local_approves": 22,
-    "lean_review_local_approves": 81,
-    "lean_review_local_denies": 17,
+    "lean_review_local_approves": 88,
+    "lean_review_local_denies": 31,
     "no_lean_expectation": 1
   },
   "compared_rules": {
     "localbce": [
       "G1_IDENTITY_VERIFICATION_FAILED",
+      "G2_PROGRAM_ELIGIBILITY_FAILED",
       "G3_MONTH_OF_SERVICE_FAILED",
       "G5_PROVIDER_NOT_ENROLLED",
       "G7_DUPLICATE_CLAIM",
@@ -35,12 +41,39 @@
       "FFS_DUPLICATE_LINE",
       "MEMBER_DECEASED",
       "MEMBER_NOT_ENROLLED",
+      "PROGRAM_NOT_ELIGIBLE",
       "PROVIDER_DECEASED",
       "PROVIDER_EXCLUDED"
     ]
   },
-  "differences": 124,
-  "lines": 265,
+  "differences": 148,
+  "g2_pack": {
+    "blocked_cases": [
+      {
+        "blocked": "benefit level",
+        "from_bbd0e947": "cBL",
+        "what": "Benefit level missing on a usable read: would fire 24"
+      },
+      {
+        "blocked": "benefit level",
+        "from_bbd0e947": "cPair",
+        "what": "Aid code not allowed and benefit level missing together: would fire 24 and 26"
+      },
+      {
+        "blocked": "benefit level",
+        "from_bbd0e947": "cLvl2",
+        "what": "A second benefit level value"
+      },
+      {
+        "blocked": "benefit level",
+        "from_bbd0e947": "cBLu",
+        "what": "Benefit level missing on an unusable read: would fire 25"
+      }
+    ],
+    "cases": "rules/rightrail_packs/g2_elig_v2.expected.json",
+    "not_compared_rule": "G2_BENEFIT_LEVEL_MISSING"
+  },
+  "lines": 308,
   "not_compared": 1,
   "records": [
     {
@@ -60,7 +93,8 @@
       "lean_reasons": [],
       "line_id": 1,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -79,7 +113,8 @@
       "lean_reasons": [],
       "line_id": 2,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -98,7 +133,8 @@
       "lean_reasons": [],
       "line_id": 3,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -117,7 +153,8 @@
       "lean_reasons": [],
       "line_id": 4,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -136,7 +173,8 @@
       "lean_reasons": [],
       "line_id": 7,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -157,7 +195,8 @@
       ],
       "line_id": 5,
       "localbce_reason": "G9_RECIPIENT_DECEASED",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -178,7 +217,8 @@
       ],
       "line_id": 6,
       "localbce_reason": "G9_RECIPIENT_DECEASED",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -199,7 +239,8 @@
       ],
       "line_id": 9,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -220,7 +261,8 @@
       ],
       "line_id": 8,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -239,7 +281,8 @@
       "lean_reasons": [],
       "line_id": 11,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -260,7 +303,8 @@
       ],
       "line_id": 10,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -279,7 +323,8 @@
       "lean_reasons": [],
       "line_id": 12,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -300,7 +345,8 @@
       ],
       "line_id": 15,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -319,7 +365,8 @@
       "lean_reasons": [],
       "line_id": 16,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -340,7 +387,8 @@
       ],
       "line_id": 17,
       "localbce_reason": "G3_MONTH_OF_SERVICE_FAILED",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 1,
@@ -359,7 +407,8 @@
       "lean_reasons": [],
       "line_id": 18,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 2,
@@ -380,7 +429,8 @@
       ],
       "line_id": 19,
       "localbce_reason": "G7_DUPLICATE_CLAIM",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -401,7 +451,8 @@
       ],
       "line_id": 22,
       "localbce_reason": "G1_IDENTITY_VERIFICATION_FAILED",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -423,7 +474,8 @@
       ],
       "line_id": 23,
       "localbce_reason": "G1_IDENTITY_VERIFICATION_FAILED",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -444,7 +496,8 @@
       ],
       "line_id": 20,
       "localbce_reason": "G3_MONTH_OF_SERVICE_FAILED",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -466,7 +519,8 @@
       ],
       "line_id": 204,
       "localbce_reason": "G3_MONTH_OF_SERVICE_FAILED",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -485,7 +539,8 @@
       "lean_reasons": [],
       "line_id": 21,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -506,7 +561,8 @@
       ],
       "line_id": 24,
       "localbce_reason": "G5_PROVIDER_NOT_ENROLLED",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -527,7 +583,8 @@
       ],
       "line_id": 25,
       "localbce_reason": "G7_DUPLICATE_CLAIM",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -548,7 +605,8 @@
       ],
       "line_id": 26,
       "localbce_reason": "G5_PROVIDER_NOT_ENROLLED",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -569,7 +627,8 @@
       ],
       "line_id": 27,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -590,7 +649,8 @@
       ],
       "line_id": 29,
       "localbce_reason": "G5_PROVIDER_NOT_ENROLLED",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -611,7 +671,8 @@
       ],
       "line_id": 28,
       "localbce_reason": "G5_PROVIDER_NOT_ENROLLED",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -632,7 +693,8 @@
       ],
       "line_id": 32,
       "localbce_reason": "G5_PROVIDER_NOT_ENROLLED",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -653,7 +715,8 @@
       ],
       "line_id": 31,
       "localbce_reason": "G5_PROVIDER_NOT_ENROLLED",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -672,7 +735,8 @@
       "lean_reasons": [],
       "line_id": 30,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -693,7 +757,8 @@
       ],
       "line_id": 33,
       "localbce_reason": "G5_PROVIDER_NOT_ENROLLED",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -714,7 +779,8 @@
       ],
       "line_id": 35,
       "localbce_reason": "G5_PROVIDER_NOT_ENROLLED",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -733,7 +799,8 @@
       "lean_reasons": [],
       "line_id": 36,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -754,7 +821,8 @@
       ],
       "line_id": 34,
       "localbce_reason": "G5_PROVIDER_NOT_ENROLLED",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -773,7 +841,8 @@
       "lean_reasons": [],
       "line_id": 39,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -794,7 +863,8 @@
       ],
       "line_id": 37,
       "localbce_reason": "G7_DUPLICATE_CLAIM",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -815,7 +885,8 @@
       ],
       "line_id": 38,
       "localbce_reason": "G7_DUPLICATE_CLAIM",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -834,7 +905,8 @@
       "lean_reasons": [],
       "line_id": 42,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -853,7 +925,8 @@
       "lean_reasons": [],
       "line_id": 41,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -872,7 +945,8 @@
       "lean_reasons": [],
       "line_id": 40,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -891,7 +965,8 @@
       "lean_reasons": [],
       "line_id": 50,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -910,7 +985,8 @@
       "lean_reasons": [],
       "line_id": 43,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -931,7 +1007,8 @@
       ],
       "line_id": 46,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -952,7 +1029,8 @@
       ],
       "line_id": 47,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -971,7 +1049,8 @@
       "lean_reasons": [],
       "line_id": 48,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -992,7 +1071,8 @@
       ],
       "line_id": 49,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -1011,7 +1091,8 @@
       "lean_reasons": [],
       "line_id": 45,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -1032,7 +1113,8 @@
       ],
       "line_id": 44,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -1051,7 +1133,8 @@
       "lean_reasons": [],
       "line_id": 51,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -1070,7 +1153,8 @@
       "lean_reasons": [],
       "line_id": 52,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 1,
@@ -1089,7 +1173,8 @@
       "lean_reasons": [],
       "line_id": 53,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -1110,7 +1195,8 @@
       ],
       "line_id": 55,
       "localbce_reason": "G7_DUPLICATE_CLAIM",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -1131,7 +1217,8 @@
       ],
       "line_id": 56,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -1150,7 +1237,8 @@
       "lean_reasons": [],
       "line_id": 57,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -1171,7 +1259,8 @@
       ],
       "line_id": 58,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 1,
@@ -1193,7 +1282,8 @@
       ],
       "line_id": 59,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 1,
@@ -1212,7 +1302,8 @@
       "lean_reasons": [],
       "line_id": 262,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 1,
@@ -1233,7 +1324,8 @@
       ],
       "line_id": 262,
       "localbce_reason": "G7_DUPLICATE_CLAIM",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -1255,7 +1347,8 @@
       ],
       "line_id": 61,
       "localbce_reason": "G7_DUPLICATE_CLAIM",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -1276,7 +1369,8 @@
       ],
       "line_id": 62,
       "localbce_reason": "G7_DUPLICATE_CLAIM",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -1295,7 +1389,8 @@
       "lean_reasons": [],
       "line_id": 63,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 1,
@@ -1316,7 +1411,8 @@
       ],
       "line_id": 64,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -1335,7 +1431,8 @@
       "lean_reasons": [],
       "line_id": 65,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 1,
@@ -1356,7 +1453,8 @@
       ],
       "line_id": 66,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -1375,7 +1473,8 @@
       "lean_reasons": [],
       "line_id": 67,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 1,
@@ -1396,7 +1495,8 @@
       ],
       "line_id": 68,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -1415,7 +1515,8 @@
       "lean_reasons": [],
       "line_id": 69,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 1,
@@ -1436,7 +1537,8 @@
       ],
       "line_id": 70,
       "localbce_reason": "G7_DUPLICATE_CLAIM",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -1455,7 +1557,8 @@
       "lean_reasons": [],
       "line_id": 71,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 1,
@@ -1474,7 +1577,8 @@
       "lean_reasons": [],
       "line_id": 72,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 1,
@@ -1493,7 +1597,8 @@
       "lean_reasons": [],
       "line_id": 73,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -1512,7 +1617,8 @@
       "lean_reasons": [],
       "line_id": 74,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -1531,7 +1637,8 @@
       "lean_reasons": [],
       "line_id": 75,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 1,
@@ -1552,7 +1659,8 @@
       ],
       "line_id": 76,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 2,
@@ -1574,7 +1682,8 @@
       ],
       "line_id": 77,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 3,
@@ -1595,7 +1704,8 @@
       ],
       "line_id": 78,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 4,
@@ -1617,7 +1727,8 @@
       ],
       "line_id": 79,
       "localbce_reason": "G7_DUPLICATE_CLAIM",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 5,
@@ -1636,7 +1747,8 @@
       "lean_reasons": [],
       "line_id": 80,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 5,
@@ -1655,7 +1767,8 @@
       "lean_reasons": [],
       "line_id": 81,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -1676,7 +1789,8 @@
       ],
       "line_id": 82,
       "localbce_reason": "G5_PROVIDER_NOT_ENROLLED",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 1,
@@ -1697,7 +1811,8 @@
       ],
       "line_id": 83,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -1718,7 +1833,8 @@
       ],
       "line_id": 86,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 1,
@@ -1739,7 +1855,8 @@
       ],
       "line_id": 87,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 2,
@@ -1760,7 +1877,8 @@
       ],
       "line_id": 88,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 3,
@@ -1779,7 +1897,8 @@
       "lean_reasons": [],
       "line_id": 89,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -1800,7 +1919,8 @@
       ],
       "line_id": 90,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -1821,7 +1941,8 @@
       ],
       "line_id": 91,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -1842,7 +1963,8 @@
       ],
       "line_id": 92,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -1861,7 +1983,8 @@
       "lean_reasons": [],
       "line_id": 95,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -1882,7 +2005,8 @@
       ],
       "line_id": 94,
       "localbce_reason": "G3_MONTH_OF_SERVICE_FAILED",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -1903,7 +2027,8 @@
       ],
       "line_id": 93,
       "localbce_reason": "G1_IDENTITY_VERIFICATION_FAILED",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -1924,7 +2049,8 @@
       ],
       "line_id": 97,
       "localbce_reason": "G3_MONTH_OF_SERVICE_FAILED",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -1943,7 +2069,8 @@
       "lean_reasons": [],
       "line_id": 96,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -1962,7 +2089,8 @@
       "lean_reasons": [],
       "line_id": 99,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -1983,7 +2111,8 @@
       ],
       "line_id": 98,
       "localbce_reason": "G3_MONTH_OF_SERVICE_FAILED",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -2007,7 +2136,8 @@
       ],
       "line_id": 100,
       "localbce_reason": "G1_IDENTITY_VERIFICATION_FAILED",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -2032,7 +2162,8 @@
       ],
       "line_id": 101,
       "localbce_reason": "G1_IDENTITY_VERIFICATION_FAILED",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -2053,7 +2184,8 @@
       ],
       "line_id": 102,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -2074,7 +2206,8 @@
       ],
       "line_id": 103,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -2095,7 +2228,8 @@
       ],
       "line_id": 112,
       "localbce_reason": "G3_MONTH_OF_SERVICE_FAILED",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -2116,7 +2250,8 @@
       ],
       "line_id": 115,
       "localbce_reason": "G3_MONTH_OF_SERVICE_FAILED",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -2137,7 +2272,8 @@
       ],
       "line_id": 109,
       "localbce_reason": "G3_MONTH_OF_SERVICE_FAILED",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -2156,7 +2292,8 @@
       "lean_reasons": [],
       "line_id": 116,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -2175,7 +2312,8 @@
       "lean_reasons": [],
       "line_id": 117,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -2196,7 +2334,8 @@
       ],
       "line_id": 110,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -2217,7 +2356,8 @@
       ],
       "line_id": 107,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -2236,7 +2376,8 @@
       "lean_reasons": [],
       "line_id": 118,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -2257,7 +2398,8 @@
       ],
       "line_id": 106,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -2278,7 +2420,8 @@
       ],
       "line_id": 108,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -2299,7 +2442,8 @@
       ],
       "line_id": 104,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -2320,7 +2464,8 @@
       ],
       "line_id": 105,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -2339,7 +2484,8 @@
       "lean_reasons": [],
       "line_id": 119,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -2360,7 +2506,8 @@
       ],
       "line_id": 111,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -2382,7 +2529,8 @@
       ],
       "line_id": 114,
       "localbce_reason": "G3_MONTH_OF_SERVICE_FAILED",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -2404,7 +2552,8 @@
       ],
       "line_id": 113,
       "localbce_reason": "G3_MONTH_OF_SERVICE_FAILED",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -2425,7 +2574,8 @@
       ],
       "line_id": 120,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -2444,7 +2594,8 @@
       "lean_reasons": [],
       "line_id": 121,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -2465,7 +2616,8 @@
       ],
       "line_id": 122,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -2484,7 +2636,8 @@
       "lean_reasons": [],
       "line_id": 123,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -2505,7 +2658,8 @@
       ],
       "line_id": 238,
       "localbce_reason": "G9_RECIPIENT_DECEASED",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -2526,7 +2680,8 @@
       ],
       "line_id": 124,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -2548,7 +2703,8 @@
       ],
       "line_id": 212,
       "localbce_reason": "G9_RECIPIENT_DECEASED",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -2570,7 +2726,8 @@
       ],
       "line_id": 205,
       "localbce_reason": "G9_RECIPIENT_DECEASED",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -2591,7 +2748,8 @@
       ],
       "line_id": 125,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -2612,7 +2770,8 @@
       ],
       "line_id": 126,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -2633,7 +2792,8 @@
       ],
       "line_id": 127,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -2654,7 +2814,8 @@
       ],
       "line_id": 128,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -2675,7 +2836,8 @@
       ],
       "line_id": 129,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -2696,7 +2858,8 @@
       ],
       "line_id": 130,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -2717,7 +2880,8 @@
       ],
       "line_id": 213,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -2739,7 +2903,8 @@
       ],
       "line_id": 214,
       "localbce_reason": "G9_RECIPIENT_DECEASED",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -2758,7 +2923,8 @@
       "lean_reasons": [],
       "line_id": 215,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -2779,7 +2945,8 @@
       ],
       "line_id": 131,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -2798,7 +2965,8 @@
       "lean_reasons": [],
       "line_id": 132,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -2819,7 +2987,8 @@
       ],
       "line_id": 133,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -2841,7 +3010,8 @@
       ],
       "line_id": 206,
       "localbce_reason": "G5_PROVIDER_NOT_ENROLLED",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -2862,7 +3032,8 @@
       ],
       "line_id": 134,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -2883,7 +3054,8 @@
       ],
       "line_id": 135,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -2904,7 +3076,8 @@
       ],
       "line_id": 136,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -2923,7 +3096,8 @@
       "lean_reasons": [],
       "line_id": 137,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -2944,7 +3118,8 @@
       ],
       "line_id": 138,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -2966,7 +3141,8 @@
       ],
       "line_id": 207,
       "localbce_reason": "G5_PROVIDER_NOT_ENROLLED",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -2988,7 +3164,8 @@
       ],
       "line_id": 139,
       "localbce_reason": "G9_RECIPIENT_DECEASED",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -3009,7 +3186,8 @@
       ],
       "line_id": 140,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -3030,7 +3208,8 @@
       ],
       "line_id": 141,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -3051,7 +3230,8 @@
       ],
       "line_id": 142,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -3072,7 +3252,8 @@
       ],
       "line_id": 143,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -3093,7 +3274,8 @@
       ],
       "line_id": 144,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -3114,7 +3296,8 @@
       ],
       "line_id": 145,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -3133,7 +3316,8 @@
       "lean_reasons": [],
       "line_id": 146,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -3154,7 +3338,8 @@
       ],
       "line_id": 147,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -3176,7 +3361,8 @@
       ],
       "line_id": 208,
       "localbce_reason": "G1_IDENTITY_VERIFICATION_FAILED",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -3197,7 +3383,8 @@
       ],
       "line_id": 148,
       "localbce_reason": "G1_IDENTITY_VERIFICATION_FAILED",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -3219,7 +3406,8 @@
       ],
       "line_id": 149,
       "localbce_reason": "G1_IDENTITY_VERIFICATION_FAILED",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -3240,7 +3428,8 @@
       ],
       "line_id": 150,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -3261,7 +3450,8 @@
       ],
       "line_id": 151,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -3282,7 +3472,8 @@
       ],
       "line_id": 152,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -3303,7 +3494,8 @@
       ],
       "line_id": 209,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -3324,7 +3516,8 @@
       ],
       "line_id": 153,
       "localbce_reason": "G1_IDENTITY_VERIFICATION_FAILED",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -3348,7 +3541,8 @@
       ],
       "line_id": 154,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -3369,7 +3563,8 @@
       ],
       "line_id": 155,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -3390,7 +3585,8 @@
       ],
       "line_id": 157,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -3411,7 +3607,8 @@
       ],
       "line_id": 158,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -3432,7 +3629,8 @@
       ],
       "line_id": 159,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -3453,7 +3651,8 @@
       ],
       "line_id": 160,
       "localbce_reason": "G1_IDENTITY_VERIFICATION_FAILED",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -3474,7 +3673,8 @@
       ],
       "line_id": 161,
       "localbce_reason": "G1_IDENTITY_VERIFICATION_FAILED",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 1,
@@ -3495,7 +3695,8 @@
       ],
       "line_id": 162,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 1,
@@ -3516,7 +3717,8 @@
       ],
       "line_id": 163,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -3537,7 +3739,8 @@
       ],
       "line_id": 164,
       "localbce_reason": "G1_IDENTITY_VERIFICATION_FAILED",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -3559,7 +3762,8 @@
       ],
       "line_id": 165,
       "localbce_reason": "G1_IDENTITY_VERIFICATION_FAILED",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -3580,7 +3784,8 @@
       ],
       "line_id": 210,
       "localbce_reason": "G1_IDENTITY_VERIFICATION_FAILED",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -3602,7 +3807,8 @@
       ],
       "line_id": 211,
       "localbce_reason": "G1_IDENTITY_VERIFICATION_FAILED",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 1,
@@ -3623,7 +3829,8 @@
       ],
       "line_id": 166,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 2,
@@ -3645,7 +3852,8 @@
       ],
       "line_id": 164,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -3664,7 +3872,8 @@
       "lean_reasons": [],
       "line_id": 167,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -3685,7 +3894,8 @@
       ],
       "line_id": 168,
       "localbce_reason": "G7_DUPLICATE_CLAIM",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 1,
@@ -3707,7 +3917,8 @@
       ],
       "line_id": 169,
       "localbce_reason": "G7_DUPLICATE_CLAIM",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -3728,7 +3939,8 @@
       ],
       "line_id": 170,
       "localbce_reason": "G5_PROVIDER_NOT_ENROLLED",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -3749,7 +3961,8 @@
       ],
       "line_id": 171,
       "localbce_reason": "G9_RECIPIENT_DECEASED",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -3770,7 +3983,8 @@
       ],
       "line_id": 172,
       "localbce_reason": "G9_RECIPIENT_DECEASED",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 1,
@@ -3793,7 +4007,8 @@
       ],
       "line_id": 170,
       "localbce_reason": "G5_PROVIDER_NOT_ENROLLED",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 1,
@@ -3816,7 +4031,8 @@
       ],
       "line_id": 171,
       "localbce_reason": "G9_RECIPIENT_DECEASED",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 1,
@@ -3839,7 +4055,8 @@
       ],
       "line_id": 172,
       "localbce_reason": "G9_RECIPIENT_DECEASED",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 2,
@@ -3861,7 +4078,8 @@
       ],
       "line_id": 173,
       "localbce_reason": "G5_PROVIDER_NOT_ENROLLED",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -3880,7 +4098,8 @@
       "lean_reasons": [],
       "line_id": 174,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 1,
@@ -3902,7 +4121,8 @@
       ],
       "line_id": 175,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 2,
@@ -3923,7 +4143,8 @@
       ],
       "line_id": 236,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -3944,7 +4165,8 @@
       ],
       "line_id": 176,
       "localbce_reason": "G5_PROVIDER_NOT_ENROLLED",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 1,
@@ -3966,7 +4188,8 @@
       ],
       "line_id": 177,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 2,
@@ -3987,7 +4210,8 @@
       ],
       "line_id": 237,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -4008,7 +4232,8 @@
       ],
       "line_id": 216,
       "localbce_reason": "G5_PROVIDER_NOT_ENROLLED",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 1,
@@ -4029,7 +4254,8 @@
       ],
       "line_id": 217,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 2,
@@ -4052,7 +4278,8 @@
       ],
       "line_id": 217,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -4073,7 +4300,8 @@
       ],
       "line_id": 218,
       "localbce_reason": "G5_PROVIDER_NOT_ENROLLED",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 1,
@@ -4094,7 +4322,8 @@
       ],
       "line_id": 219,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 2,
@@ -4116,7 +4345,8 @@
       ],
       "line_id": 220,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -4137,7 +4367,8 @@
       ],
       "line_id": 221,
       "localbce_reason": "G5_PROVIDER_NOT_ENROLLED",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 1,
@@ -4158,7 +4389,8 @@
       ],
       "line_id": 222,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 2,
@@ -4179,7 +4411,8 @@
       ],
       "line_id": 223,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -4200,7 +4433,8 @@
       ],
       "line_id": 224,
       "localbce_reason": "G5_PROVIDER_NOT_ENROLLED",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 1,
@@ -4221,7 +4455,8 @@
       ],
       "line_id": 225,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 2,
@@ -4244,7 +4479,8 @@
       ],
       "line_id": 225,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 3,
@@ -4266,7 +4502,8 @@
       ],
       "line_id": 225,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 3,
@@ -4285,7 +4522,8 @@
       "lean_reasons": [],
       "line_id": 226,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -4306,7 +4544,8 @@
       ],
       "line_id": 227,
       "localbce_reason": "G5_PROVIDER_NOT_ENROLLED",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -4327,7 +4566,8 @@
       ],
       "line_id": 228,
       "localbce_reason": "G5_PROVIDER_NOT_ENROLLED",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 1,
@@ -4346,7 +4586,8 @@
       "lean_reasons": [],
       "line_id": 229,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -4365,7 +4606,8 @@
       "lean_reasons": [],
       "line_id": 243,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -4384,7 +4626,8 @@
       "lean_reasons": [],
       "line_id": 245,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -4405,7 +4648,8 @@
       ],
       "line_id": 246,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -4426,7 +4670,8 @@
       ],
       "line_id": 244,
       "localbce_reason": "G5_PROVIDER_NOT_ENROLLED",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 1,
@@ -4445,7 +4690,8 @@
       "lean_reasons": [],
       "line_id": 247,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 1,
@@ -4464,7 +4710,8 @@
       "lean_reasons": [],
       "line_id": 248,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -4483,7 +4730,8 @@
       "lean_reasons": [],
       "line_id": 249,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 1,
@@ -4502,7 +4750,8 @@
       "lean_reasons": [],
       "line_id": 249,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 1,
@@ -4524,7 +4773,8 @@
       ],
       "line_id": 249,
       "localbce_reason": "G7_DUPLICATE_CLAIM",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 2,
@@ -4545,7 +4795,8 @@
       ],
       "line_id": 250,
       "localbce_reason": "G7_DUPLICATE_CLAIM",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -4564,7 +4815,8 @@
       "lean_reasons": [],
       "line_id": 251,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 1,
@@ -4583,7 +4835,8 @@
       "lean_reasons": [],
       "line_id": 252,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -4602,7 +4855,8 @@
       "lean_reasons": [],
       "line_id": 253,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 1,
@@ -4623,7 +4877,8 @@
       ],
       "line_id": 254,
       "localbce_reason": "G7_DUPLICATE_CLAIM",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 2,
@@ -4644,7 +4899,8 @@
       ],
       "line_id": 253,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 3,
@@ -4666,7 +4922,8 @@
       ],
       "line_id": 255,
       "localbce_reason": "G7_DUPLICATE_CLAIM",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -4687,7 +4944,8 @@
       ],
       "line_id": 256,
       "localbce_reason": "G3_MONTH_OF_SERVICE_FAILED",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -4708,7 +4966,8 @@
       ],
       "line_id": 259,
       "localbce_reason": "G7_DUPLICATE_CLAIM",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -4729,7 +4988,8 @@
       ],
       "line_id": 257,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -4748,7 +5008,8 @@
       "lean_reasons": [],
       "line_id": 260,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -4770,7 +5031,8 @@
       ],
       "line_id": 260,
       "localbce_reason": "G7_DUPLICATE_CLAIM",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -4792,7 +5054,8 @@
       ],
       "line_id": 230,
       "localbce_reason": "G7_DUPLICATE_CLAIM",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -4813,7 +5076,8 @@
       ],
       "line_id": 242,
       "localbce_reason": "G7_DUPLICATE_CLAIM",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -4835,7 +5099,8 @@
       ],
       "line_id": 232,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -4857,7 +5122,8 @@
       ],
       "line_id": 233,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -4879,7 +5145,8 @@
       ],
       "line_id": 235,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -4902,7 +5169,8 @@
       ],
       "line_id": 234,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -4923,7 +5191,8 @@
       ],
       "line_id": 240,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -4942,7 +5211,8 @@
       "lean_reasons": [],
       "line_id": 178,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -4963,7 +5233,8 @@
       ],
       "line_id": 179,
       "localbce_reason": "G5_PROVIDER_NOT_ENROLLED",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 1,
@@ -4984,7 +5255,8 @@
       ],
       "line_id": 178,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 1,
@@ -5005,7 +5277,8 @@
       ],
       "line_id": 179,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 1,
@@ -5024,7 +5297,8 @@
       "lean_reasons": [],
       "line_id": 180,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 1,
@@ -5045,7 +5319,8 @@
       ],
       "line_id": 180,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 2,
@@ -5064,7 +5339,8 @@
       "lean_reasons": [],
       "line_id": 181,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 2,
@@ -5083,7 +5359,8 @@
       "lean_reasons": [],
       "line_id": 182,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -5104,7 +5381,8 @@
       ],
       "line_id": 183,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -5125,7 +5403,8 @@
       ],
       "line_id": 184,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -5144,7 +5423,8 @@
       "lean_reasons": [],
       "line_id": 185,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 1,
@@ -5165,7 +5445,8 @@
       ],
       "line_id": 186,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -5184,7 +5465,8 @@
       "lean_reasons": [],
       "line_id": 187,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 1,
@@ -5205,7 +5487,8 @@
       ],
       "line_id": 189,
       "localbce_reason": "G7_DUPLICATE_CLAIM",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 1,
@@ -5224,7 +5507,8 @@
       "lean_reasons": [],
       "line_id": 190,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 2,
@@ -5243,7 +5527,8 @@
       "lean_reasons": [],
       "line_id": 231,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -5262,7 +5547,8 @@
       "lean_reasons": [],
       "line_id": 191,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 1,
@@ -5283,7 +5569,8 @@
       ],
       "line_id": 192,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -5304,7 +5591,8 @@
       ],
       "line_id": 193,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -5325,7 +5613,8 @@
       ],
       "line_id": 194,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -5346,7 +5635,8 @@
       ],
       "line_id": 195,
       "localbce_reason": "G5_PROVIDER_NOT_ENROLLED",
-      "localbce_status": "DENIED"
+      "localbce_status": "DENIED",
+      "set": "rules_v1"
     },
     {
       "batch": 1,
@@ -5367,7 +5657,8 @@
       ],
       "line_id": 196,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -5386,7 +5677,8 @@
       "lean_reasons": [],
       "line_id": 198,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -5405,7 +5697,8 @@
       "lean_reasons": [],
       "line_id": 197,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -5426,7 +5719,8 @@
       ],
       "line_id": 199,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -5445,7 +5739,8 @@
       "lean_reasons": [],
       "line_id": 200,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -5466,7 +5761,8 @@
       ],
       "line_id": 201,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -5485,7 +5781,8 @@
       "lean_reasons": [],
       "line_id": 202,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
     },
     {
       "batch": 0,
@@ -5506,9 +5803,844 @@
       ],
       "line_id": 203,
       "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_status": "APPROVED",
+      "set": "rules_v1"
+    },
+    {
+      "batch": 0,
+      "case": "eligible_13",
+      "category": "agree_allow",
+      "derived_flags": {
+        "aid_code": 13,
+        "benefit_level_exists": 1,
+        "eligibility_active": 1
+      },
+      "flow": "-",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 1,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED",
+      "set": "g2_pack"
+    },
+    {
+      "batch": 0,
+      "case": "eligible_23",
+      "category": "agree_allow",
+      "derived_flags": {
+        "aid_code": 23,
+        "benefit_level_exists": 1,
+        "eligibility_active": 1
+      },
+      "flow": "-",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 2,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED",
+      "set": "g2_pack"
+    },
+    {
+      "batch": 0,
+      "case": "eligible_53",
+      "category": "agree_allow",
+      "derived_flags": {
+        "aid_code": 53,
+        "benefit_level_exists": 1,
+        "eligibility_active": 1
+      },
+      "flow": "-",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 3,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED",
+      "set": "g2_pack"
+    },
+    {
+      "batch": 0,
+      "case": "eligible_103",
+      "category": "agree_allow",
+      "derived_flags": {
+        "aid_code": 103,
+        "benefit_level_exists": 1,
+        "eligibility_active": 1
+      },
+      "flow": "-",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 4,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED",
+      "set": "g2_pack"
+    },
+    {
+      "batch": 0,
+      "case": "eligible_104",
+      "category": "agree_allow",
+      "derived_flags": {
+        "aid_code": 104,
+        "benefit_level_exists": 1,
+        "eligibility_active": 1
+      },
+      "flow": "-",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 5,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED",
+      "set": "g2_pack"
+    },
+    {
+      "batch": 0,
+      "case": "unlisted_999",
+      "category": "agree_hold",
+      "derived_flags": {
+        "aid_code": 999,
+        "benefit_level_exists": 1,
+        "eligibility_active": 1
+      },
+      "flow": "-",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "PROGRAM_NOT_ELIGIBLE"
+      ],
+      "line_id": 6,
+      "localbce_reason": "G2_PROGRAM_ELIGIBILITY_FAILED",
+      "localbce_status": "DENIED",
+      "set": "g2_pack"
+    },
+    {
+      "batch": 0,
+      "case": "listed_and_unlisted",
+      "category": "agree_allow",
+      "derived_flags": {
+        "aid_code": 13,
+        "benefit_level_exists": 1,
+        "eligibility_active": 1
+      },
+      "flow": "-",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 7,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED",
+      "set": "g2_pack"
+    },
+    {
+      "batch": 0,
+      "case": "status_not_eligible",
+      "category": "hold_reason_differs",
+      "derived_flags": {
+        "aid_code": 13,
+        "benefit_level_exists": 1,
+        "eligibility_active": 0
+      },
+      "flow": "-",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "PROGRAM_NOT_ELIGIBLE"
+      ],
+      "line_id": 8,
+      "localbce_reason": "G1_IDENTITY_VERIFICATION_FAILED",
+      "localbce_status": "DENIED",
+      "set": "g2_pack"
+    },
+    {
+      "batch": 0,
+      "case": "status_not_eligible_unlisted",
+      "category": "hold_reason_differs",
+      "derived_flags": {
+        "aid_code": 999,
+        "benefit_level_exists": 1,
+        "eligibility_active": 0
+      },
+      "flow": "-",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "PROGRAM_NOT_ELIGIBLE"
+      ],
+      "line_id": 9,
+      "localbce_reason": "G1_IDENTITY_VERIFICATION_FAILED",
+      "localbce_status": "DENIED",
+      "set": "g2_pack"
+    },
+    {
+      "batch": 0,
+      "case": "status_pending",
+      "category": "lean_review_local_denies",
+      "derived_flags": {
+        "aid_code": 13,
+        "benefit_level_exists": 1,
+        "eligibility_active": 0
+      },
+      "flow": "-",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "PROGRAM_NOT_ELIGIBLE_UNVERIFIED"
+      ],
+      "line_id": 10,
+      "localbce_reason": "G1_IDENTITY_VERIFICATION_FAILED",
+      "localbce_status": "DENIED",
+      "set": "g2_pack"
+    },
+    {
+      "batch": 0,
+      "case": "status_pending_unlisted",
+      "category": "hold_reason_differs",
+      "derived_flags": {
+        "aid_code": 999,
+        "benefit_level_exists": 1,
+        "eligibility_active": 0
+      },
+      "flow": "-",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "PROGRAM_NOT_ELIGIBLE",
+        "PROGRAM_NOT_ELIGIBLE_UNVERIFIED"
+      ],
+      "line_id": 11,
+      "localbce_reason": "G1_IDENTITY_VERIFICATION_FAILED",
+      "localbce_status": "DENIED",
+      "set": "g2_pack"
+    },
+    {
+      "batch": 0,
+      "case": "status_presumptive",
+      "category": "agree_allow",
+      "derived_flags": {
+        "aid_code": 13,
+        "benefit_level_exists": 1,
+        "eligibility_active": 1
+      },
+      "flow": "-",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 12,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED",
+      "set": "g2_pack"
+    },
+    {
+      "batch": 0,
+      "case": "status_presumptive_unlisted",
+      "category": "agree_hold",
+      "derived_flags": {
+        "aid_code": 999,
+        "benefit_level_exists": 1,
+        "eligibility_active": 1
+      },
+      "flow": "-",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "PROGRAM_NOT_ELIGIBLE"
+      ],
+      "line_id": 13,
+      "localbce_reason": "G2_PROGRAM_ELIGIBILITY_FAILED",
+      "localbce_status": "DENIED",
+      "set": "g2_pack"
+    },
+    {
+      "batch": 0,
+      "case": "malformed_char",
+      "category": "agree_hold",
+      "derived_flags": {
+        "aid_code": 0,
+        "benefit_level_exists": 1,
+        "eligibility_active": 1
+      },
+      "flow": "-",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "PROGRAM_NOT_ELIGIBLE"
+      ],
+      "line_id": 14,
+      "localbce_reason": "G2_PROGRAM_ELIGIBILITY_FAILED",
+      "localbce_status": "DENIED",
+      "set": "g2_pack"
+    },
+    {
+      "batch": 0,
+      "case": "malformed_empty",
+      "category": "agree_hold",
+      "derived_flags": {
+        "aid_code": 0,
+        "benefit_level_exists": 1,
+        "eligibility_active": 1
+      },
+      "flow": "-",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "PROGRAM_NOT_ELIGIBLE"
+      ],
+      "line_id": 15,
+      "localbce_reason": "G2_PROGRAM_ELIGIBILITY_FAILED",
+      "localbce_status": "DENIED",
+      "set": "g2_pack"
+    },
+    {
+      "batch": 0,
+      "case": "malformed_length",
+      "category": "agree_hold",
+      "derived_flags": {
+        "aid_code": 0,
+        "benefit_level_exists": 1,
+        "eligibility_active": 1
+      },
+      "flow": "-",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "PROGRAM_NOT_ELIGIBLE"
+      ],
+      "line_id": 16,
+      "localbce_reason": "G2_PROGRAM_ELIGIBILITY_FAILED",
+      "localbce_status": "DENIED",
+      "set": "g2_pack"
+    },
+    {
+      "batch": 0,
+      "case": "listed_and_malformed",
+      "category": "agree_allow",
+      "derived_flags": {
+        "aid_code": 13,
+        "benefit_level_exists": 1,
+        "eligibility_active": 1
+      },
+      "flow": "-",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 17,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED",
+      "set": "g2_pack"
+    },
+    {
+      "batch": 0,
+      "case": "present_no_aid_rows",
+      "category": "agree_hold",
+      "derived_flags": {
+        "aid_code": 0,
+        "benefit_level_exists": 1,
+        "eligibility_active": 1
+      },
+      "flow": "-",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "PROGRAM_NOT_ELIGIBLE"
+      ],
+      "line_id": 18,
+      "localbce_reason": "G2_PROGRAM_ELIGIBILITY_FAILED",
+      "localbce_status": "DENIED",
+      "set": "g2_pack"
+    },
+    {
+      "batch": 0,
+      "case": "absent",
+      "category": "lean_review_local_denies",
+      "derived_flags": {
+        "aid_code": 0,
+        "benefit_level_exists": 1,
+        "eligibility_active": 0
+      },
+      "flow": "-",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "PROGRAM_NOT_ELIGIBLE_UNVERIFIED"
+      ],
+      "line_id": 19,
+      "localbce_reason": "G1_IDENTITY_VERIFICATION_FAILED",
+      "localbce_status": "DENIED",
+      "set": "g2_pack"
+    },
+    {
+      "batch": 0,
+      "case": "unknown",
+      "category": "lean_review_local_denies",
+      "derived_flags": {
+        "aid_code": 0,
+        "benefit_level_exists": 1,
+        "eligibility_active": 0
+      },
+      "flow": "-",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "PROGRAM_NOT_ELIGIBLE_UNVERIFIED"
+      ],
+      "line_id": 20,
+      "localbce_reason": "G1_IDENTITY_VERIFICATION_FAILED",
+      "localbce_status": "DENIED",
+      "set": "g2_pack"
+    },
+    {
+      "batch": 0,
+      "case": "conflict",
+      "category": "lean_review_local_denies",
+      "derived_flags": {
+        "aid_code": 0,
+        "benefit_level_exists": 1,
+        "eligibility_active": 0
+      },
+      "flow": "-",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "PROGRAM_NOT_ELIGIBLE_UNVERIFIED"
+      ],
+      "line_id": 21,
+      "localbce_reason": "G1_IDENTITY_VERIFICATION_FAILED",
+      "localbce_status": "DENIED",
+      "set": "g2_pack"
+    },
+    {
+      "batch": 0,
+      "case": "present_no_as_of",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "aid_code": 13,
+        "benefit_level_exists": 1,
+        "eligibility_active": 1
+      },
+      "flow": "-",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "PROGRAM_NOT_ELIGIBLE_UNVERIFIED"
+      ],
+      "line_id": 22,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED",
+      "set": "g2_pack"
+    },
+    {
+      "batch": 0,
+      "case": "absent_with_as_of",
+      "category": "lean_review_local_denies",
+      "derived_flags": {
+        "aid_code": 0,
+        "benefit_level_exists": 1,
+        "eligibility_active": 0
+      },
+      "flow": "-",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "PROGRAM_NOT_ELIGIBLE_UNVERIFIED",
+        "STALE_ELIGIBILITY"
+      ],
+      "line_id": 23,
+      "localbce_reason": "G1_IDENTITY_VERIFICATION_FAILED",
+      "localbce_status": "DENIED",
+      "set": "g2_pack"
+    },
+    {
+      "batch": 0,
+      "case": "age_7_days",
+      "category": "agree_allow",
+      "derived_flags": {
+        "aid_code": 13,
+        "benefit_level_exists": 1,
+        "eligibility_active": 1
+      },
+      "flow": "-",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 24,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED",
+      "set": "g2_pack"
+    },
+    {
+      "batch": 0,
+      "case": "age_8_days",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "aid_code": 13,
+        "benefit_level_exists": 1,
+        "eligibility_active": 1
+      },
+      "flow": "-",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "PROGRAM_NOT_ELIGIBLE_UNVERIFIED",
+        "STALE_ELIGIBILITY"
+      ],
+      "line_id": 25,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED",
+      "set": "g2_pack"
+    },
+    {
+      "batch": 0,
+      "case": "stale_unlisted",
+      "category": "lean_review_local_denies",
+      "derived_flags": {
+        "aid_code": 999,
+        "benefit_level_exists": 1,
+        "eligibility_active": 1
+      },
+      "flow": "-",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "PROGRAM_NOT_ELIGIBLE_UNVERIFIED",
+        "STALE_ELIGIBILITY"
+      ],
+      "line_id": 26,
+      "localbce_reason": "G2_PROGRAM_ELIGIBILITY_FAILED",
+      "localbce_status": "DENIED",
+      "set": "g2_pack"
+    },
+    {
+      "batch": 0,
+      "case": "stale_not_eligible",
+      "category": "lean_review_local_denies",
+      "derived_flags": {
+        "aid_code": 13,
+        "benefit_level_exists": 1,
+        "eligibility_active": 0
+      },
+      "flow": "-",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "PROGRAM_NOT_ELIGIBLE_UNVERIFIED",
+        "STALE_ELIGIBILITY"
+      ],
+      "line_id": 27,
+      "localbce_reason": "G1_IDENTITY_VERIFICATION_FAILED",
+      "localbce_status": "DENIED",
+      "set": "g2_pack"
+    },
+    {
+      "batch": 0,
+      "case": "month_edge_fresh",
+      "category": "agree_allow",
+      "derived_flags": {
+        "aid_code": 13,
+        "benefit_level_exists": 1,
+        "eligibility_active": 1
+      },
+      "flow": "-",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 28,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED",
+      "set": "g2_pack"
+    },
+    {
+      "batch": 0,
+      "case": "month_edge_stale",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "aid_code": 13,
+        "benefit_level_exists": 1,
+        "eligibility_active": 1
+      },
+      "flow": "-",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "PROGRAM_NOT_ELIGIBLE_UNVERIFIED",
+        "STALE_ELIGIBILITY"
+      ],
+      "line_id": 29,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED",
+      "set": "g2_pack"
+    },
+    {
+      "batch": 0,
+      "case": "leap_edge_fresh",
+      "category": "agree_allow",
+      "derived_flags": {
+        "aid_code": 13,
+        "benefit_level_exists": 1,
+        "eligibility_active": 1
+      },
+      "flow": "-",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 30,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED",
+      "set": "g2_pack"
+    },
+    {
+      "batch": 0,
+      "case": "leap_edge_stale",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "aid_code": 13,
+        "benefit_level_exists": 1,
+        "eligibility_active": 1
+      },
+      "flow": "-",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "PROGRAM_NOT_ELIGIBLE_UNVERIFIED",
+        "STALE_ELIGIBILITY"
+      ],
+      "line_id": 31,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED",
+      "set": "g2_pack"
+    },
+    {
+      "batch": 0,
+      "case": "as_of_after_service_date",
+      "category": "agree_allow",
+      "derived_flags": {
+        "aid_code": 13,
+        "benefit_level_exists": 1,
+        "eligibility_active": 1
+      },
+      "flow": "-",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 32,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED",
+      "set": "g2_pack"
+    },
+    {
+      "batch": 0,
+      "case": "as_of_on_batch_date",
+      "category": "agree_allow",
+      "derived_flags": {
+        "aid_code": 13,
+        "benefit_level_exists": 1,
+        "eligibility_active": 1
+      },
+      "flow": "-",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 33,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED",
+      "set": "g2_pack"
+    },
+    {
+      "batch": 0,
+      "case": "as_of_after_batch_date",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "aid_code": 13,
+        "benefit_level_exists": 1,
+        "eligibility_active": 1
+      },
+      "flow": "-",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "PROGRAM_NOT_ELIGIBLE_UNVERIFIED",
+        "STALE_ELIGIBILITY"
+      ],
+      "line_id": 34,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED",
+      "set": "g2_pack"
+    },
+    {
+      "batch": 0,
+      "case": "as_of_after_batch_date_unlisted",
+      "category": "lean_review_local_denies",
+      "derived_flags": {
+        "aid_code": 999,
+        "benefit_level_exists": 1,
+        "eligibility_active": 1
+      },
+      "flow": "-",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "PROGRAM_NOT_ELIGIBLE_UNVERIFIED",
+        "STALE_ELIGIBILITY"
+      ],
+      "line_id": 35,
+      "localbce_reason": "G2_PROGRAM_ELIGIBILITY_FAILED",
+      "localbce_status": "DENIED",
+      "set": "g2_pack"
+    },
+    {
+      "batch": 0,
+      "case": "bad_service_date",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "aid_code": 13,
+        "benefit_level_exists": 1,
+        "eligibility_active": 1
+      },
+      "flow": "-",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "STALE_ELIGIBILITY"
+      ],
+      "line_id": 36,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED",
+      "set": "g2_pack"
+    },
+    {
+      "batch": 0,
+      "case": "bad_service_date_unlisted",
+      "category": "lean_review_local_denies",
+      "derived_flags": {
+        "aid_code": 999,
+        "benefit_level_exists": 1,
+        "eligibility_active": 1
+      },
+      "flow": "-",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "STALE_ELIGIBILITY"
+      ],
+      "line_id": 37,
+      "localbce_reason": "G2_PROGRAM_ELIGIBILITY_FAILED",
+      "localbce_status": "DENIED",
+      "set": "g2_pack"
+    },
+    {
+      "batch": 0,
+      "case": "bad_service_date_absent",
+      "category": "lean_review_local_denies",
+      "derived_flags": {
+        "aid_code": 0,
+        "benefit_level_exists": 1,
+        "eligibility_active": 0
+      },
+      "flow": "-",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "PROGRAM_NOT_ELIGIBLE_UNVERIFIED"
+      ],
+      "line_id": 38,
+      "localbce_reason": "G1_IDENTITY_VERIFICATION_FAILED",
+      "localbce_status": "DENIED",
+      "set": "g2_pack"
+    },
+    {
+      "batch": 0,
+      "case": "bad_service_date_unknown",
+      "category": "lean_review_local_denies",
+      "derived_flags": {
+        "aid_code": 0,
+        "benefit_level_exists": 1,
+        "eligibility_active": 0
+      },
+      "flow": "-",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "PROGRAM_NOT_ELIGIBLE_UNVERIFIED"
+      ],
+      "line_id": 39,
+      "localbce_reason": "G1_IDENTITY_VERIFICATION_FAILED",
+      "localbce_status": "DENIED",
+      "set": "g2_pack"
+    },
+    {
+      "batch": 0,
+      "case": "bad_service_date_conflict",
+      "category": "lean_review_local_denies",
+      "derived_flags": {
+        "aid_code": 0,
+        "benefit_level_exists": 1,
+        "eligibility_active": 0
+      },
+      "flow": "-",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "PROGRAM_NOT_ELIGIBLE_UNVERIFIED"
+      ],
+      "line_id": 40,
+      "localbce_reason": "G1_IDENTITY_VERIFICATION_FAILED",
+      "localbce_status": "DENIED",
+      "set": "g2_pack"
+    },
+    {
+      "batch": 0,
+      "case": "bad_service_date_unknown_with_as_of",
+      "category": "lean_review_local_denies",
+      "derived_flags": {
+        "aid_code": 0,
+        "benefit_level_exists": 1,
+        "eligibility_active": 0
+      },
+      "flow": "-",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "PROGRAM_NOT_ELIGIBLE_UNVERIFIED",
+        "STALE_ELIGIBILITY"
+      ],
+      "line_id": 41,
+      "localbce_reason": "G1_IDENTITY_VERIFICATION_FAILED",
+      "localbce_status": "DENIED",
+      "set": "g2_pack"
+    },
+    {
+      "batch": 0,
+      "case": "bad_service_date_conflict_with_as_of",
+      "category": "lean_review_local_denies",
+      "derived_flags": {
+        "aid_code": 0,
+        "benefit_level_exists": 1,
+        "eligibility_active": 0
+      },
+      "flow": "-",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "PROGRAM_NOT_ELIGIBLE_UNVERIFIED",
+        "STALE_ELIGIBILITY"
+      ],
+      "line_id": 42,
+      "localbce_reason": "G1_IDENTITY_VERIFICATION_FAILED",
+      "localbce_status": "DENIED",
+      "set": "g2_pack"
+    },
+    {
+      "batch": 0,
+      "case": "bad_batch_date",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "aid_code": 13,
+        "benefit_level_exists": 1,
+        "eligibility_active": 1
+      },
+      "flow": "-",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "PROGRAM_NOT_ELIGIBLE_UNVERIFIED",
+        "STALE_ELIGIBILITY"
+      ],
+      "line_id": 43,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED",
+      "set": "g2_pack"
     }
   ],
-  "schema": "localbce.g_rule_parity_report.v1",
-  "vectors": "rightrail/tests/gate_rules/rules_v1.vectors"
+  "schema": "localbce.g_rule_parity_report.v2",
+  "sets": {
+    "g2_pack": {
+      "agreements": 19,
+      "by_category": {
+        "agree_allow": 13,
+        "agree_hold": 6,
+        "hold_reason_differs": 3,
+        "lean_review_local_approves": 7,
+        "lean_review_local_denies": 14
+      },
+      "differences": 24,
+      "lines": 43,
+      "not_compared": 0
+    },
+    "rules_v1": {
+      "agreements": 140,
+      "by_category": {
+        "agree_allow": 76,
+        "agree_hold": 64,
+        "hold_reason_differs": 3,
+        "lean_holds_on_mapped_rule_local_approves": 1,
+        "lean_holds_on_unmapped_rule_local_approves": 22,
+        "lean_review_local_approves": 81,
+        "lean_review_local_denies": 17,
+        "no_lean_expectation": 1
+      },
+      "differences": 124,
+      "lines": 265,
+      "not_compared": 1
+    }
+  },
+  "vectors": "tests/fixtures/rightrail_rules_v1.vectors"
 }

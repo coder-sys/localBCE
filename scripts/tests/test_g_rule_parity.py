@@ -1,5 +1,6 @@
 """Tests for the Phase 2 G-rule parity harness (scripts/g_rule_parity.py)."""
 
+import json
 import os
 import sys
 import unittest
@@ -265,6 +266,90 @@ class EndToEnd(unittest.TestCase):
         self.assertEqual(report["agreements"] + report["differences"] + report["not_compared"], report["lines"])
         self.assertTrue(set(report["by_category"]) <= set(gp.CATEGORY_NOTES))
         self.assertIn("## Differences", gp.markdown(report))
+
+
+class G2Pack(unittest.TestCase):
+    """G2's aid code test against the rule-set v2 pack's own cases (reason bit 26, PROGRAM_NOT_ELIGIBLE)."""
+
+    def case(self, **read):
+        base = {"ans": 0, "status": 1, "asof": 20270308, "aids": ["13"]}
+        return {"name": "t", "service": 20270310, "batch": 20270315, "read": dict(base, **read)}
+
+    def test_g2_maps_to_bit_26(self):
+        self.assertEqual(gp.G_TO_LEAN["G2_PROGRAM_ELIGIBILITY_FAILED"], {"PROGRAM_NOT_ELIGIBLE"})
+        self.assertEqual(gp.G2_REASONS[26], "PROGRAM_NOT_ELIGIBLE")
+        self.assertNotIn("G2_BENEFIT_LEVEL_MISSING", gp.G_TO_LEAN)
+        self.assertEqual(gp.G2_NOT_COMPARED, "G2_BENEFIT_LEVEL_MISSING")
+        E = gp.Expect
+        self.assertEqual(gp.classify(E("HOLD", ("PROGRAM_NOT_ELIGIBLE",)), "DENIED", "G2_PROGRAM_ELIGIBILITY_FAILED"),
+                         "agree_hold")
+        self.assertEqual(gp.classify(E("HOLD", ("PROGRAM_NOT_ELIGIBLE",)), "DENIED", "G1_IDENTITY_VERIFICATION_FAILED"),
+                         "hold_reason_differs")
+        self.assertEqual(gp.classify(E("HOLD", ("PROGRAM_NOT_ELIGIBLE",)), "APPROVED", None),
+                         "lean_holds_on_mapped_rule_local_approves")
+
+    def test_expectation_is_the_packs(self):
+        e = gp.g2_expect({"expect": [26, 27], "outcome": "hold"})
+        self.assertEqual((e.outcome, e.reasons), ("HOLD", ("PROGRAM_NOT_ELIGIBLE", "PROGRAM_NOT_ELIGIBLE_UNVERIFIED")))
+        self.assertEqual(gp.g2_expect({"expect": [], "outcome": "allow"}).outcome, "ALLOW")
+        self.assertEqual(gp.g2_expect({"expect": [28], "outcome": "review"}).outcome, "HUMAN_REVIEW")
+
+    def test_aid_code_derivation(self):
+        aid = lambda aids: gp.derive_g2_claim(self.case(aids=aids), 1)["aid_code"]
+        self.assertEqual(aid(["13"]), 13)
+        self.assertEqual(aid(["999", "104"]), 104)  # a listed code beside an unlisted one
+        self.assertEqual(aid(["999"]), 999)
+        self.assertEqual(aid([]), 0)
+        self.assertEqual(aid([{"hex": "00" * 21}]), 0)  # malformed: not a code localBCE can carry
+        self.assertNotIn(0, gp.LOCAL_AID_CODES)
+
+    def test_eligibility_flag_derivation(self):
+        flag = lambda **read: gp.derive_g2_claim(self.case(**read), 1)["eligibility_active"]
+        self.assertEqual([flag(status=s) for s in (1, 2, 3, 4)], [1, 0, 0, 1])
+        self.assertEqual([flag(ans=a, status=0) for a in (1, 2, 3)], [0, 0, 0])
+        claim = gp.derive_g2_claim(self.case(), 7)
+        self.assertEqual(claim["benefit_level_exists"], 1)  # not compared
+        self.assertEqual(claim["claim_id"], "G2P-7")
+
+    def test_case_table_is_the_packs(self):
+        cases, blocked = gp.load_g2_cases()
+        self.assertEqual(len(cases), 43)
+        self.assertEqual([b["from_bbd0e947"] for b in blocked], ["cBL", "cPair", "cLvl2", "cBLu"])
+
+
+@unittest.skipUnless(ENGINE, "G-RULE PARITY END-TO-END NOT RUN: rust-engine binary not built "
+                             "(cargo build in rust-engine/, or set LOCALBCE_RUST_ENGINE)")
+class G2PackEndToEnd(unittest.TestCase):
+    def test_g2_pack_counts(self):
+        cases, blocked = gp.load_g2_cases()
+        records = gp.compare_g2(cases, ENGINE)
+        got = {r["case"]: (r["category"], r["localbce_reason"]) for r in records}
+        self.assertEqual(got["unlisted_999"], ("agree_hold", "G2_PROGRAM_ELIGIBILITY_FAILED"))
+        self.assertEqual(got["malformed_char"], ("agree_hold", "G2_PROGRAM_ELIGIBILITY_FAILED"))
+        self.assertEqual(got["eligible_13"], ("agree_allow", None))
+        self.assertEqual(got["status_not_eligible"], ("hold_reason_differs", "G1_IDENTITY_VERIFICATION_FAILED"))
+        self.assertEqual(got["absent"], ("lean_review_local_denies", "G1_IDENTITY_VERIFICATION_FAILED"))
+        self.assertEqual(got["age_8_days"], ("lean_review_local_approves", None))
+        report = gp.summarize(records, gp.DEFAULT_VECTORS, blocked)
+        self.assertEqual(report["sets"], {"g2_pack": {
+            "lines": 43, "agreements": 19, "differences": 24, "not_compared": 0,
+            "by_category": {"agree_allow": 13, "agree_hold": 6, "hold_reason_differs": 3,
+                            "lean_review_local_approves": 7, "lean_review_local_denies": 14}}})
+        self.assertIn("## G2 pack cases", gp.markdown(report))
+
+    def test_committed_report_is_what_the_harness_generates(self):
+        with open(gp.DEFAULT_VECTORS, encoding="utf-8") as f:
+            records = gp.compare(gp.parse_vectors(f.read()), ENGINE)
+        cases, blocked = gp.load_g2_cases()
+        report = gp.summarize(records + gp.compare_g2(cases, ENGINE), gp.DEFAULT_VECTORS, blocked)
+        base = os.path.join(ROOT, "docs", "integration", "G_RULE_PARITY_REPORT")
+        with open(base + ".json", encoding="utf-8") as f:
+            self.assertEqual(json.load(f), json.loads(json.dumps(report)))
+        with open(base + ".md", encoding="utf-8") as f:
+            self.assertEqual(f.read(), gp.markdown(report))
+        self.assertEqual(report["sets"]["rules_v1"]["lines"], 265)
+        self.assertEqual((report["lines"], report["agreements"], report["differences"], report["not_compared"]),
+                         (308, 159, 148, 1))
 
 
 class NoRightRailWrites(unittest.TestCase):
