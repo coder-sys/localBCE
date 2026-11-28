@@ -603,3 +603,19 @@
   an adjudication result (only an allow on every line gives APPROVED; a
   hold is not a final denial). claim_input.json is unchanged. Nothing
   calls these functions and nothing runs RightRail.
+- 2026-11-28: 4f8baf4f (wiring part 2) was pushed to
+  codex/rightrail-trunk-e5d0f36b as a plain fast-forward with the owner's
+  approval, confirmed with ls-remote; the three CI jobs on draft PR 10
+  passed (scripts/tests 107 ran on Linux and on Windows, 1 skip each).
+  CORRECTION to that commit and to the entry above: its adapter compared
+  claim_amount with the line sum as if both were cents, and its message
+  said the three existing claim files are set aside (total_mismatch).
+  That was wrong. A read-only check found the unit rule in the parked
+  STARK schema and code (line charges equal claim_amount * 100 cents),
+  and the owner confirmed that claim_amount is in whole dollars and line
+  charges in cents. The adapter's check is now claim_amount * 100 = line
+  sum in cents; a claim that fails is still set aside, never corrected;
+  a total with cents cannot be written and is set aside. The three
+  existing claim files are sendable and unchanged. The pushed commit is
+  not amended. The design states the rule as the adapter's own and cites
+  the parked schema as its origin.

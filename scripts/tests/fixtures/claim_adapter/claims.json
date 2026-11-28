@@ -1,16 +1,26 @@
 {
-  "_note": "Case table for scripts/rightrail_claim_adapter.py request_of. Hand-written synthetic claims: invented ids, no PHI, not legally verified. Each case is the base claim with its change applied; dates are day counts since 1970-01-01, as rust-engine/rules.json states.",
+  "_note": "Case table for scripts/rightrail_claim_adapter.py request_of. Hand-written synthetic claims: invented ids, no PHI, not legally verified. Each case is the base claim with its change applied. claim_amount is in whole dollars and charge_cents in cents (claim_amount * 100 must equal the line sum); dates are day counts since 1970-01-01, as rust-engine/rules.json states.",
   "secret": "synthetic-tenant-secret-0001",
   "base": {
     "claim_id": "CLAIM-ADAPTER-001",
-    "claim_amount": 15000,
+    "claim_amount": 150,
     "member_id": "S00000001",
     "provider_npi": "1234567893",
     "diagnosis_count": 1,
-    "diagnosis_codes": ["Z00.00"],
+    "diagnosis_codes": [
+      "Z00.00"
+    ],
     "service_lines": [
-      {"procedure_code": "99213", "charge_cents": 10000, "units": 1},
-      {"procedure_code": "36415", "charge_cents": 5000, "units": 2}
+      {
+        "procedure_code": "99213",
+        "charge_cents": 10000,
+        "units": 1
+      },
+      {
+        "procedure_code": "36415",
+        "charge_cents": 5000,
+        "units": 2
+      }
     ],
     "eligibility_active": 1,
     "aid_code": 53,
@@ -30,32 +40,26 @@
     "physician_certification_valid": 1
   },
   "cases": [
-    {"name": "valid_two_lines", "change": {},
-     "request": {"date": 20241004, "cents": 15000, "lines": [["1", "99213", 1, 10000], ["2", "36415", 2, 5000]]}},
-    {"name": "valid_one_line", "change": {"claim_amount": 10000, "service_lines": [{"procedure_code": "99213", "charge_cents": 10000, "units": 1}]},
-     "request": {"date": 20241004, "cents": 10000, "lines": [["1", "99213", 1, 10000]]}},
-    {"name": "decision_flags_do_not_cross", "change": {"eligibility_active": 0, "aid_code": 999, "provider_enrolled": 0, "is_duplicate": 1, "recipient_not_deceased": 0},
-     "request": {"date": 20241004, "cents": 15000, "lines": [["1", "99213", 1, 10000], ["2", "36415", 2, 5000]]}},
-    {"name": "date_day_zero", "change": {"date_of_service_from": 0},
-     "request": {"date": 19700101, "cents": 15000, "lines": [["1", "99213", 1, 10000], ["2", "36415", 2, 5000]]}},
-    {"name": "date_leap_day", "change": {"date_of_service_from": 19782},
-     "request": {"date": 20240229, "cents": 15000, "lines": [["1", "99213", 1, 10000], ["2", "36415", 2, 5000]]}},
-    {"name": "date_last_day_of_9999", "change": {"date_of_service_from": 2932896},
-     "request": {"date": 99991231, "cents": 15000, "lines": [["1", "99213", 1, 10000], ["2", "36415", 2, 5000]]}},
-    {"name": "zero_charge_lines_add_up", "change": {"claim_amount": 0, "service_lines": [{"procedure_code": "99213", "charge_cents": 0, "units": 1}]},
-     "request": {"date": 20241004, "cents": 0, "lines": [["1", "99213", 1, 0]]}},
-
-    {"name": "total_above_line_sum", "change": {"claim_amount": 15001}, "set_aside": "total_mismatch"},
-    {"name": "total_below_line_sum", "change": {"claim_amount": 1000}, "set_aside": "total_mismatch"},
+    {"name": "valid_two_lines", "change": {}, "request": {"date": 20241004, "cents": 15000, "lines": [["1", "99213", 1, 10000], ["2", "36415", 2, 5000]]}},
+    {"name": "valid_one_line", "change": {"claim_amount": 100, "service_lines": [{"procedure_code": "99213", "charge_cents": 10000, "units": 1}]}, "request": {"date": 20241004, "cents": 10000, "lines": [["1", "99213", 1, 10000]]}},
+    {"name": "decision_flags_do_not_cross", "change": {"eligibility_active": 0, "aid_code": 999, "provider_enrolled": 0, "is_duplicate": 1, "recipient_not_deceased": 0}, "request": {"date": 20241004, "cents": 15000, "lines": [["1", "99213", 1, 10000], ["2", "36415", 2, 5000]]}},
+    {"name": "date_day_zero", "change": {"date_of_service_from": 0}, "request": {"date": 19700101, "cents": 15000, "lines": [["1", "99213", 1, 10000], ["2", "36415", 2, 5000]]}},
+    {"name": "date_leap_day", "change": {"date_of_service_from": 19782}, "request": {"date": 20240229, "cents": 15000, "lines": [["1", "99213", 1, 10000], ["2", "36415", 2, 5000]]}},
+    {"name": "date_last_day_of_9999", "change": {"date_of_service_from": 2932896}, "request": {"date": 99991231, "cents": 15000, "lines": [["1", "99213", 1, 10000], ["2", "36415", 2, 5000]]}},
+    {"name": "zero_charge_lines_add_up", "change": {"claim_amount": 0, "service_lines": [{"procedure_code": "99213", "charge_cents": 0, "units": 1}]}, "request": {"date": 20241004, "cents": 0, "lines": [["1", "99213", 1, 0]]}},
+    {"name": "total_above_line_sum", "change": {"claim_amount": 151}, "set_aside": "total_mismatch"},
+    {"name": "total_below_line_sum", "change": {"claim_amount": 149}, "set_aside": "total_mismatch"},
+    {"name": "total_given_in_cents", "change": {"claim_amount": 15000}, "set_aside": "total_mismatch"},
+    {"name": "line_sum_with_cents_below_the_total", "set_aside": "total_mismatch", "change": {"service_lines": [{"procedure_code": "99213", "charge_cents": 14950, "units": 1}]}},
+    {"name": "line_sum_with_cents_above_the_total", "set_aside": "total_mismatch", "change": {"service_lines": [{"procedure_code": "99213", "charge_cents": 15050, "units": 1}]}},
+    {"name": "line_sum_with_cents_has_no_total", "set_aside": "total_mismatch", "change": {"claim_amount": 151, "service_lines": [{"procedure_code": "99213", "charge_cents": 15050, "units": 1}]}},
     {"name": "total_mismatch_comes_before_bad_npi", "change": {"claim_amount": 1, "provider_npi": "1234567890"}, "set_aside": "total_mismatch"},
-
     {"name": "npi_bad_check_digit", "change": {"provider_npi": "1234567890"}, "set_aside": "bad_npi"},
     {"name": "npi_nine_digits", "change": {"provider_npi": "123456789"}, "set_aside": "bad_npi"},
     {"name": "npi_letters", "change": {"provider_npi": "12345678AB"}, "set_aside": "bad_npi"},
     {"name": "npi_a_number", "change": {"provider_npi": 1234567893}, "set_aside": "bad_npi"},
     {"name": "npi_missing", "drop": ["provider_npi"], "set_aside": "bad_npi"},
     {"name": "bad_npi_comes_before_date", "change": {"provider_npi": "1234567890", "date_of_service_from": -1}, "set_aside": "bad_npi"},
-
     {"name": "date_looks_like_yyyymmdd", "change": {"date_of_service_from": 20241004}, "set_aside": "service_date"},
     {"name": "date_one_day_past_9999", "change": {"date_of_service_from": 2932897}, "set_aside": "service_date"},
     {"name": "date_negative", "change": {"date_of_service_from": -1}, "set_aside": "service_date"},
@@ -64,13 +68,11 @@
     {"name": "date_true", "change": {"date_of_service_from": true}, "set_aside": "service_date"},
     {"name": "date_missing", "drop": ["date_of_service_from"], "set_aside": "service_date"},
     {"name": "date_comes_before_units", "change": {"date_of_service_from": -1, "service_lines": [{"procedure_code": "99213", "charge_cents": 15000, "units": 0}]}, "set_aside": "service_date"},
-
     {"name": "units_zero", "change": {"service_lines": [{"procedure_code": "99213", "charge_cents": 15000, "units": 0}]}, "set_aside": "units"},
     {"name": "units_negative", "change": {"service_lines": [{"procedure_code": "99213", "charge_cents": 15000, "units": -1}]}, "set_aside": "units"},
     {"name": "units_fraction", "change": {"service_lines": [{"procedure_code": "99213", "charge_cents": 15000, "units": 1.5}]}, "set_aside": "units"},
     {"name": "units_text", "change": {"service_lines": [{"procedure_code": "99213", "charge_cents": 15000, "units": "1"}]}, "set_aside": "units"},
     {"name": "units_bad_on_second_line", "change": {"service_lines": [{"procedure_code": "99213", "charge_cents": 10000, "units": 1}, {"procedure_code": "36415", "charge_cents": 5000, "units": 0}]}, "set_aside": "units"},
-
     {"name": "no_service_lines", "change": {"service_lines": []}, "set_aside": "field"},
     {"name": "service_lines_missing", "drop": ["service_lines"], "set_aside": "field"},
     {"name": "line_without_procedure", "change": {"service_lines": [{"charge_cents": 15000, "units": 1}]}, "set_aside": "field"},
@@ -83,7 +85,7 @@
     {"name": "member_empty", "change": {"member_id": ""}, "set_aside": "field"},
     {"name": "claim_id_missing", "drop": ["claim_id"], "set_aside": "field"},
     {"name": "amount_missing", "drop": ["claim_amount"], "set_aside": "field"},
-    {"name": "amount_negative", "change": {"claim_amount": -15000}, "set_aside": "field"},
-    {"name": "amount_text", "change": {"claim_amount": "15000"}, "set_aside": "field"}
+    {"name": "amount_negative", "change": {"claim_amount": -150}, "set_aside": "field"},
+    {"name": "amount_text", "change": {"claim_amount": "150"}, "set_aside": "field"}
   ]
 }

@@ -8,7 +8,10 @@ Design: docs/integration/ELIG_EXTRACT_AND_WIRING_DESIGN.md part 2.  Synthetic, n
 a `Request` or a `SetAside`.  A claim is sent whole or not at all; nothing is corrected or guessed:
 
 - shape the converter cannot read (`field`);
-- `claim_amount` is not the sum of the line charges (`total_mismatch`);
+- the claim total is not the sum of the line charges (`total_mismatch`).  **The unit rule: `claim_amount` is in whole
+  currency units (dollars) and `service_lines[].charge_cents` is in cents, so the check is
+  `claim_amount * 100 == sum of the line charges`.**  A total that has cents cannot be written in `claim_amount`,
+  so a claim whose lines do not sum to whole dollars never passes and is set aside;
 - the billing NPI is not ten digits with a valid check digit (`bad_npi`);
 - the service date cannot be converted (`service_date`).  The stated rule is rust-engine/rules.json `date_encoding`:
   an integer count of days since 1970-01-01.  A value that is not a whole number, is negative, or lands after year
@@ -42,6 +45,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import g_rule_parity  # noqa: E402  the reason mapping, kept in one place
 
 FLOW = "FFS_CLAIM"
+DOLLAR = 100  # cents in one unit of `claim_amount`
 RENDERING_ASSUMPTION = "rendering_party_is_billing_npi_test_only"
 _IDS = b"RR/GATE/FFS-ID/v1\x00"
 _MEMBER = b"RR/GATE/MEMBER-KEY/v1\x00"
@@ -78,7 +82,7 @@ class Request(NamedTuple):
     flow: str
     member_key: str  # hex
     payee: str
-    cents: int
+    cents: int  # the claim total in cents: the sum of its line charges
     lines: tuple
     assumptions: tuple
 
@@ -86,7 +90,7 @@ class Request(NamedTuple):
 class SetAside(NamedTuple):
     claim_id: str
     cause: str
-    cents: int  # the claim's stated amount when it is a whole number, else 0
+    cents: int  # the claim's stated amount in cents (`claim_amount` * 100) when it is a whole number, else 0
 
 
 class NoDecision(ValueError):
@@ -140,7 +144,7 @@ def request_of(claim, secret: bytes):
     amount = claim.get("claim_amount") if isinstance(claim, dict) else None
 
     def aside(cause: str) -> SetAside:
-        return SetAside(claim_id if _text(claim_id) else "", cause, amount if _whole(amount) else 0)
+        return SetAside(claim_id if _text(claim_id) else "", cause, amount * DOLLAR if _whole(amount) else 0)
 
     if not isinstance(claim, dict):
         return aside("field")
@@ -151,7 +155,8 @@ def request_of(claim, secret: bytes):
         if not (isinstance(ln, dict) and _text(ln.get("procedure_code")) and _whole(ln.get("charge_cents"))
                 and "units" in ln):
             return aside("field")
-    if sum(ln["charge_cents"] for ln in lines) != amount:
+    total = sum(ln["charge_cents"] for ln in lines)
+    if total != amount * DOLLAR:  # whole dollars against cents; never corrected
         return aside("total_mismatch")
     npi = claim.get("provider_npi")
     if not npi_ok(npi):
@@ -164,11 +169,12 @@ def request_of(claim, secret: bytes):
     key = member_key(secret, claim["member_id"]).hex()
     out = tuple(Line(canonical_id("L", npi, claim_id, str(n)), str(n), FLOW, key, npi, npi, day, ln["procedure_code"],
                      ln["units"], ln["charge_cents"]) for n, ln in enumerate(lines, 1))
-    return Request(claim_id, canonical_id("C", npi, claim_id), FLOW, key, npi, amount, out, (RENDERING_ASSUMPTION,))
+    return Request(claim_id, canonical_id("C", npi, claim_id), FLOW, key, npi, total, out, (RENDERING_ASSUMPTION,))
 
 
 def claim_hash(claim_id: str, claim_amount: int) -> str:
-    """rust-engine/src/main.rs `claim_hash_32`: SHA-256 of the claim id and the amount as eight big-endian bytes."""
+    """rust-engine/src/main.rs `claim_hash_32`: SHA-256 of the claim id and the amount as eight big-endian bytes.  The
+    amount is `claim_amount` exactly as the file gives it (whole dollars), as the Rust engine hashes it."""
     return "0x" + hashlib.sha256(claim_id.encode() + claim_amount.to_bytes(8, "big")).hexdigest()
 
 

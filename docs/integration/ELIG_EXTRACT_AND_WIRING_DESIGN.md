@@ -149,7 +149,7 @@ A RightRail line has ten fields. Trunk already has the path for fee-for-service 
 | date | `date_of_service_from` | The stated rule below |
 | procedure | `service_lines[].procedure_code` | Trunk encodes the code and its sorted modifiers; localBCE has no modifiers |
 | units | `service_lines[].units` | A whole number above zero, else the claim is set aside |
-| cents | `service_lines[].charge_cents` | The billed charge per line |
+| cents | `service_lines[].charge_cents` | The billed charge per line, in cents. The request's total is their sum; `claim_amount` (whole dollars) times 100 must equal it |
 | id, payment | derived from billing NPI and `claim_id` | Trunk's `canonical_id`, so a resubmitted claim is the same payment and is decided once |
 
 **The service date: a stated rule exists.** `rust-engine/rules.json` says (`date_encoding`): "All dates encoded as
@@ -162,10 +162,30 @@ day count it is far past year 9999, so it is set aside.
 One inconsistency to know about, not to fix here: the parity harness feeds `yyyymmdd` numbers to the Rust engine. That
 is harmless there because the engine only compares dates with each other, but it is not the stated encoding.
 
-**The claim total.** A claim whose `claim_amount` does not equal the sum of its `service_lines[].charge_cents` is
-**set aside (`total_mismatch`), not corrected**, as trunk does. The current fixture is such a claim (`claim_amount`
-1000 against one line of 100000), so the converter sets it aside; converter tests need fixtures of their own that add
-up. Neither file's meaning is changed for the Rust engine.
+**The claim total: the adapter's unit rule.** `claim_amount` is in whole currency units (dollars) and
+`service_lines[].charge_cents` is in cents. The adapter's check is `claim_amount * 100 == the sum of the line charges`.
+A claim that fails it is **set aside (`total_mismatch`), never corrected**. The owner confirmed the unit on
+2026-11-28.
+
+- **Origin.** The rule comes from the parked STARK code, which is where the claim file got its service lines:
+  `parked/localbce/stark-engine/SCHEMA.md` requires "line charges that equal `claim_amount * 100` cents", and
+  `parked/localbce/stark-engine/src/source_roots.rs` names the unit
+  `claim_amount_whole_currency_units_normalized_to_cents` and refuses a claim whose lines do not sum to it. No active
+  file states the unit: the Rust engine uses `claim_amount` only inside `claim_hash`, and `rules.json` does not
+  mention it. `bridge/README.md` records the fixture claim with `--owed-cents 100000`, which agrees. The adapter does
+  not read or depend on the parked files; the rule is restated here as its own.
+- **The existing claim files add up.** `rust-engine/claim_input.json` and the two `ops/canaries` examples have
+  `claim_amount` 1000 and one line of 100000 cents, so each becomes a request. A test checks that, and that the files
+  are not changed.
+- **Limit: a total with cents cannot be written.** `claim_amount` holds whole dollars only. A claim whose lines sum to,
+  say, 150.50 has no `claim_amount` that passes the check, so it is set aside. Carrying such claims needs a change to
+  the claim file's amount field, which is not made here.
+- **`claim_hash` is unaffected.** It hashes `claim_amount` exactly as the file gives it, as the Rust engine does.
+
+**Correction (2026-11-28).** The first version of the adapter (commit `4f8baf4f`) compared `claim_amount` with the line
+sum directly, as if both were cents. That was wrong. It set the three existing claim files aside as `total_mismatch`,
+and that commit's message, this design and the log said so. They add up under the unit rule. The commit is pushed and
+is not amended; this paragraph and the log are the correction.
 
 Not carried, by design: every decision flag (`eligibility_active`, `aid_code`, `benefit_level_exists`, the eligibility
 period, `soc_*`, `provider_enrolled`, `provider_type_valid`, `billing_code_valid`, `units_valid`, `is_duplicate`,
@@ -230,7 +250,7 @@ inside `rightrail/` goes to the maintainer.
 
 Built 2026-11-28: `scripts/rightrail_claim_adapter.py` (`request_of`, `result_of`),
 `scripts/tests/test_rightrail_claim_adapter.py` and the case tables `scripts/tests/fixtures/claim_adapter/claims.json`
-(43 cases) and `decisions.json` (26 cases). They are pure functions: nothing calls them, and they run nothing of
+(47 cases) and `decisions.json` (26 cases). They are pure functions: nothing calls them, and they run nothing of
 RightRail's. The first, third and fourth rows below are built and pass. The ids, the member key and the NPI check are
 compared with RightRail's own definitions, read from their source text. Where a hold's reason is one that two localBCE
 denials share (`MEMBER_NOT_ENROLLED`: G1 and G3), the result gives the RightRail name, not a guess. A decision that is
@@ -238,7 +258,7 @@ missing, incomplete or not understood gives no result at all.
 
 | Piece | Needs | In CI |
 |---|---|---|
-| Claim to line fields: a pure function with a case table (valid claim, bad NPI, zero units, total mismatch set aside, the date rule and its refusals) | Python only | yes |
+| Claim to line fields: a pure function with a case table (valid claim, bad NPI, zero units, the unit rule and a total mismatch set aside, the date rule and its refusals) | Python only | yes |
 | The same claim through trunk's `requests_of` gives the same line fields | Trunk's fee-for-service module, Windows | no: local only |
 | Decision rows to `adjudication_result.json`: a pure function with a case table over every outcome, including that nothing but an allow gives `APPROVED` | Python only | yes |
 | The Rust engine still reads every existing `claim_input.json` unchanged | The Rust engine | yes |
@@ -264,7 +284,7 @@ missing, incomplete or not understood gives no result at all.
 | D3 | Fields with no localBCE source | **Changed by the owner.** Placeholders only in an explicit test mode; outside it the writer refuses a record that lacks a required field. A missing status never defaults to eligible, in any mode. Section 2.2 lists what a real roster must supply |
 | D4 | File counter (`fseq`) | The caller passes it. The writer keeps no state |
 | D5 | Claim route | Build trunk's rows for the first tests; revisit writing an 837 before anything real |
-| D6 | Service date format and the claim total | **Changed by the owner.** `claim_input.json` does not change. The converter applies the stated date rule (days since 1970-01-01, from `rules.json`), and sets aside a claim whose total does not equal its line sum; it corrects nothing |
+| D6 | Service date format and the claim total | **Changed by the owner.** `claim_input.json` does not change. The converter applies the stated date rule (days since 1970-01-01, from `rules.json`), and sets aside a claim whose total does not equal its line sum; it corrects nothing. The owner confirmed on 2026-11-28 that `claim_amount` is in whole dollars and line charges in cents, so the check is `claim_amount * 100 == line sum`; a total with cents cannot be written and is set aside |
 | D7 | Rendering provider | The billing NPI, **for tests only**. An assumption to resolve before anything real, because the exclusion rule checks the rendering party |
 | D8 | Outcomes with no localBCE status | **Changed by the owner.** Add the fields. Only a RightRail allow maps to `APPROVED`; review, answered-repeat and set-aside never do. A hold is not a final denial, and the real outcome is carried in the new fields |
 | D9 | Order | Part 1, then the two pure functions of part 2, then a shadow run that records RightRail's answer beside localBCE's and decides nothing |

@@ -5,7 +5,9 @@
 - `result_of`: a RightRail decision as an adjudication result.  Only ALLOW on every line gives APPROVED.
 - The ids, the member key and the NPI check are RightRail's: compared with the definitions in rightrail/app, taken from
   their source text (the modules themselves need Windows to import).
-- `claim_input.json` is not changed: the existing files are read as they are.
+- The unit rule: `claim_amount` is whole dollars and line charges are cents, so the total check is
+  `claim_amount * 100 == line sum`.  A total with cents cannot be written and is set aside.
+- `claim_input.json` is not changed: the three existing claim files are read as they are, and are sendable.
 
 Nothing here runs RightRail or decides a claim.  Design: docs/integration/ELIG_EXTRACT_AND_WIRING_DESIGN.md part 2.
 Synthetic, not legally verified, nonpayment.
@@ -62,7 +64,7 @@ class RequestOf(unittest.TestCase):
         names = [c["name"] for c in CLAIMS["cases"]]
         self.assertEqual(len(names), len(set(names)))
         self.assertEqual((sum("request" in c for c in CLAIMS["cases"]), sum("set_aside" in c for c in CLAIMS["cases"])),
-                         (7, 36))
+                         (7, 40))
 
     def test_each_case(self):
         for case in CLAIMS["cases"]:
@@ -88,11 +90,28 @@ class RequestOf(unittest.TestCase):
         self.assertFalse(hasattr(got, "lines"))
 
     def test_nothing_is_corrected(self):
-        """A total that is not the line sum is set aside with the stated amount: neither number is changed."""
+        """A total that is not the line sum is set aside with the stated amount (in cents): neither number is changed."""
         claim = claim_of({"change": {"claim_amount": 1000}})
         before = copy.deepcopy(claim)
-        self.assertEqual(ad.request_of(claim, SECRET), ad.SetAside("CLAIM-ADAPTER-001", "total_mismatch", 1000))
+        self.assertEqual(ad.request_of(claim, SECRET), ad.SetAside("CLAIM-ADAPTER-001", "total_mismatch", 100000))
         self.assertEqual(claim, before)
+
+    def test_the_unit_rule_is_whole_dollars_against_cents(self):
+        """`claim_amount` * 100 must equal the line sum in cents (the design cites the rule's origin)."""
+        self.assertEqual(ad.DOLLAR, 100)
+        self.assertEqual(ad.request_of(claim_of({}), SECRET).cents, 15000)  # claim_amount 150
+        for amount in (0, 149, 151, 1500, 15000):  # the old reading (the amount in cents) is a mismatch too
+            got = ad.request_of(claim_of({"change": {"claim_amount": amount}}), SECRET)
+            self.assertEqual(got, ad.SetAside("CLAIM-ADAPTER-001", "total_mismatch", amount * 100), amount)
+
+    def test_a_total_with_cents_cannot_be_written(self):
+        """Lines that do not sum to whole dollars match no `claim_amount`: the claim is set aside, never rounded."""
+        for cents in (15050, 14950, 15001, 1):
+            lines = [{"procedure_code": "99213", "charge_cents": cents, "units": 1}]
+            for amount in (cents // 100, cents // 100 + 1, cents):
+                got = ad.request_of(claim_of({"change": {"claim_amount": amount, "service_lines": lines}}), SECRET)
+                self.assertIsInstance(got, ad.SetAside, (cents, amount))
+                self.assertEqual(got.cause, "total_mismatch", (cents, amount))
 
     def test_the_date_rule_is_days_since_1970(self):
         text = (ROOT / "rust-engine" / "rules.json").read_text("utf-8")
@@ -139,18 +158,27 @@ class RequestOf(unittest.TestCase):
         for bad in (None, [], "claim", 7):
             self.assertEqual(ad.request_of(bad, SECRET), ad.SetAside("", "field", 0))
 
-    def test_existing_claim_files_are_read_unchanged(self):
-        """The repository's claim files keep their meaning.  Their total is not their line sum, so the converter sets
-        them aside; it does not correct them, and the Rust engine still reads them (cargo test)."""
+    def test_the_three_existing_claim_files_are_sendable_and_unchanged(self):
+        """The repository's claim files keep their meaning and add up under the unit rule (1000 dollars, one line of
+        100000 cents), so each becomes a request.  The files are not changed, and the Rust engine still reads them
+        (cargo test)."""
+        seen = set()
         for relative in ("rust-engine/claim_input.json", "ops/canaries/approved_claim_input.example.json",
                          "ops/canaries/denied_claim_input.example.json"):
             path = ROOT / relative
             before = path.read_bytes()
             claim = json.loads(before)
+            self.assertEqual((claim["claim_amount"], [ln["charge_cents"] for ln in claim["service_lines"]]), (1000, [100000]), relative)
             got = ad.request_of(claim, SECRET)
-            self.assertIsInstance(got, ad.SetAside, relative)
-            self.assertEqual(got.cause, "total_mismatch", relative)
+            self.assertIsInstance(got, ad.Request, relative)
+            self.assertEqual((got.claim_id, got.cents, got.payee, len(got.lines)), (claim["claim_id"], 100000, "1234567893", 1), relative)
+            line = got.lines[0]
+            self.assertEqual((line.line_number, line.procedure, line.units, line.cents, line.date, line.rendering),
+                             ("1", "99213", 1, 100000, 20241004, "1234567893"), relative)
+            self.assertEqual(got.assumptions, ("rendering_party_is_billing_npi_test_only",), relative)
             self.assertEqual(path.read_bytes(), before, relative)
+            seen.add(got.payment_id)
+        self.assertEqual(len(seen), 3)  # three claims, three payments
 
 
 class RightRailDefinitions(unittest.TestCase):
