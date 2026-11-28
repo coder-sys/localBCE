@@ -1,7 +1,8 @@
 # Eligibility extract and live wiring: design
 
 Status: **approved by the owner on 2026-11-28 with changes to D3, D6, D7, D8 and D9 (section 5). Part 1's writer and
-its checks are built (section 2.5). Part 2 is not built. Nothing here loads facts into a store or decides a line.**
+its checks are built (section 2.5). Part 2's two pure functions are built (section 3.5); the shadow run and any live
+decision are not. Nothing here loads facts into a store, runs RightRail or decides a line.**
 Written 2026-11-28 against `codex/rightrail-trunk-e5d0f36b` at `6a493e04` (`rightrail/` is trunk `e5d0f36b` plus the
 maintainer's axiom-pin fix). Synthetic, not legally verified, nonpayment.
 
@@ -122,14 +123,14 @@ Built 2026-11-28: `scripts/build_elig_extract.py`, `scripts/tests/test_build_eli
 | For each of the 17 files in trunk's `hostile.json` that a roster can express, the writer refuses with the cause the reader names. The other 23 fault the framing, filler, trailer, cover code or registry entry, which the writer makes itself; the test lists them by name | Python only | yes |
 | A record lacking any required field is refused; placeholders appear only in test mode; a missing status is refused in both modes | Python only | yes |
 | The localBCE roster fixture becomes a file with pinned bytes; a second run gives the same bytes; errors carry no field value | Python only | yes |
-| Trunk's independent extract verifier accepts the writer's file: 10 fact rows, the receipt's counts and file digest, and no raw member id in a fact row | Trunk's `right_rail_reader_elig_independent`, run in its own process with no bytecode written. Skipped with the reason named if it cannot be imported | yes if it imports there; confirmed on Windows only so far |
+| Trunk's independent extract verifier accepts the writer's file: 10 fact rows, the receipt's counts and file digest, and no raw member id in a fact row | Trunk's `right_rail_reader_elig_independent`, run in its own process with no bytecode written. Skipped with the reason named if it cannot be imported | yes: it ran and passed on the Linux and the Windows CI jobs (run of `be54adea`, 2026-11-28) |
 | The facts lead to the eligibility read the G2 pack's cases assume | Trunk's fact store and belief, in Lean | no: not attempted here |
 | A gate decides a line from these facts | **Blocked**: the engine does not carry the eligibility read | no |
 
 The first five rows are built and pass. The fifth runs trunk's independent verifier, not its main reader (which, as I
 read it, imports the fee-for-service module and so needs Windows).
 
-## 3. Part 2: a claim as a payment line, and the decision back (not built)
+## 3. Part 2: a claim as a payment line, and the decision back
 
 **`claim_input.json` does not change (D6).** The Rust engine reads it and it keeps working as it is. Everything below
 is done in a converter that reads the same file.
@@ -225,7 +226,15 @@ Two rules bound this work. `AGENTS.md`: nothing is silently wired into the activ
 writer decides. So the wiring is an adapter outside `rightrail/` that is off by default, and anything that must change
 inside `rightrail/` goes to the maintainer.
 
-### 3.5 What can be built and tested now
+### 3.5 What is built, and what can be built later
+
+Built 2026-11-28: `scripts/rightrail_claim_adapter.py` (`request_of`, `result_of`),
+`scripts/tests/test_rightrail_claim_adapter.py` and the case tables `scripts/tests/fixtures/claim_adapter/claims.json`
+(43 cases) and `decisions.json` (26 cases). They are pure functions: nothing calls them, and they run nothing of
+RightRail's. The first, third and fourth rows below are built and pass. The ids, the member key and the NPI check are
+compared with RightRail's own definitions, read from their source text. Where a hold's reason is one that two localBCE
+denials share (`MEMBER_NOT_ENROLLED`: G1 and G3), the result gives the RightRail name, not a guess. A decision that is
+missing, incomplete or not understood gives no result at all.
 
 | Piece | Needs | In CI |
 |---|---|---|

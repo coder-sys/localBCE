@@ -586,3 +586,20 @@
   parked snapshot builder stays parked (D1). Benefit level has no field
   and is dropped. Nothing loads facts into a store or decides a line.
   Part 2 (claim to payment line, decision back) is not built.
+- 2026-11-28: be54adea (extract writer, part 1) was pushed to
+  codex/rightrail-trunk-e5d0f36b as a plain fast-forward with the owner's
+  approval, confirmed with ls-remote; the three CI jobs on draft PR 10
+  passed, and RightRail's independent extract verifier ran and passed on
+  the Linux and Windows jobs. Read-only date check: feeding the Rust
+  engine yyyymmdd numbers changes no result (288 lines with a calendar
+  service date give the same status and reason as with day counts; 20
+  lines with an invalid date have no day count). The owner decided to
+  leave the harness encoding as it is; the parity report's assumptions
+  now say so. Part 2's two pure functions built
+  (scripts/rightrail_claim_adapter.py): a claim as a RightRail payment
+  request or a set-aside (day-count date rule; a total mismatch or an
+  unconvertible date is set aside, nothing corrected; the billing NPI as
+  rendering party is a flagged test-only assumption), and a decision as
+  an adjudication result (only an allow on every line gives APPROVED; a
+  hold is not a final denial). claim_input.json is unchanged. Nothing
+  calls these functions and nothing runs RightRail.

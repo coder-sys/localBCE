@@ -110,6 +110,12 @@ ASSUMPTIONS = [
     "both as missing (Run.lean `snapshot`).",
     "A line the vector gives no expected result is not compared, and is not counted as released for later "
     "commits (its Lean result is unknown here).",
+    "Dates are given to the Rust engine as yyyymmdd numbers, not in its stated encoding (integer days since "
+    "1970-01-01, rust-engine/rules.json).  The engine only compares a claim's dates with each other (G3), and "
+    "yyyymmdd numbers sort as day counts do, so no result depends on it: checked on 2026-11-28, all 288 lines with a "
+    "calendar service date give the same status and reason in both encodings.  The 20 lines whose service date is "
+    "not a calendar date (13 v1 lines, 7 G2 pack cases) have no day count; they can be shown to the engine only "
+    "in this encoding, and a converter would set such a claim aside instead.",
 ]
 
 
