@@ -568,3 +568,21 @@
   localBCE denial, 7 review against a localBCE approval, 3 held by both
   with localBCE naming G1). The RightRail side for the G2 cases is the
   pack's pinned expected reasons, not a running gate.
+- 2026-11-28: 6a493e04 (parity harness, M4) was pushed to
+  codex/rightrail-trunk-e5d0f36b as a plain fast-forward with the owner's
+  approval, confirmed with ls-remote; the three CI jobs on draft PR 10
+  passed. The owner approved ELIG_EXTRACT_AND_WIRING_DESIGN.md with
+  changes: placeholders only in an explicit test mode, and a missing
+  status never defaults to eligible (D3); claim_input.json does not
+  change, the converter applies the stated date rule and sets aside a
+  claim whose total is not its line sum (D6); the billing NPI as
+  rendering party is a test-only assumption (D7); only a RightRail allow
+  maps to APPROVED and a hold is not a final denial (D8); a shadow run
+  decides nothing (D9). Part 1 built: scripts/
+  build_elig_extract.py writes a synthetic roster as an RRELIG01 extract.
+  It reproduces trunk's three golden extract files byte for byte, refuses
+  the 17 hostile files a roster can express with the reader's cause, and
+  trunk's independent verifier accepts its output (10 fact rows). The
+  parked snapshot builder stays parked (D1). Benefit level has no field
+  and is dropped. Nothing loads facts into a store or decides a line.
+  Part 2 (claim to payment line, decision back) is not built.

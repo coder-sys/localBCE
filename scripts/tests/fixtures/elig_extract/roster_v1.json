@@ -1,0 +1,21 @@
+{
+  "_note": "Hand-written synthetic eligibility roster for scripts/build_elig_extract.py tests. Invented ids, no PHI, not legally verified. Every record supplies every required field.",
+  "synthetic": true,
+  "sender": "LOCALBCE-SYN-ELIG",
+  "scope": "LOCALBCE-SYN-STATE",
+  "program": "SYN-PROGRAM",
+  "as_of": "2027-03-14",
+  "full_roster": true,
+  "records": [
+    {"member_id": "S00000001", "aid": "13", "benefit_level": 1, "start": "2026-01-01", "segment": "SEG-0001", "status": "E", "basis": "G", "determined": "2025-12-15", "notice": "2025-12-16"},
+    {"member_id": "S00000002", "aid": "23", "benefit_level": 1, "start": "2026-01-01", "end": "2027-12-31", "segment": "SEG-0001", "status": "E", "basis": "G", "determined": "2025-12-15", "notice": "2025-12-16"},
+    {"member_id": "S00000003", "aid": "53", "benefit_level": 1, "start": "2026-01-01", "end": "2026-12-31", "segment": "SEG-0001", "status": "E", "basis": "G", "determined": "2025-12-15", "notice": "2025-12-16"},
+    {"member_id": "S00000003", "aid": "53", "benefit_level": 1, "start": "2027-01-01", "segment": "SEG-0002", "status": "E", "basis": "C", "determined": "2026-12-10", "notice": "2026-12-11"},
+    {"member_id": "S00000004", "aid": "103", "benefit_level": 1, "start": "2025-07-01", "segment": "SEG-0001", "status": "E", "basis": "G", "determined": "2025-06-20", "notice": "2025-06-21"},
+    {"member_id": "S00000005", "aid": "104", "benefit_level": 0, "start": "2026-01-01", "segment": "SEG-0001", "status": "E", "basis": "G", "determined": "2025-12-15", "notice": "2025-12-16"},
+    {"member_id": "S00000006", "aid": "999", "benefit_level": 1, "start": "2026-01-01", "segment": "SEG-0001", "status": "E", "basis": "G", "determined": "2025-12-15", "notice": "2025-12-16"},
+    {"member_id": "S00000007", "aid": "13", "start": "2026-01-01", "segment": "SEG-A", "status": "N", "basis": "R", "determined": "2027-03-01", "notice": "2027-03-20"},
+    {"member_id": "S00000008", "aid": "13", "start": "2027-03-01", "end": "2027-03-31", "segment": "SEG-0001", "status": "P", "basis": "G", "program": "SYN-OTHER", "determined": "2027-03-01", "notice": "2027-03-02"},
+    {"member_id": "S00000009", "aid": "13", "start": "2027-03-10", "segment": "SEG-0001", "status": "R", "basis": "P", "determined": "2027-03-10", "notice": "2027-03-10"}
+  ]
+}
