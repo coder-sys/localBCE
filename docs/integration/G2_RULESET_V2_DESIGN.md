@@ -1,7 +1,7 @@
 # G2 as a rule-set v2 source and pack: design
 
-Status: **approved by the owner on 2026-11-26 with changes (section 7). The CI-checkable part is built and not yet
-committed (section 5). Nothing here runs in a gate.** Written 2026-11-25 against `codex/rightrail-trunk-e5d0f36b` at
+Status: **approved by the owner on 2026-11-26 with changes (section 7). The CI-checkable part and the local-only
+checks are built (section 5). Nothing here runs in a gate.** Written 2026-11-25 against `codex/rightrail-trunk-e5d0f36b` at
 `9ff13104` (`rightrail/` is trunk `e5d0f36b` plus the maintainer's axiom-pin fix). Synthetic, not legally verified,
 nonpayment. This replaces `TRUNK_STEP3_G2_DESIGN.md` (G2 as fixed Lean, superseded by the maintainer's answers 4 and 5,
 `HANDOFF.md` section 5).
@@ -132,7 +132,9 @@ All outside `rightrail/`, so no protected change and no XI.2 record:
 | `rules/rightrail_packs/g2_elig_v2.source.json` | The source: header fields, synthetic citation, the maximum age, the aid list, the three rules as nested lists, a copy of pack 1, and the `synthetic`, `not_legally_verified` and `nonpayment` markers |
 | `scripts/build_g2_ruleset_pack.py` | Encodes the source with trunk's codec (`rightrail/app/right_rail_ruleset_codec.py`) and prints each record's cost and body digest; `--check` compares with the pins. It writes nothing |
 | `rules/rightrail_packs/g2_elig_v2.expected.json` | The pins: both records' digests and costs, the case table, the blocked `bbd0e947` cases |
-| `scripts/tests/test_g2_ruleset_pack.py` | The checks in section 5 |
+| `scripts/tests/test_g2_ruleset_pack.py` | The Python-only checks in section 5 |
+| `scripts/g2_ruleset_pack_lean.py` | Local only: puts both records and the cases to `ruleset_admit` with test keys and prints its answers. It writes nothing |
+| `scripts/tests/test_g2_ruleset_pack_lean.py` | The local-only checks in section 5 |
 
 Two records come from the one source (D5): an **eligibility-only** record like trunk's test pack, for the case table
 (3 rules, cost 20); and a **full** record, pack 1's thirteen rules and four ages plus these three rules and source 7
@@ -149,11 +151,23 @@ today's fact rules. The records carry placeholder bytes where signatures go: the
 | The copy of pack 1 equals trunk's (`rightrail/tests/test_ruleset_v1_codec.py`); the aid list equals the Rust engine's | Python only | yes | built |
 | A record with a rule for 24 or 25 is well formed but not admissible | Python only | yes | built |
 | Mutants: each of 28 one-node changes to the pack fails a named case | Python only | yes | built |
-| The same cases through Lean's `dataFires` (`ruleset_admit` EVAL lines) agree with the reference | `ruleset_admit.exe` (built locally by `lake build`; CI does not build Lean) | no | not built |
-| A signed copy is admitted (`ADMIT`), and a copy with a rule for 24 is refused `NOSOURCE` | `ruleset_admit.exe` and the signer at `C:\work\rightrail`, with throwaway keys (D7) | no | not built |
+| The same 43 cases through Lean's `dataFires` (`ruleset_admit` EVAL lines), on both records, agree with the reference | `ruleset_admit.exe` and the signer (the tool answers nothing without a signed test key set) | no: skipped, reason named | built, local only |
+| A copy of each record signed with test keys is admitted (`ADMIT`); signed under the version 1 tag or by one key it is refused `UNSIGNED`; with a rule for 24 it is refused `NOSOURCE` | `ruleset_admit.exe` and the signer, with test keys (D7) | no: skipped, reason named | built, local only |
 
-Every row marked built checks the pack's logic against trunk's Python reference. None of them is a gate running the
-pack (section 6).
+Every row marked built checks the pack's logic against trunk's Python reference or its Lean model. None of them is a
+gate running the pack (section 6).
+
+**A test-key admission checks mechanics only. It is not a real signed rule set.** The local-only checks
+(`scripts/g2_ruleset_pack_lean.py`, `scripts/tests/test_g2_ruleset_pack_lean.py`) use RightRail's fixed test-only keys,
+derived in memory from public constants by the signer's known-answer mode `kat-keygen`, which writes nothing. No key or
+seed file is made and `keygen` is never run. The admitted copies carry the test fixture's state, tenant and signing
+window in place of the source's, so their digests are not the pinned ones. Nobody with authority over a rule set has
+signed anything, and an `ADMIT` line says only that the record passes the Lean admission code under a test key set.
+
+The local-only test is skipped, with the reason named, unless `G2_LEAN_CHECK=1` is set and both executables are found:
+`ruleset_admit.exe` (from `lake build` in `rightrail/lean`) and the pinned signer `rr_gate_mldsa87.exe` (in this
+checkout, in a RightRail clone beside it, or at `RR_GATE_SIGNER`). CI has neither, so CI skips it; the owner accepted
+that on 2026-11-28. It is run under the memory guard (`scripts/rr_guarded_interim.ps1`).
 
 The case table carries over what still applies from `bbd0e947`'s contexts:
 
@@ -214,6 +228,6 @@ draft needing the founder's approval, and this pack does not depend on it for th
 | D4 | "Not eligible" status | Fires 26, not `MEMBER_NOT_ENROLLED` (9) |
 | D5 | Which records to build | Both, from one source |
 | D6 | Where it lives | localBCE, outside `rightrail/` |
-| D7 | Signed admission check | Use the signer already built at `C:\work\rightrail`, with throwaway keys. Not built yet |
+| D7 | Signed admission check | Use the signer already built at `C:\work\rightrail`, with test keys. Built 2026-11-28 with RightRail's fixed test-only keys through `kat-keygen` (the owner's choice): keys in memory only, no seed file. Mechanics only, not a real signed rule set |
 | D8 | Forced differences | Accepted. The missing benefit level test is an open gap: the pack is partial G2 until the fact carries a benefit level, and reasons 24 and 25 stay unused |
 | D9 | Questions for the maintainer | Send all three: the links-file reading, who builds the engine's `elRead`, whether a benefit level field is planned |

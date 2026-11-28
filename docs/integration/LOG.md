@@ -538,3 +538,21 @@
   3fa1c83e as a plain push of a new branch (no force), confirmed with
   ls-remote. RIGHTRAIL_IMPORTED_FROM.md, TRUNK_MOVE_PLAN.md decision 1 and
   HANDOFF.md section 1 now say so in place of "push on hold".
+- 2026-11-28: G2 as a rule-set v2 pack, local-only checks (design:
+  G2_RULESET_V2_DESIGN.md; the Python part is commit 6e6ea7d4). With the
+  owner's approval the 43 cases were put to RightRail's Lean tool
+  ruleset_admit, and copies of both records were admitted under test keys.
+  The keys are RightRail's fixed test-only keys, derived in memory by the
+  signer's kat-keygen mode; no key or seed file was made, keygen was not
+  run, and nothing was written into either repository. A test-key
+  admission checks mechanics only and is not a real signed rule set. The
+  owner accepted that scripts/tests/test_g2_ruleset_pack_lean.py is
+  skipped, with the reason named, where G2_LEAN_CHECK=1 is not set or the
+  Lean or signer executable is absent, which includes CI. Run under the
+  memory guard: 3 tests passed, peak 69 MB. Not pushed.
+- 2026-11-28: at the owner's request the guarded local-only G2 test was
+  run five times in a row: 3 tests passed each time (10.7 to 11.0 s, peak
+  67 to 69 MB), and the helper's full output (every Lean answer and
+  admission line) was identical across five further runs. Nothing was
+  written into either repository. The owner then approved committing the
+  local-only checks as one local commit, not pushed.
