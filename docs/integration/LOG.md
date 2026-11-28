@@ -619,3 +619,37 @@
   existing claim files are sendable and unchanged. The pushed commit is
   not amended. The design states the rule as the adapter's own and cites
   the parked schema as its origin.
+- 2026-11-28: 7efc96f7 (the unit correction) was pushed to
+  codex/rightrail-trunk-e5d0f36b as a plain fast-forward with the owner's
+  approval, confirmed with ls-remote; the three CI jobs on draft PR 10
+  passed (scripts/tests 109 ran on Linux and on Windows, 1 skip each).
+  The owner approved SHADOW_RUN_DESIGN.md with changes: a scenario set
+  that includes scenarios expected to differ, each with its outcome
+  stated in advance; the pinned engine only (the rows-file engine with a
+  substituted pin is not approved); requests built directly, which
+  bypasses RightRail's claim intake; a separate record file with no raw
+  member id, each record saying in words that it is a test-key run that
+  decides nothing and binds no one; the CI skip accepted. Built: the
+  scenario set (13 scenarios), the pure parts and the runner. The run
+  itself HAS NOT BEEN RUN: RightRail's store fixture needs an epoch key
+  file made by the signer's keygen mode (a sealed seed file in the
+  scratch directory), which the approved key arrangement does not cover.
+  The runner refuses to start without SHADOW_ALLOW_SCRATCH_KEYGEN=1; the
+  owner's decision on that is open (design D11).
+- 2026-11-28: the owner approved the scratch key files (D11): keygen may
+  make the store epoch keys in the scratch directory only; they are never
+  copied, logged or printed; the report confirms they are gone. The
+  scenario table was approved as written. FIRST SHADOW RUN, once, under
+  the memory guard (exit 0, peak 179 MB), run id
+  shadow-20261128T073023+0000, pinned engine gate_engine.exe 8baf1ba3...
+  All 13 scenarios gave their predicted outcome, with no expectation
+  changed: 11 sent, 2 set aside; 3 allow and 4 hold agree (matched, by
+  construction); 4 differ as predicted (member absent from the feed:
+  HOLD MEMBER_NOT_ENROLLED; repeat of a paid claim: ANSWERED
+  FFS_DUPLICATE_LINE; future service date: HUMAN_REVIEW
+  SERVICE_DATE_FUTURE; stale death feed: HUMAN_REVIEW STALE_DMF). The
+  scratch directory (under trunk's test scratch root, outside both
+  repositories) and its key files are gone; no raw member id is in the
+  records; nothing under rightrail/, parked/ or the RightRail clone
+  changed. It is a test-key run: it decided nothing and binds no one.
+  Records are in state/shadow/ (untracked, not committed).
