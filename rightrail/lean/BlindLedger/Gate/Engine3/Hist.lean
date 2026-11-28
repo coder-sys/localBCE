@@ -530,7 +530,9 @@ def planOf (nI n : Nat) (lg li : Array Nat) (fr fu : Array (Option (Nat × Nat �
     the keys a line of a redone payment has (exact or near).  A key of a summarised core reads from its entry what the
     decider uses (`Flat.DecideCut.decideRows_cut`): on the released side, when no line of a redone payment has it, its
     first row; on the unresolved side, when it is a fee-for-service key, its first row and its first row not identical to
-    the first.  Its count is the entry's.  Every other key reads its core's chain, filtered by the key. -/
+    the first.  Its count is the entry's.  A released exact key of more than one row reads its chain instead, since an
+    exact repeat is answered against all of its rows (`answeringB`).  Every other key reads its core's chain, filtered
+    by the key. -/
 def readSet (st : Side) (u : Bool) (gq iq : Array KeyQ) (ks : Kset) (rk : Array Bool) :
     IO (Array Hit × Array RowX × Array Nat × Array (Option (Nat × Nat × ByteArray))) := do
   let found ← findCores st gq u
@@ -552,7 +554,7 @@ def readSet (st : Side) (u : Bool) (gq iq : Array KeyQ) (ks : Kset) (rk : Array 
           match st.sum.find near (if near then nearHashR st.sum.seed row else exactHashR st.sum.seed row) with
           | none => pure ()
           | some (_, e) =>
-            if e.mixed then
+            if e.mixed || (!u && (kd == 1 || kd == 3) && 1 < e.count) then
               via := via.set! j 1
               walk := walk.set! g true
             else
@@ -631,22 +633,6 @@ structure Got where
   idx : Array Nat
   keys : Array KeyQ
 
-/-- The kept requests' store lines and each line's payment number: a ruled request with lines gets the next number,
-    in request order, once per line.  None when such a request has no payment field.  The loop `read` ran inline, moved
-    here unchanged so a lemma can name it (`Flat.PayNum.payLines_pidx`); `nb` sizes the buffers. -/
-def payLines (reqs : Array Run.Req) (nb : Nat) : Option (ByteArray × Array Nat) := Id.run do
-  let mut lb := ByteArray.emptyWithCapacity (lineW2 * nb)
-  let mut pidx : Array Nat := Array.emptyWithCapacity nb
-  let mut np := 0
-  for x in reqs do
-    if x.ra.flow.ruled && !x.ra.lines.isEmpty then
-      let some pf := ReadB.payField x.ra.programId x.ra.paymentId | return none
-      for ln in x.ra.lines do
-        lb := ReadB.storeLine lb ln pf
-        pidx := pidx.push np
-      np := np + 1
-  return some (lb, pidx)
-
 /-- `ReadB.read` on the rows files: same arguments, same layout.  None when a kept line has no store line.  Reads that fail
     to complete raise an IO error (the batch is not answered). -/
 def read (h : Hist) (bs : ByteArray) (q : Frame.Req) (reqs : Array Run.Req) (b : Array Line) (byp lim : List (Nat × Nat))
@@ -655,7 +641,16 @@ def read (h : Hist) (bs : ByteArray) (q : Frame.Req) (reqs : Array Run.Req) (b :
   let seed := ld64 (← IO.getRandomBytes 8) 0
   let fx ← evalNow (ReadB.feedsW bs q pres seed)
   let t0 ← tk 17 t0
-  let some (lb, pidx) := payLines reqs b.size | return none
+  let mut lb := ByteArray.emptyWithCapacity (lineW2 * b.size)
+  let mut pidx : Array Nat := Array.emptyWithCapacity b.size
+  let mut np := 0
+  for x in reqs do
+    if x.ra.flow.ruled && !x.ra.lines.isEmpty then
+      let some pf := ReadB.payField x.ra.programId x.ra.paymentId | return none
+      for ln in x.ra.lines do
+        lb := ReadB.storeLine lb ln pf
+        pidx := pidx.push np
+      np := np + 1
   if pidx.size != b.size || lb.size != lineW2 * b.size then return none
   let req ← evalNow ((Array.range b.size).map fun i => RowX.ofChunk lb (lineW2 * i))
   let t0 ← tk 20 t0

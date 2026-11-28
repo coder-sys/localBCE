@@ -1,4 +1,4 @@
-"""History segments (docs/CORE_REDESIGN.md "History segments"): bounded, chained, exported
+"""History segments (ARCHITECTURE.md "History segments"): bounded, chained, exported
 incrementally, restored by replay and verified independently. Synthetic, non-PHI, nonpayment."""
 
 from __future__ import annotations

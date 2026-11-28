@@ -1,0 +1,51 @@
+{
+  "_note": "Case table for scripts/rightrail_claim_adapter.py result_of, over the two-line base claim of claims.json. A row is [line position, outcome, reasons] as RightRail's decide_claims gives it per line. Synthetic, not legally verified. The rule under test: only ALLOW on every line gives APPROVED.",
+  "cases": [
+    {"name": "allow_every_line", "rows": [[0, "ALLOW", []], [1, "ALLOW", []]],
+     "expect": {"status": "APPROVED", "reason": null, "rightrail_outcome": "ALLOW", "rightrail_reasons": [], "rightrail_final": true}},
+    {"name": "allow_rows_in_any_order", "rows": [[1, "ALLOW", []], [0, "ALLOW", []]],
+     "expect": {"status": "APPROVED", "reason": null, "rightrail_outcome": "ALLOW", "rightrail_reasons": [], "rightrail_final": true}},
+
+    {"name": "hold_one_line", "rows": [[0, "ALLOW", []], [1, "HOLD", ["MEMBER_DECEASED"]]],
+     "expect": {"status": "DENIED", "reason": "G9_RECIPIENT_DECEASED", "rightrail_outcome": "HOLD", "rightrail_reasons": ["MEMBER_DECEASED"], "rightrail_final": false}},
+    {"name": "hold_every_line", "rows": [[0, "HOLD", ["PROVIDER_EXCLUDED"]], [1, "HOLD", ["PROVIDER_EXCLUDED"]]],
+     "expect": {"status": "DENIED", "reason": "G5_PROVIDER_NOT_ENROLLED", "rightrail_outcome": "HOLD", "rightrail_reasons": ["PROVIDER_EXCLUDED"], "rightrail_final": false}},
+    {"name": "hold_duplicate", "rows": [[0, "HOLD", ["FFS_DUPLICATE_LINE"]], [1, "ALLOW", []]],
+     "expect": {"status": "DENIED", "reason": "G7_DUPLICATE_CLAIM", "rightrail_outcome": "HOLD", "rightrail_reasons": ["FFS_DUPLICATE_LINE"], "rightrail_final": false}},
+    {"name": "hold_program_not_eligible", "rows": [[0, "HOLD", ["PROGRAM_NOT_ELIGIBLE"]], [1, "HOLD", ["PROGRAM_NOT_ELIGIBLE"]]],
+     "expect": {"status": "DENIED", "reason": "G2_PROGRAM_ELIGIBILITY_FAILED", "rightrail_outcome": "HOLD", "rightrail_reasons": ["PROGRAM_NOT_ELIGIBLE"], "rightrail_final": false}},
+    {"name": "hold_reason_two_local_rules_share", "rows": [[0, "HOLD", ["MEMBER_NOT_ENROLLED"]], [1, "HOLD", ["MEMBER_NOT_ENROLLED"]]],
+     "expect": {"status": "DENIED", "reason": "MEMBER_NOT_ENROLLED", "rightrail_outcome": "HOLD", "rightrail_reasons": ["MEMBER_NOT_ENROLLED"], "rightrail_final": false}},
+    {"name": "hold_reason_with_no_local_rule", "rows": [[0, "HOLD", ["ALREADY_DECIDED"]], [1, "HOLD", ["ALREADY_DECIDED"]]],
+     "expect": {"status": "DENIED", "reason": "ALREADY_DECIDED", "rightrail_outcome": "HOLD", "rightrail_reasons": ["ALREADY_DECIDED"], "rightrail_final": false}},
+    {"name": "hold_with_no_reason_given", "rows": [[0, "HOLD", []], [1, "ALLOW", []]],
+     "expect": {"status": "DENIED", "reason": "RIGHTRAIL_HOLD", "rightrail_outcome": "HOLD", "rightrail_reasons": [], "rightrail_final": false}},
+    {"name": "hold_with_several_reasons", "rows": [[0, "HOLD", ["STALE_DMF", "MEMBER_DECEASED", "ALREADY_DECIDED"]], [1, "ALLOW", []]],
+     "expect": {"status": "DENIED", "reason": "G9_RECIPIENT_DECEASED", "rightrail_outcome": "HOLD", "rightrail_reasons": ["ALREADY_DECIDED", "MEMBER_DECEASED", "STALE_DMF"], "rightrail_final": false}},
+    {"name": "hold_outranks_review", "rows": [[0, "HUMAN_REVIEW", ["STALE_DMF"]], [1, "HOLD", ["MEMBER_DECEASED"]]],
+     "expect": {"status": "DENIED", "reason": "G9_RECIPIENT_DECEASED", "rightrail_outcome": "HOLD", "rightrail_reasons": ["MEMBER_DECEASED"], "rightrail_final": false}},
+
+    {"name": "review_one_line", "rows": [[0, "ALLOW", []], [1, "HUMAN_REVIEW", ["STALE_DMF"]]],
+     "expect": {"status": "DENIED", "reason": "RIGHTRAIL_HUMAN_REVIEW", "rightrail_outcome": "HUMAN_REVIEW", "rightrail_reasons": ["STALE_DMF"], "rightrail_final": false}},
+    {"name": "review_eligibility_unverified", "rows": [[0, "HUMAN_REVIEW", ["PROGRAM_NOT_ELIGIBLE_UNVERIFIED", "STALE_ELIGIBILITY"]], [1, "HUMAN_REVIEW", ["PROGRAM_NOT_ELIGIBLE_UNVERIFIED", "STALE_ELIGIBILITY"]]],
+     "expect": {"status": "DENIED", "reason": "RIGHTRAIL_HUMAN_REVIEW", "rightrail_outcome": "HUMAN_REVIEW", "rightrail_reasons": ["PROGRAM_NOT_ELIGIBLE_UNVERIFIED", "STALE_ELIGIBILITY"], "rightrail_final": false}},
+    {"name": "review_outranks_answered", "rows": [[0, "ANSWERED", ["FFS_DUPLICATE_LINE"]], [1, "HUMAN_REVIEW", ["FFS_NEAR_DUPLICATE"]]],
+     "expect": {"status": "DENIED", "reason": "RIGHTRAIL_HUMAN_REVIEW", "rightrail_outcome": "HUMAN_REVIEW", "rightrail_reasons": ["FFS_NEAR_DUPLICATE"], "rightrail_final": false}},
+
+    {"name": "answered_repeat", "rows": [[0, "ANSWERED", ["FFS_DUPLICATE_LINE"]], [1, "ANSWERED", ["FFS_DUPLICATE_LINE"]]],
+     "expect": {"status": "DENIED", "reason": "RIGHTRAIL_ANSWERED", "rightrail_outcome": "ANSWERED", "rightrail_reasons": ["FFS_DUPLICATE_LINE"], "rightrail_final": true}},
+    {"name": "answered_beside_an_allow", "rows": [[0, "ALLOW", []], [1, "ANSWERED", ["FFS_DUPLICATE_LINE"]]],
+     "expect": {"status": "DENIED", "reason": "RIGHTRAIL_ANSWERED", "rightrail_outcome": "ANSWERED", "rightrail_reasons": ["FFS_DUPLICATE_LINE"], "rightrail_final": true}},
+
+    {"name": "no_rows", "rows": [], "no_decision": true},
+    {"name": "one_line_unanswered", "rows": [[0, "ALLOW", []]], "no_decision": true},
+    {"name": "a_line_answered_twice", "rows": [[0, "ALLOW", []], [0, "ALLOW", []], [1, "ALLOW", []]], "no_decision": true},
+    {"name": "a_line_that_does_not_exist", "rows": [[0, "ALLOW", []], [1, "ALLOW", []], [2, "ALLOW", []]], "no_decision": true},
+    {"name": "unknown_outcome", "rows": [[0, "ALLOW", []], [1, "PAID", []]], "no_decision": true},
+    {"name": "outcome_in_lower_case", "rows": [[0, "allow", []], [1, "allow", []]], "no_decision": true},
+    {"name": "approved_is_not_an_outcome", "rows": [[0, "APPROVED", []], [1, "APPROVED", []]], "no_decision": true},
+    {"name": "reasons_not_a_list", "rows": [[0, "ALLOW", "none"], [1, "ALLOW", []]], "no_decision": true},
+    {"name": "line_position_as_text", "rows": [["0", "ALLOW", []], [1, "ALLOW", []]], "no_decision": true},
+    {"name": "another_payments_rows", "rows": [[0, "ALLOW", []], [1, "ALLOW", []]], "payment_id": "C00000000000000000000000000000000", "no_decision": true}
+  ]
+}

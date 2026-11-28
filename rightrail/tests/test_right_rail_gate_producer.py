@@ -21,6 +21,7 @@ from app import right_rail_gate_decide as decide
 from app import right_rail_gate_mark as marks
 from app import right_rail_gate_producer as producer
 from app import right_rail_gate_signer as signer
+from tests import _gate_shards as g
 from tests import test_right_rail_gate_formats as fx
 
 _RECORD = 80 + marks.CHECK  # one producer mark record
@@ -48,11 +49,11 @@ class ProducerTests(fx.Scratch):
     """One serial producer per (tenant, shard): reserve, sign, Lean publish check, seal, mark, publish."""
 
     def _open(self, tmp: str, custody, epoch: int = fx.EPOCH, mark: str = "shard.mark"):
-        handle, root_pk, cert = custody
+        handle, held, cert = custody
         return self.track(producer.ShardProducer(Path(tmp) / "shard.sqlite3", mark_path=Path(tmp) / mark,
                                       tenant_id=fx.TENANT, shard_id=fx.SHARD, epoch=epoch, handle=handle,
-                                      root_pk=root_pk, key_cert=cert, payer_newest=gate.ZERO_DIGEST,
-                                      counter=TestOnlyCounter(Path(tmp) / "shard.counter"), floors=lambda: (0, 0)))
+                                      link=held, cosign=fx.cosigner(),  key_cert=cert, payer_newest=gate.ZERO_DIGEST,
+                                      counter=TestOnlyCounter(Path(tmp) / "shard.counter"), floors=lambda: (0, 0, 0, bytes(64))))
 
     def test_chain_links_and_publishes_in_seq_order(self) -> None:
         with self.scratch() as tmp:
@@ -165,10 +166,10 @@ class ProducerTests(fx.Scratch):
             with self.subTest(mode), self.scratch() as tmp:
                 custody = fx.custody(tmp)
                 counter = _Flaky(Path(tmp) / "shard.counter")
-                handle, root_pk, cert = custody
+                handle, held, cert = custody
                 p = self.track(producer.ShardProducer(Path(tmp) / "shard.sqlite3", mark_path=Path(tmp) / "shard.mark", tenant_id=fx.TENANT,
-                                                      shard_id=fx.SHARD, epoch=fx.EPOCH, handle=handle, root_pk=root_pk, key_cert=cert,
-                                                      payer_newest=gate.ZERO_DIGEST, counter=counter, floors=lambda: (0, 0)))
+                                                      shard_id=fx.SHARD, epoch=fx.EPOCH, handle=handle, link=held, cosign=fx.cosigner(),  key_cert=cert,
+                                                      payer_newest=gate.ZERO_DIGEST, counter=counter, floors=lambda: (0, 0, 0, bytes(64))))
                 sealed(p, fx.batch_pays(1, 7), state_digest=fx.STATE, created_at=fx.NOW - 1, adds=b"")  # the first seal arms the counter
                 counter.mode = mode
                 with self.assertRaisesRegex(Exception, error):
@@ -195,10 +196,10 @@ class ProducerTests(fx.Scratch):
             custody = fx.custody(tmp)
             counter = _Flaky(Path(tmp) / "shard.counter")
             counter.mode = "raises"
-            handle, root_pk, cert = custody
+            handle, held, cert = custody
             p = self.track(producer.ShardProducer(Path(tmp) / "shard.sqlite3", mark_path=Path(tmp) / "shard.mark", tenant_id=fx.TENANT,
-                                                  shard_id=fx.SHARD, epoch=fx.EPOCH, handle=handle, root_pk=root_pk, key_cert=cert,
-                                                  payer_newest=gate.ZERO_DIGEST, counter=counter, floors=lambda: (0, 0)))
+                                                  shard_id=fx.SHARD, epoch=fx.EPOCH, handle=handle, link=held, cosign=fx.cosigner(),  key_cert=cert,
+                                                  payer_newest=gate.ZERO_DIGEST, counter=counter, floors=lambda: (0, 0, 0, bytes(64))))
             with self.assertRaisesRegex(producer.GateProducerError, "signature_not_stored"):  # Round 3: the counter's OSError needs a reopen
                 sealed(p, fx.batch_pays(1), state_digest=fx.STATE, created_at=fx.NOW, adds=b"")
             p.close()
@@ -220,16 +221,16 @@ class ProducerTests(fx.Scratch):
             with self.subTest(behind=behind), self.scratch() as tmp:
                 custody = fx.custody(tmp)
                 counter = _Flaky(Path(tmp) / "shard.counter")
-                handle, root_pk, cert = custody
+                handle, held, cert = custody
                 p = self.track(producer.ShardProducer(Path(tmp) / "shard.sqlite3", mark_path=Path(tmp) / "shard.mark", tenant_id=fx.TENANT,
-                                                      shard_id=fx.SHARD, epoch=fx.EPOCH, handle=handle, root_pk=root_pk, key_cert=cert,
-                                                      payer_newest=gate.ZERO_DIGEST, counter=counter, floors=lambda: (0, 0)))
+                                                      shard_id=fx.SHARD, epoch=fx.EPOCH, handle=handle, link=held, cosign=fx.cosigner(),  key_cert=cert,
+                                                      payer_newest=gate.ZERO_DIGEST, counter=counter, floors=lambda: (0, 0, 0, bytes(64))))
                 sealed(p, fx.batch_pays(1), state_digest=fx.STATE, created_at=fx.NOW, adds=b"")
                 p.close()
                 self._open(tmp, custody).close()  # the normal reopen passes
                 p = self.track(producer.ShardProducer(Path(tmp) / "shard.sqlite3", mark_path=Path(tmp) / "shard.mark", tenant_id=fx.TENANT,
-                                                      shard_id=fx.SHARD, epoch=fx.EPOCH, handle=handle, root_pk=root_pk, key_cert=cert,
-                                                      payer_newest=gate.ZERO_DIGEST, counter=counter, floors=lambda: (0, 0)))
+                                                      shard_id=fx.SHARD, epoch=fx.EPOCH, handle=handle, link=held, cosign=fx.cosigner(),  key_cert=cert,
+                                                      payer_newest=gate.ZERO_DIGEST, counter=counter, floors=lambda: (0, 0, 0, bytes(64))))
                 sealed(p, fx.batch_pays(1, 1), state_digest=fx.STATE, created_at=fx.NOW + 1, adds=b"")
                 if behind:  # two behind: one lost increment resumes (next test), two cannot come from the honest order
                     counter._write(bytes([1]) + (0).to_bytes(8, "big"))
@@ -304,7 +305,7 @@ class ProducerTests(fx.Scratch):
             published = again.published()
             self.assertEqual(len(published), 2)
             self.assertTrue(published[1].startswith(reserved[0]))  # same header bytes at the same seq
-            self.assertEqual(len(published[1]), len(reserved[0]) + 2 + gate.ML_DSA_87_SIGNATURE)
+            self.assertEqual(len(published[1]), len(reserved[0]) + 2 + gate.ML_DSA_87_SIGNATURE + gate.COSIGN_RECORD)
 
     def _seal_with_second_check(self, tmp: str, custody, second):
         """Open a producer, make the seal's second floor check (under the lock) run ``second``, and seal one batch."""
@@ -521,7 +522,7 @@ class ProducerTests(fx.Scratch):
         with self.scratch() as tmp:
             p = self._open(tmp, fx.custody(tmp))
             cb, signed, _ = sealed(p, fx.batch_pays(2), state_digest=fx.STATE, created_at=fx.NOW, adds=b"")
-            header = signed[:-4629]
+            header = signed[: -4629 - gate.COSIGN_RECORD]
             self.assertEqual(header, gate.encode_checkpoint_header(cb))
             self.assertTrue(header.startswith(gate.CHECKPOINT))
             self.assertEqual(cb.evidence_root, gate.ZERO_DIGEST)
@@ -534,12 +535,12 @@ class ProducerTests(fx.Scratch):
             p = self._open(tmp, custody)
             cb, _, _ = sealed(p, fx.batch_pays(1), state_digest=fx.STATE, created_at=fx.NOW, adds=b"")
             p.close()
-            handle, root_pk, cert = custody
+            handle, held, cert = custody
 
             def reopen(newest):
                 return producer.ShardProducer(Path(tmp) / "shard.sqlite3", mark_path=Path(tmp) / "shard.mark", tenant_id=fx.TENANT,
-                                              shard_id=fx.SHARD, epoch=fx.EPOCH, handle=handle, root_pk=root_pk, key_cert=cert,
-                                              payer_newest=newest, counter=TestOnlyCounter(Path(tmp) / "shard.counter"), floors=lambda: (0, 0))
+                                              shard_id=fx.SHARD, epoch=fx.EPOCH, handle=handle, link=held, cosign=fx.cosigner(),  key_cert=cert,
+                                              payer_newest=newest, counter=TestOnlyCounter(Path(tmp) / "shard.counter"), floors=lambda: (0, 0, 0, bytes(64)))
             reopen(gate.checkpoint_digest(cb)).close()
             reopen(gate.ZERO_DIGEST).close()
             with self.assertRaisesRegex(producer.GateProducerError, "payer_unavailable"):
@@ -558,13 +559,13 @@ class ProducerTests(fx.Scratch):
             with contextlib.closing(sqlite3.connect(Path(tmp) / "shard.sqlite3")) as db:
                 db.executescript("DROP TRIGGER batches_seal; UPDATE batches SET signature = NULL;")
             files = {f.name: f.read_bytes() for f in Path(tmp).iterdir()}
-            handle, root_pk, cert = custody
+            handle, held, cert = custody
             with mock.patch.object(signer, "seal") as seal:
                 for _ in range(2):
                     with self.assertRaisesRegex(producer.GateProducerError, "store_rewound"):
                         producer.ShardProducer(Path(tmp) / "shard.sqlite3", mark_path=Path(tmp) / "shard.mark", tenant_id=fx.TENANT,
-                                               shard_id=fx.SHARD, epoch=fx.EPOCH, handle=handle, root_pk=root_pk, key_cert=cert,
-                                               payer_newest=gate.checkpoint_digest(cb), counter=TestOnlyCounter(Path(tmp) / "shard.counter"), floors=lambda: (0, 0))
+                                               shard_id=fx.SHARD, epoch=fx.EPOCH, handle=handle, link=held, cosign=fx.cosigner(),  key_cert=cert,
+                                               payer_newest=gate.checkpoint_digest(cb), counter=TestOnlyCounter(Path(tmp) / "shard.counter"), floors=lambda: (0, 0, 0, bytes(64)))
             seal.assert_not_called()
             self.assertEqual({f.name: f.read_bytes() for f in Path(tmp).iterdir()}, files)
 
@@ -641,12 +642,12 @@ class ProducerTests(fx.Scratch):
             other = Path(tmp) / "b"
             other.mkdir()
             shutil.copyfile(Path(tmp) / "shard.sqlite3", other / "shard.sqlite3")
-            handle, root_pk, cert = custody
+            handle, held, cert = custody
             with mock.patch.object(signer, "seal") as seal, \
                     self.assertRaisesRegex(producer.GateProducerError, "store_tampered"):
                 producer.ShardProducer(other / "shard.sqlite3", mark_path=other / "shard.mark", tenant_id=fx.TENANT,
-                                       shard_id=fx.SHARD + 1, epoch=fx.EPOCH, handle=handle, root_pk=root_pk, key_cert=cert,
-                                       payer_newest=gate.ZERO_DIGEST, counter=TestOnlyCounter(other / "shard.counter"), floors=lambda: (0, 0))
+                                       shard_id=fx.SHARD + 1, epoch=fx.EPOCH, handle=handle, link=held, cosign=fx.cosigner(),  key_cert=cert,
+                                       payer_newest=gate.ZERO_DIGEST, counter=TestOnlyCounter(other / "shard.counter"), floors=lambda: (0, 0, 0, bytes(64)))
             seal.assert_not_called()
 
     def test_pre_decide_and_uncertified_stores_refused(self) -> None:
@@ -734,8 +735,8 @@ class ProducerTests(fx.Scratch):
 
                     def open_(counter_):
                         return self.track(producer.ShardProducer(store, mark_path=mark, tenant_id=fx.TENANT, shard_id=fx.SHARD, epoch=epoch,
-                                                                 handle=later[0], root_pk=later[1], key_cert=later[2],
-                                                                 payer_newest=gate.ZERO_DIGEST, counter=counter_, floors=lambda: (0, 0)))
+                                                                 handle=later[0], link=later[1], cosign=fx.cosigner(), key_cert=later[2],
+                                                                 payer_newest=gate.ZERO_DIGEST, counter=counter_, floors=lambda: (0, 0, 0, bytes(64))))
                     if how != "deleted":  # a store recreated at its creation (the schema), and for open_row one reservation too
                         q = open_(TestOnlyCounter(Path(tmp) / "fresh.counter"))
                         if how == "open_row":
@@ -842,6 +843,546 @@ class ProducerTests(fx.Scratch):
                                  "ALTER TABLE batches DROP COLUMN dq; ALTER TABLE batches DROP COLUMN cut;")
             q = self._open(tmp, custody)
             self.assertEqual((q.published(), q.sealed_quar()), (published, None))
+
+
+EARLIER = (("line-1-0", fx.PROGRAM, "pay-0007", "line-7-0"),)  # payment 1's first line repeats paid payment 7's
+RETRY = b"r" * 32
+
+
+def answered(p, frame: bytes = b""):
+    """Seal payments 0 to 2, payment 1 ANSWERED with ``EARLIER``, filed under retry key ``RETRY``, its frame ``frame``."""
+    pays = fx.batch_pays(3)
+    pays[1] = pays[1]._replace(outcome="ANSWERED", reasons=("FFS_DUPLICATE_LINE",), earlier=EARLIER)
+    p.prepared = decide.Answer((), fx.STATE, bytes(chain.AUTH), None, None, fx.D[1], 0, 1, tuple(pays), fx.D[6], frame=frame, retry=RETRY)
+    return p.commit(fx.PROGRAM, p.prepared, fx.NOW)
+
+
+def request_frame(n: int) -> bytes:
+    """A decide request frame (conformance/FRAME_V1.md section 2) carrying payments 0 to ``n - 1``'s requests, with no
+    feeds, grant, key set, release, steps, bypasses or rule-set records: what ``right_rail_gate_decide._requests`` reads."""
+    le = lambda v: v.to_bytes(4, "little")  # noqa: E731
+    bodies = [gate.encode_decide_request(fx.payment_request(k)) for k in range(n)]
+    return bytes(82 + 4 + 4 + 64) + le(0) + bytes(4 * 77 + 64 + 9 + 4 + 4 + 64) + le(0) * 6 + le(len(bodies)) + b"".join(le(len(b)) + b for b in bodies)
+
+
+class EarlierListTests(fx.Scratch):
+    """Constitution I.4: an answered payment's earlier list is delivered again to an exact retry, byte for byte."""
+    _open = ProducerTests._open
+
+    def test_the_earlier_list_is_served_again_with_its_batch_and_completes_the_same_response(self) -> None:
+        with self.scratch() as tmp:
+            custody = fx.custody(tmp)
+            p = self._open(tmp, custody)
+            _, signed, tokens = answered(p)
+            got = p.answered(RETRY)
+            self.assertEqual(got, (signed, tuple(map(gate.encode_token, tokens)), ((), EARLIER, ())))
+            response = gate.encode_decide_response(gate.DecideResponse(fx.TENANT, fx.PROGRAM, "cmd-0001", "DECIDED", tokens[1], earlier=EARLIER))
+            self.assertTrue(response.endswith(len(got[1][1]).to_bytes(4, "big") + got[1][1] + gate.earlier_body(got[2][1])))
+            p.close()
+            self.assertEqual(self._open(tmp, custody).answered(RETRY), got)
+
+    def test_a_token_whose_outcome_byte_names_no_outcome_is_refused_by_both_readers(self) -> None:
+        with self.scratch() as tmp:
+            p = self._open(tmp, fx.custody(tmp))
+            raw = gate.encode_token(answered(p)[2][1])
+            p.close()
+        at = raw.index(gate.lines_root(fx.payment_request(1).lines)) + gate.DIGEST
+        self.assertEqual((gate.read_token(raw)[1], gate.read_token_lines(raw)[3]), ("ANSWERED", "ANSWERED"))
+        for byte in (0, len(gate.OUTCOMES) + 1):
+            for reader in (gate.read_token, gate.read_token_lines):
+                with self.subTest(byte=byte, reader=reader.__name__), self.assertRaisesRegex(gate.GateCodecError, "outcome"):
+                    reader(raw[:at] + bytes([byte]) + raw[at + 1 :])
+
+    def test_a_token_sealed_before_earlier_roots_is_read_by_its_own_layout_and_another_prefix_is_refused(self) -> None:
+        with self.scratch() as tmp:
+            p = self._open(tmp, fx.custody(tmp))
+            raw = gate.encode_token(answered(p)[2][0])  # an ALLOW token: its earlier root is zero
+            p.close()
+        leaf = gate.token_leaf(raw)
+        cut = len(leaf) - 3 * gate.DIGEST - 5 * 8 - gate.DIGEST  # its earlier root, before rule version, release, input, five times
+        self.assertEqual(leaf[cut : cut + gate.DIGEST], gate.ZERO_DIGEST)
+        old = b"RR/GATE/TOKEN/v2\x00" + leaf[len(gate.TOKEN) : cut] + leaf[cut + gate.DIGEST :]  # the leaf as sealed before 2026-11-16
+        token = old + raw[len(leaf) :]
+        self.assertEqual(gate.token_leaf(token), old)
+        self.assertEqual((gate.read_token(token), gate.read_token_lines(token)), (gate.read_token(raw), gate.read_token_lines(raw)))
+        self.assertNotEqual(gate.token_leaf(gate.TOKEN + token[len(gate.TOKEN) :]), old)  # relabelled: another leaf, so another root
+        at = token.index(gate.lines_root(fx.payment_request(0).lines)) + gate.DIGEST
+        self.assertEqual(token[at], gate.OUTCOMES.index("ALLOW") + 1)
+        answered_v2 = token[:at] + bytes([gate.OUTCOMES.index("ANSWERED") + 1]) + token[at + 1 :]  # ANSWERED came with v3
+        for reader in (gate.token_leaf, gate.read_token, gate.read_token_lines):
+            with self.subTest(answered_in_v2=reader.__name__), self.assertRaisesRegex(gate.GateCodecError, "^outcome$"):
+                reader(answered_v2)
+        for prefix in (b"RR/GATE/TOKEN/v4\x00", b"RR/GATE/TOKEN/v1\x00", bytes(len(gate.TOKEN))):
+            for reader in (gate.token_leaf, gate.read_token, gate.read_token_lines):
+                with self.subTest(prefix=prefix, reader=reader.__name__), self.assertRaisesRegex(gate.GateCodecError, "^token$"):
+                    reader(prefix + token[len(gate.TOKEN) :])
+
+    def test_a_crash_after_the_reservation_reseals_it_with_its_earlier_list(self) -> None:
+        with self.scratch() as tmp:
+            custody = fx.custody(tmp)
+            p = self._open(tmp, custody)
+            real = signer.seal
+
+            def crash(*args):
+                real(*args)  # signed and verified, then the process dies before the seal commits
+                raise KeyboardInterrupt
+
+            with mock.patch.object(signer, "seal", crash), self.assertRaises(KeyboardInterrupt):
+                answered(p)
+            again = self._open(tmp, custody)  # the reopen reseals the reservation, its list stored in the same transaction
+            signed, _, lists = again.answered(RETRY)
+            self.assertEqual((again.published(), lists), ([signed], ((), EARLIER, ())))
+
+    def test_a_voided_reservation_takes_its_earlier_list_with_it(self) -> None:
+        with self.scratch() as tmp:
+            p = self._open(tmp, fx.custody(tmp))
+            p._floors = lambda: (10**9, 10**9)
+            with self.assertRaisesRegex(producer.GateProducerError, "reservation_below_floor"):
+                answered(p)
+            p._floors = lambda: (0, 0, 0, bytes(64))
+            self.assertEqual([p._db.execute(f"SELECT count(*) FROM {t}").fetchone()[0] for t in ("batches", "earlier")], [0, 0])
+            answered(p)  # the next batch takes the voided id, and its own list
+            self.assertEqual(p.answered(RETRY)[2], ((), EARLIER, ()))
+
+    def test_a_changed_or_missing_earlier_list_is_refused_never_served(self) -> None:
+        with self.scratch() as tmp:
+            custody = fx.custody(tmp)
+            p = self._open(tmp, custody)
+            answered(p, request_frame(3))
+            sealed(p, fx.batch_pays(2, 3), state_digest=fx.STATE, created_at=fx.NOW + 1, adds=b"")  # so the store opens on another batch
+            published = p.published()
+            p.close()
+            store = Path(tmp) / "shard.sqlite3"
+            saved = store.read_bytes()
+            moved = (("line-1-0", fx.PROGRAM, "pay-0007", "line-7-1"),)
+            other = gate.earlier_body(moved)
+            gone = ("DELETE FROM earlier WHERE ?", (1,))
+            old = (None, ())  # the store made one sealed before lists were stored (``g.before_lists``)
+            with contextlib.closing(sqlite3.connect(store)) as db:
+                packed = db.execute("SELECT tokens FROM batches WHERE id=1").fetchone()[0]
+            self.assertEqual(packed.count(gate.earlier_root(EARLIER)), 1)
+            resigned = packed.replace(gate.earlier_root(EARLIER), gate.earlier_root(moved))  # the token now names the other list
+            for name, edits, error in (
+                    # the row's pledge signs its tokens, so the retry is refused before any list is read
+                    ("the token's earlier root and its list changed together",
+                     [("UPDATE batches SET tokens=? WHERE id=1", (resigned,)), ("UPDATE earlier SET lists=?", (other,))], "^store_tampered$"),
+                    ("another list", [("UPDATE earlier SET lists=?", (other,))], "^store_tampered$"),
+                    ("a list no token names", [("UPDATE earlier SET lists=lists||?", (gate.earlier_body(EARLIER),))], "^store_tampered$"),
+                    ("bytes that are no list", [("UPDATE earlier SET lists=?", (b"\x00\x01\x00",))], "^store_tampered$"),
+                    ("text", [("UPDATE earlier SET lists=?", ("x",))], "^store_tampered$"),
+                    # sealed with its list stored: the deleted row is evidence, never rebuilt, and hiding that it was stored breaks the pledge
+                    ("no list (deleted)", [gone], "^store_tampered$"),
+                    ("no list, and the row's word that it was stored cleared", [gone, ("UPDATE batches SET listed=NULL WHERE id=1", ())], "^store_tampered$"),
+                    # a store sealed before lists were stored: its frame is read, and no paid line in it is the one EARLIER names
+                    ("no list (a store sealed before lists were stored)", [old], "^store_version_earlier$"),
+                    ("no list, and a frame no decide wrote", [old, ("UPDATE records SET frame=?", (b"",))], "^store_tampered$")):
+                with self.subTest(name):
+                    store.write_bytes(saved)
+                    with contextlib.closing(sqlite3.connect(store)) as db:
+                        db.executescript("DROP TRIGGER earlier_fixed; DROP TRIGGER earlier_void; DROP TRIGGER records_fixed; "
+                                         "DROP TRIGGER batches_fixed; DROP TRIGGER batches_listed;")
+                        for sql, args in edits:
+                            g.before_lists(db, custody[0], (fx.TENANT, fx.SHARD)) if sql is None else db.execute(sql, args)
+                        db.commit()
+                    q = self._open(tmp, custody)
+                    with self.assertRaisesRegex(producer.GateProducerError, error):
+                        q.answered(RETRY)
+                    self.assertEqual(q.published(), published)  # the store stays readable; only the retry is refused
+                    q.close()
+
+    def test_a_row_without_listed_is_pledged_as_before_lists_were_stored(self) -> None:
+        """The message of a row with ``listed`` NULL is the one a producer signed before ``listed`` existed, written out
+        here and not read from the module: (tenant, shard), epoch, seq_from, seq_to, digest, header, state digest,
+        tokens, adds, then qb, dq, cut (NULLs skipped; once any is set, each set one after its index 8, 9 or 10), then
+        cert, each u32-length framed, integers as 8 bytes, under PRODUCER-PLEDGE/v2.  ``listed`` = 1, or an ``rset``, is
+        another message."""
+        who = (fx.TENANT, fx.SHARD)
+        base = {"epoch": fx.EPOCH, "seq_from": 0, "seq_to": 2, "digest": b"d" * 64, "header": b"h", "state_digest": b"s" * 64,
+                "tokens": b"t", "adds": b"a", "cert": b"c"}
+
+        def before(qb, dq, cut):
+            n = lambda v: v.to_bytes(8, "big")  # noqa: E731
+            fields = [who[0].encode("ascii"), n(who[1]), *(n(base[k]) if type(base[k]) is int else base[k] for k in list(base)[:8])]
+            tag = any(v is not None for v in (qb, dq, cut))
+            for index, value in ((8, qb), (9, dq), (10, cut)):
+                fields += ([n(index)] if tag else []) + [value] if value is not None else []
+            fields.append(base["cert"])
+            return b"RR/GATE/PRODUCER-PLEDGE/v2\x00" + hashlib.sha3_512(b"".join(len(f).to_bytes(4, "big") + f for f in fields)).digest()
+        for qb, dq, cut in ((None, None, None), (b"q", b"r" * 64, b"x"), (None, b"r" * 64, None)):
+            with self.subTest(qb=qb, dq=dq, cut=cut):
+                row = {**base, "qb": qb, "dq": dq, "cut": cut, "listed": None, "rset": None}
+                self.assertEqual(producer._pledge(who, [row[c] for c in producer._PLEDGED.split(", ")]), before(qb, dq, cut))
+                for column, value in (("listed", 1), ("rset", b"k" * 64)):
+                    self.assertNotEqual(producer._pledge(who, [{**row, column: value}[c] for c in producer._PLEDGED.split(", ")]), before(qb, dq, cut))
+
+    def test_a_listed_value_outside_eight_bytes_is_store_tampered(self) -> None:
+        """``listed`` = -1 (no integer a pledge frames) on the newest sealed row or on an open reservation refuses the
+        open as ``store_tampered``, never another error."""
+        for state in ("sealed", "open"):
+            with self.subTest(state), self.scratch() as tmp:
+                custody = fx.custody(tmp)
+                p = self._open(tmp, custody)
+                if state == "sealed":
+                    answered(p)
+                    p.close()
+                else:
+                    with mock.patch.object(signer, "seal", side_effect=KeyboardInterrupt), self.assertRaises(KeyboardInterrupt):
+                        answered(p)  # the reservation stays, unsigned
+                with contextlib.closing(sqlite3.connect(Path(tmp) / "shard.sqlite3")) as db:
+                    db.executescript("DROP TRIGGER batches_listed; UPDATE batches SET listed=-1;")
+                with mock.patch.object(signer, "seal") as seal, self.assertRaisesRegex(producer.GateProducerError, "^store_tampered$"):
+                    self._open(tmp, custody)
+                seal.assert_not_called()
+
+    def test_a_deleted_list_of_a_batch_sealed_with_it_is_tampered_and_nothing_is_rebuilt_or_removed(self) -> None:
+        """A batch sealed after lists were stored whose ``earlier`` row was deleted is ``store_tampered`` at every exact
+        retry: nothing is rebuilt or written, and its batch, frame and retry rows stay as evidence."""
+        with self.scratch() as tmp:
+            custody = fx.custody(tmp)
+            p = self._open(tmp, custody)
+            answered(p, request_frame(3))
+            p.close()
+            store = Path(tmp) / "shard.sqlite3"
+            with contextlib.closing(sqlite3.connect(store)) as db:
+                db.executescript("DROP TRIGGER earlier_void; DELETE FROM earlier;")
+            q = self._open(tmp, custody)
+            with mock.patch.object(producer.ShardProducer, "_rebuilt") as rebuilt:
+                for _ in range(2):
+                    with self.assertRaisesRegex(producer.GateProducerError, "^store_tampered$"):
+                        q.answered(RETRY)
+            rebuilt.assert_not_called()
+            self.assertEqual([q._db.execute(f"SELECT count(*) FROM {t}").fetchone()[0] for t in ("batches", "records", "retries", "earlier")],
+                             [1, 1, 1, 0])
+            self.assertEqual(q._db.execute("SELECT listed FROM batches").fetchone(), (1,))
+
+    def test_a_lists_value_that_is_not_a_blob_is_store_tampered_even_when_no_token_reads_it(self) -> None:
+        with self.scratch() as tmp:
+            custody = fx.custody(tmp)
+            p = self._open(tmp, custody)
+            p.prepared = decide.Answer((), fx.STATE, bytes(chain.AUTH), None, None, fx.D[1], 0, 1, tuple(fx.batch_pays(3)), fx.D[6], retry=RETRY)
+            p.commit(fx.PROGRAM, p.prepared, fx.NOW)
+            p.close()
+            with contextlib.closing(sqlite3.connect(Path(tmp) / "shard.sqlite3")) as db:
+                db.execute("INSERT INTO earlier(batch_id, lists) VALUES(1, 7)")  # an integer where bytes are stored
+                db.commit()
+            q = self._open(tmp, custody)
+            with self.assertRaisesRegex(producer.GateProducerError, "store_tampered"):
+                q.answered(RETRY)
+
+    def test_an_orphan_earlier_row_at_the_next_batch_id_does_not_wedge_the_shard(self) -> None:
+        with self.scratch() as tmp:
+            custody = fx.custody(tmp)
+            p = self._open(tmp, custody)
+            p._floors = lambda: (10**9, 10**9)
+            with self.assertRaisesRegex(producer.GateProducerError, "reservation_below_floor"):
+                answered(p)  # voided: the next reservation takes id 1 again
+            p._db.execute("INSERT INTO earlier(batch_id, lists) VALUES(1, ?)", (gate.earlier_body(EARLIER) * 2,))  # what an older void left behind
+            p._db.commit()
+            p._floors = lambda: (0, 0, 0, bytes(64))
+            _, signed, _ = answered(p)
+            self.assertEqual(p.answered(RETRY)[::2], (signed, ((), EARLIER, ())))
+
+
+def key(b: int, i: int) -> bytes:
+    """A 32-byte retry key in bucket ``b`` (its top 10 bits); ``i`` tells keys of one bucket apart."""
+    return (b << 6).to_bytes(2, "big") + bytes([i]) * 30
+
+
+def filed(p, retry: bytes, n: int):
+    """Seal payment ``n`` alone, filed under retry key ``retry``."""
+    p.prepared = decide.Answer((), fx.STATE, bytes(chain.AUTH), None, None, fx.D[1], 0, 1, tuple(fx.batch_pays(1, n)), fx.D[6], retry=retry)
+    return p.commit(fx.PROGRAM, p.prepared, fx.NOW)
+
+
+A, B, C = key(1, 1), key(1, 2), key(2, 1)  # A and B share bucket 1; C is alone in bucket 2
+FRESH = (key(1, 7), key(2, 7), key(9, 7))  # never filed: in A's bucket, C's, and an empty one
+
+
+class RetrySetTests(fx.Scratch):
+    """Each batch row pledges the root of the set of retry keys: a retries row deleted or rekeyed is ``store_tampered`` at
+    its exact retry, never decided again."""
+    _open = ProducerTests._open
+
+    def _store(self, tmp: str, custody) -> tuple[Path, list[bytes]]:
+        """A closed store with A, B and C filed, each on its own sealed batch: (its path, their signed checkpoints)."""
+        p = self._open(tmp, custody)
+        signed = [filed(p, k, n)[1] for n, k in enumerate((A, B, C))]
+        p.close()
+        return Path(tmp) / "shard.sqlite3", signed
+
+    def _edit(self, store: Path, *edits: tuple[str, tuple]) -> None:
+        """Edit the closed store as someone without the key: retries triggers dropped, then each (sql, args)."""
+        with contextlib.closing(sqlite3.connect(store)) as db:
+            db.executescript("DROP TRIGGER retries_void; DROP TRIGGER retries_fixed; DROP TRIGGER batches_rset;")
+            for sql, args in edits:
+                db.execute(sql, args)
+            db.commit()
+
+    def _refused(self, q, keys) -> None:
+        for k in keys:
+            with self.subTest(retry=k.hex()[:6]), self.assertRaisesRegex(producer.GateProducerError, "^store_tampered$"):
+                q.answered(k)
+
+    def test_a_deleted_retries_row_is_store_tampered_at_its_exact_retry_and_the_batches_are_kept(self) -> None:
+        for gone in (A, C):
+            with self.subTest(gone=gone.hex()[:6]), self.scratch() as tmp:
+                custody = fx.custody(tmp)
+                store, signed = self._store(tmp, custody)
+                self._edit(store, ("DELETE FROM retries WHERE key=?", (gone,)))
+                q = self._open(tmp, custody)
+                with mock.patch.object(signer, "sign") as sign:
+                    self._refused(q, (gone, gone))  # every time, and nothing is signed
+                sign.assert_not_called()
+                self.assertEqual(q.published(), signed)  # every batch kept, readable
+                self.assertEqual([q.answered(k)[0] for k in (A, B, C) if k != gone], [s for k, s in zip((A, B, C), signed) if k != gone])  # a hit is unchanged
+                self.assertIsNone(q.answered(key(9, 7)))  # a miss in an untouched bucket is still decided
+                self.assertEqual([q._db.execute(f"SELECT count(*) FROM {t}").fetchone()[0] for t in ("batches", "retries")], [3, 2])
+
+    def test_a_rekeyed_retries_row_is_store_tampered(self) -> None:
+        for name, new in (("within its bucket", key(1, 9)), ("to another bucket", key(5, 1))):
+            with self.subTest(name), self.scratch() as tmp:
+                custody = fx.custody(tmp)
+                store, _ = self._store(tmp, custody)
+                self._edit(store, ("UPDATE retries SET key=? WHERE key=?", (new, A)))
+                self._refused(self._open(tmp, custody), (A, new))  # the old key: its bucket; the new one: its pledge
+
+    def test_a_changed_bucket_hash_or_a_row_pointed_away_from_its_batch_is_store_tampered(self) -> None:
+        """A stored bucket hash deleted or edited breaks the root, so a fresh key in any bucket is refused; a row moved to a
+        batch id with no batch drops out of its bucket's hash (each key is hashed with its batch's digest)."""
+        for name, edit, refused in (
+                ("bucket 1 deleted", ("DELETE FROM rbuckets WHERE b=1", ()), FRESH),
+                ("bucket 2 edited", ("UPDATE rbuckets SET h=? WHERE b=2", (bytes(64),)), FRESH),
+                ("bucket 9 added", ("INSERT INTO rbuckets(b, h) VALUES(9, ?)", (bytes(64),)), FRESH),
+                ("A's row pointed at no batch", ("UPDATE retries SET batch_id=99 WHERE key=?", (A,)), (A, key(1, 7)))):
+            with self.subTest(name), self.scratch() as tmp:
+                custody = fx.custody(tmp)
+                store, _ = self._store(tmp, custody)
+                self._edit(store, edit)
+                self._refused(self._open(tmp, custody), refused)
+
+    def test_a_deleted_row_with_the_buckets_and_the_newest_root_rewritten_to_agree_breaks_the_pledge(self) -> None:
+        with self.scratch() as tmp:
+            custody = fx.custody(tmp)
+            store, _ = self._store(tmp, custody)
+            with contextlib.closing(sqlite3.connect(store)) as db:
+                left = db.execute("SELECT key, digest FROM retries JOIN batches ON id = batch_id WHERE key >= ? AND key < ? AND key != ? "
+                                  "ORDER BY key", (key(1, 0)[:2], key(2, 0)[:2], A)).fetchall()
+                buckets = {**dict(db.execute("SELECT b, h FROM rbuckets")), 1: producer._bucket_hash(left)}
+            self._edit(store, ("DELETE FROM retries WHERE key=?", (A,)), ("UPDATE rbuckets SET h=? WHERE b=1", (buckets[1],)),
+                       ("UPDATE batches SET rset=? WHERE id=3", (producer._set_root(buckets),)))
+            with mock.patch.object(signer, "seal") as seal, self.assertRaisesRegex(producer.GateProducerError, "^store_tampered$"):
+                self._open(tmp, custody)
+            seal.assert_not_called()
+
+    def test_honest_misses_stay_none_across_buckets_a_void_and_a_retried_reservation(self) -> None:
+        with self.scratch() as tmp:
+            custody = fx.custody(tmp)
+            p = self._open(tmp, custody)
+            fresh = lambda q: [q.answered(k) for k in FRESH]  # noqa: E731
+            self.assertEqual(fresh(p), [None] * 3)
+            for n, k in enumerate((A, B, C)):  # A and B in one bucket, C in another
+                filed(p, k, n)
+                self.assertEqual(fresh(p), [None] * 3)
+            p._floors = lambda: (10**9, 10**9)
+            with self.assertRaisesRegex(producer.GateProducerError, "reservation_below_floor"):
+                filed(p, key(1, 3), 3)  # voided: its key's bucket is recomputed without it
+            p._floors = lambda: (0, 0, 0, bytes(64))
+            self.assertEqual(fresh(p) + [p.answered(key(1, 3))], [None] * 4)
+            real, failed = p._db, []
+
+            class Once:  # a database error after the bucket hashes are written, before the reservation commits
+                def __getattr__(self, name):
+                    return getattr(real, name)
+
+                def execute(self, text, *args):
+                    if text.startswith("DELETE FROM earlier") and not failed:
+                        failed.append(text)
+                        raise sqlite3.OperationalError("disk I/O error")
+                    return real.execute(text, *args)
+            p._db = Once()
+            with mock.patch.object(producer.time, "sleep"):
+                filed(p, key(2, 3), 3)  # rolled back whole and written again
+            p._db = real
+            self.assertEqual((len(failed), fresh(p), bool(p.answered(key(2, 3)))), (1, [None] * 3, True))
+            p.close()
+            q = self._open(tmp, custody)
+            self.assertEqual(fresh(q) + [q.answered(key(1, 3))], [None] * 4)
+            self.assertTrue(all(q.answered(k) for k in (A, B, C, key(2, 3))))
+
+    def test_a_commit_into_the_bucket_of_a_deleted_row_is_store_tampered_and_writes_nothing(self) -> None:
+        """A fresh key filed in a deleted row's bucket is refused before its reservation: the bucket is checked against the
+        pledged root first, never rebuilt from the rows left (which would pledge a root without the deleted row)."""
+        with self.scratch() as tmp:
+            custody = fx.custody(tmp)
+            store, _ = self._store(tmp, custody)
+            self._edit(store, ("DELETE FROM retries WHERE key=?", (A,)))
+            q = self._open(tmp, custody)
+            kept = lambda: (q._db.execute("SELECT b, h FROM rbuckets ORDER BY b").fetchall(), q._db.execute("SELECT count(*) FROM batches").fetchone()[0])  # noqa: E731
+            before = kept()
+            with self.assertRaisesRegex(producer.GateProducerError, "^store_tampered$"):
+                filed(q, key(1, 7), 3)
+            self.assertEqual((kept(), before[1]), (before, 3))
+            self._refused(q, (A,))
+
+    def test_a_void_after_a_row_of_its_bucket_was_deleted_leaves_the_stored_bucket_hash(self) -> None:
+        """A reservation voided after another row of its bucket was deleted does not rebuild that bucket's hash from the rows
+        left: the stored hash stays, so the deleted row's retry is still refused."""
+        with self.scratch() as tmp:
+            custody = fx.custody(tmp)
+            self._store(tmp, custody)
+            p = self._open(tmp, custody)
+            rbuckets = lambda: p._db.execute("SELECT b, h FROM rbuckets ORDER BY b").fetchall()  # noqa: E731
+            real, seen = p._void, []
+
+            def void(id_: int) -> None:  # B's row deleted between the reservation and its void
+                p._db.execute("DROP TRIGGER retries_void")
+                p._db.execute("DELETE FROM retries WHERE key=?", (B,))
+                seen.append(rbuckets())
+                real(id_)
+            p._void, p._floors = void, lambda: (10**9, 10**9)
+            with self.assertRaisesRegex(producer.GateProducerError, "reservation_below_floor"):
+                filed(p, key(1, 3), 3)
+            self.assertEqual((len(seen), rbuckets()), (1, seen[0]))
+            self.assertEqual(p._db.execute("SELECT count(*) FROM batches").fetchone()[0], 3)  # the reservation itself is voided
+            self._refused(p, (B, key(1, 4)))
+
+    def test_keys_in_the_first_and_last_buckets_answer_a_miss_a_hit_and_a_void(self) -> None:
+        low, high = (bytes(32), b"\x00\x3f" + b"\xff" * 30), (b"\xff\xc0" + bytes(30), b"\xff" * 32)
+        self.assertEqual([producer._bucket(k) for k in low + high], [0, 0, 1023, 1023])
+        with self.scratch() as tmp:
+            custody = fx.custody(tmp)
+            p = self._open(tmp, custody)
+            signed = [filed(p, k, n)[1] for n, k in enumerate((low[0], high[1]))]
+            self.assertEqual([p.answered(k) for k in (low[1], high[0])], [None, None])
+            p._floors = lambda: (10**9, 10**9)
+            for n, k in enumerate((low[1], high[0]), 2):
+                with self.subTest(void=k.hex()[:6]), self.assertRaisesRegex(producer.GateProducerError, "reservation_below_floor"):
+                    filed(p, k, n)
+            p.close()
+            q = self._open(tmp, custody)
+            self.assertEqual([q.answered(k) for k in (low[1], high[0])], [None, None])
+            self.assertEqual([q.answered(k)[0] for k in (low[0], high[1])], signed)
+            signed.append(filed(q, high[0], 4)[1])
+            self.assertEqual([(got := q.answered(k)) and got[0] for k in (*low, *high)], [signed[0], None, signed[2], signed[1]])
+
+    def test_a_store_from_before_the_root_opens_unchanged_and_is_checked_from_its_next_commit(self) -> None:
+        """A store whose rows pledge no root opens and serves as before (its misses are not checked, and its pledges are
+        unchanged); its next commit builds every bucket from its rows, so from then on a deleted older row is refused."""
+        with self.scratch() as tmp:
+            custody = fx.custody(tmp)
+            store, signed = self._store(tmp, custody)
+            with contextlib.closing(sqlite3.connect(store)) as db:
+                g.before(db, custody[0], (fx.TENANT, fx.SHARD), "rset")
+                db.commit()
+                pledges = db.execute("SELECT id, pledge FROM batches ORDER BY id").fetchall()
+            q = self._open(tmp, custody)
+            self.assertEqual([q.answered(k) for k in FRESH], [None] * 3)
+            self.assertEqual([q.answered(k)[0] for k in (A, B, C)], signed)
+            filed(q, key(9, 1), 3)
+            self.assertEqual(q._db.execute("SELECT id, pledge FROM batches WHERE id <= 3 ORDER BY id").fetchall(), pledges)
+            self.assertEqual([r is None for (r,) in q._db.execute("SELECT rset FROM batches ORDER BY id")], [True] * 3 + [False])
+            self.assertEqual([q.answered(k) for k in FRESH], [None] * 3)
+            q.close()
+            self._edit(store, ("DELETE FROM retries WHERE key=?", (B,)))
+            self._refused(self._open(tmp, custody), (B,))
+
+    def test_a_commit_without_a_retry_key_copies_the_root_so_a_deleted_row_is_still_store_tampered(self) -> None:
+        with self.scratch() as tmp:
+            custody = fx.custody(tmp)
+            p = self._open(tmp, custody)
+            filed(p, A, 0)
+            filed(p, b"", 1)  # no key: the root is copied, not rebuilt from the rows left
+            rsets = [r for (r,) in p._db.execute("SELECT rset FROM batches ORDER BY id")]
+            self.assertEqual((rsets[0] is None, rsets[0] == rsets[1]), (False, True))
+            p.close()
+            self._edit(Path(tmp) / "shard.sqlite3", ("DELETE FROM retries WHERE key=?", (A,)))
+            self._refused(self._open(tmp, custody), (A,))
+
+    def test_a_retries_key_sqlite_cannot_decode_is_store_tampered_on_every_read_never_unavailable(self) -> None:
+        """Text that is not UTF-8 sorts into bucket 0 and fails on fetch; that decode failure, and only it, is ``store_tampered``."""
+        bad = "UPDATE retries SET key=CAST(X'ff80' AS TEXT) WHERE key=?"
+        tampered = r"^store_tampered$"
+        with self.subTest("answered and commit"), self.scratch() as tmp:
+            custody = fx.custody(tmp)
+            store, _ = self._store(tmp, custody)
+            self._edit(store, (bad, (A,)))
+            q = self._open(tmp, custody)
+            self._refused(q, (key(0, 7),))
+            with self.assertRaisesRegex(producer.GateProducerError, tampered):
+                filed(q, key(0, 8), 3)
+            self.assertEqual(q._db.execute("SELECT count(*) FROM batches").fetchone()[0], 3)
+            self.assertIsNone(q.answered(key(9, 7)))  # a bucket without it is read as before
+        with self.subTest("the upgrade build"), self.scratch() as tmp:
+            custody = fx.custody(tmp)
+            store, _ = self._store(tmp, custody)
+            with contextlib.closing(sqlite3.connect(store)) as db:
+                g.before(db, custody[0], (fx.TENANT, fx.SHARD), "rset")
+                db.executescript("DROP TRIGGER retries_void; DROP TRIGGER retries_fixed;")
+                db.execute(bad, (A,))
+                db.commit()
+            q = self._open(tmp, custody)
+            with self.assertRaisesRegex(producer.GateProducerError, tampered):
+                filed(q, key(9, 1), 3)
+        with self.subTest("a void"), self.scratch() as tmp:
+            custody = fx.custody(tmp)
+            self._store(tmp, custody)
+            p = self._open(tmp, custody)
+            real = p._void
+
+            def void(id_: int) -> None:
+                p._db.execute("DROP TRIGGER retries_void")
+                p._db.execute("DROP TRIGGER retries_fixed")
+                p._db.execute("UPDATE retries SET key=CAST(X'ff80' AS TEXT) WHERE batch_id=?", (id_,))
+                real(id_)
+            p._void, p._floors = void, lambda: (10**9, 10**9)
+            with self.assertRaisesRegex(producer.GateProducerError, tampered):
+                filed(p, key(1, 3), 3)
+        with self.subTest("a locked store is not tampered"), self.scratch() as tmp:
+            custody = fx.custody(tmp)
+            self._store(tmp, custody)
+            p = self._open(tmp, custody)
+            real = p._db
+
+            class Locked:
+                def __getattr__(self, name):
+                    return getattr(real, name)
+
+                def execute(self, text, *args):
+                    if text.startswith("SELECT key, digest"):
+                        raise sqlite3.OperationalError("database is locked")
+                    return real.execute(text, *args)
+            p._db = Locked()
+            with self.assertRaisesRegex(sqlite3.OperationalError, "locked"):
+                p.answered(key(9, 7))
+
+    def test_a_retry_key_that_is_not_32_bytes_is_refused_and_nothing_is_written(self) -> None:
+        with self.scratch() as tmp:
+            p = self._open(tmp, fx.custody(tmp))
+            for bad in (b"r", bytes(31), bytes(33)):
+                with self.subTest(len=len(bad)), self.assertRaisesRegex(producer.GateProducerError, "^bad_retry_key$"):
+                    filed(p, bad, 0)
+                self.assertEqual([p._db.execute(f"SELECT count(*) FROM {t}").fetchone()[0] for t in ("batches", "retries", "rbuckets")], [0, 0, 0])
+            filed(p, A, 0)  # the answer was not spent by a refusal before it
+            self.assertTrue(p.answered(A))
+
+    def test_the_first_upgrade_commit_voided_is_followed_by_an_honest_second_commit(self) -> None:
+        with self.scratch() as tmp:
+            custody = fx.custody(tmp)
+            store, _ = self._store(tmp, custody)
+            with contextlib.closing(sqlite3.connect(store)) as db:
+                g.before(db, custody[0], (fx.TENANT, fx.SHARD), "rset")
+                db.commit()
+            q = self._open(tmp, custody)
+            q._floors = lambda: (10**9, 10**9)
+            with self.assertRaisesRegex(producer.GateProducerError, "reservation_below_floor"):
+                filed(q, key(9, 1), 3)  # the first commit under the root: its buckets are voided with it
+            q._floors = lambda: (0, 0, 0, bytes(64))
+            filed(q, key(9, 2), 3)
+            self.assertEqual([r is None for (r,) in q._db.execute("SELECT rset FROM batches ORDER BY id")], [True] * 3 + [False])
+            self.assertEqual([q.answered(k) for k in (key(9, 1), *FRESH)], [None] * 4)
+            q.close()
+            self._edit(store, ("DELETE FROM retries WHERE key=?", (B,)))
+            self._refused(self._open(tmp, custody), (B,))
 
 
 if __name__ == "__main__":

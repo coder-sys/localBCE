@@ -71,13 +71,13 @@ def _gate(path, unresolved):
             out.update(_strings(n.value))
         elif isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "_UNKNOWN" for t in n.targets):
             out.update(_strings(n.value))
-        elif isinstance(n, ast.FunctionDef) and n.name == "_decide":  # the payer's release hold reasons
+        elif isinstance(n, ast.FunctionDef) and n.name in ("_decide", "present"):  # the payer's release holds; the host's rule-set holds
             for r in ast.walk(n):
                 if isinstance(r, ast.Return) and r.value is not None:
                     out.update(_strings(r.value))
     if path.name.endswith("decide.py"):
         words = next(ast.literal_eval(n.value) for n in tree.body if isinstance(n, ast.Assign) and n.targets[0].id == "WORDS")
-        out.update("flat_" + w.lower() for w in words[1:] if w != "IMAGE")  # IMAGE is reserved and never emitted
+        out.update("flat_" + w.lower() for w in words[1:] if w not in ("DIGEST", "IMAGE"))  # reserved and never emitted
     return out
 
 
@@ -119,7 +119,8 @@ def _lean():
     admit = run[run.index("def admit"):run.index("let xfer")]
     out |= set(re.findall(r'HOLD ([A-Z_]+)"', (SPEC / "Frame/Spec.lean").read_text("utf-8")))  # a line too wide for the store
     out |= {re.search(r"def uncovered.*?\"([A-Z]+)\"", run, re.S).group(1)}  # a request no grant entry covers
-    return out | {"grant_" + w.strip().lower() for w in refusals} | {"grant_" + w.lower() for w in re.findall(r'\.error "([A-Z_]+)"', admit)}
+    holds = {w for f in ("Flat/Worker.lean", "Engine3/RuleGate.lean") for w in re.findall(r'"(RULESET_[A-Z_]+)"', (SPEC / f).read_text("utf-8"))}
+    return out | {"grant_" + w.lower() for w in holds} |{"grant_" + w.strip().lower() for w in refusals} | {"grant_" + w.lower() for w in re.findall(r'\.error "([A-Z_]+)"', admit)}
 
 
 def _verify():
@@ -128,6 +129,12 @@ def _verify():
     names = re.search(r"def failureName.*?\n\n", text, re.S).group(0)
     steps = set(re.findall(r"GATE_VERIFY=CUSTODY ([a-z_]+)", text)) - {"create", "ready", "catch_up"}
     return set(re.findall(r'=> "([a-z]+)"', names)) | steps
+
+
+def _replay(path):
+    """The refusals the replay opener and its tool give: the first words of each ``ReplayRefused`` message."""
+    return {w for n in ast.walk(ast.parse(path.read_text("utf-8"))) if isinstance(n, ast.Call) and _name(n) == "ReplayRefused" and n.args
+            for w in _strings(n.args[0])}
 
 
 def emitted(unresolved=None):
@@ -142,6 +149,8 @@ def emitted(unresolved=None):
         add(_gate(APP / f"right_rail_gate_{stem}.py", unresolved), f"gate_{stem}")
     for path in sorted(APP.glob("right_rail_reader_*.py")) + sorted(APP.glob("right_rail_x12*.py")):
         add(_reader(path), path.stem.replace("right_rail_", ""))
+    for path in (APP / "right_rail_replay_deployment.py", ROOT / "tools" / "replay_diff.py"):
+        add(_replay(path), path.stem.replace("right_rail_", ""))
     add(_lean(), "gate_rules")
     add(_verify(), "gate_verify")
     return found

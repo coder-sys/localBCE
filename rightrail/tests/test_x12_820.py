@@ -117,9 +117,11 @@ class Reader820Tests(unittest.TestCase):
 
     def test_truncated_file_and_repairs(self):
         data, clean = self.read([line("S000001", "1.00")])
-        cut = r820.read_820(data[:-6])
+        cut = r820.read_820(data[:-6])  # cut in the IEA: the set before it was closed whole by its SE, so its line is kept
+        self.assertEqual(([l._replace(file_sha3_512="") for l in cut.lines], cut.refused), ([l._replace(file_sha3_512="") for l in clean.lines], ""))
+        self.assertEqual([q.cause for q in cut.quarantines], ["unterminated_segment", "iea_missing"])
+        cut = r820.read_820(data[:data.index(b"SE*")])
         self.assertEqual((cut.lines, cut.refused), ((), "iea_missing"))
-        self.assertIn("unterminated_segment", [q.cause for q in cut.quarantines])
         dirty = r820.read_820(b"\xef\xbb\xbf" + data.replace(b"~", b"~\r\n"))
         self.assertEqual(dirty.lines[0][:5], clean.lines[0][:5])
         self.assertEqual({r for r, _ in dirty.repairs}, {"bom", "whitespace"})

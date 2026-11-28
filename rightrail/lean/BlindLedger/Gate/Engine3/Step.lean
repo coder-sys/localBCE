@@ -3,6 +3,8 @@ import BlindLedger.Gate.Engine3.BatchDigest
 import BlindLedger.Gate.Flat.DecideRows
 import BlindLedger.Gate.Flat.Worker
 import BlindLedger.Gate.Engine3.ReadB
+import BlindLedger.Gate.FactFrame
+import BlindLedger.Gate.Engine3.DecodeB
 
 /-! Pieces of one gate batch on the history engine: the bench phase clock, the answer's binding and leaves, the batch
     digest, the signature memo, the feed readers and the leaf check.  The batch itself runs in `StepH`.  Synthetic,
@@ -54,23 +56,27 @@ opaque procMem (c : UInt8) : IO ByteArray
 
 /-- The allocator commits a segment's pages when they are first used, not when the segment is reserved (it measured 2.1 GB of
     committed memory never touched at 150k lines).  Called first in `main` of the engine and the verifier. -/
-@[extern c inline "(mi_option_set_enabled(mi_option_eager_commit, 0), lean_io_result_mk_ok(lean_box(0)))"]
+@[extern c inline "(mi_option_set_enabled(mi_option_arena_eager_commit, 0), lean_io_result_mk_ok(lean_box(0)))"]
 opaque lazyCommit : IO Unit
 
 /-- The authority record of a store's first batch. -/
-def initAuth (q : Frame.Req) : AuthRec := ⟨q.auth.pin, Keyset.Ratchet.init q.auth.pin, 0⟩
+def initAuth (q : Frame.Req) : AuthRec := ⟨q.auth.pin, Keyset.Ratchet.init q.auth.pin, 0, zeroDigest, 0⟩
 
 def zero64 : ByteArray := ⟨Array.replicate 64 0⟩
 
-/-- Where an answer's head and root sit: after the header and 20 bytes a record. -/
-def headAt (a : ByteArray) : Nat := Frame.ansHdrBytes + 20 * getN a 19 4
+/-- A fact answer (`FactFrame.Ans`): version 3, 7 bytes an entry; a decision answer is version 4 (`Frame.version`). -/
+def factAns (a : ByteArray) : Bool := getN a 4 2 == FactFrame.ansVersion
 
-/-- `an`: the logged answer with its head and root cut out. -/
+/-- Where an answer's head and root sit: after the header and 20 bytes a record (7 an entry in a fact answer). -/
+def headAt (a : ByteArray) : Nat := Frame.ansHdrBytes + (if factAns a then 7 else 20) * getN a 19 4
+
+/-- `an`: the logged answer with its head and root cut out, under `ANSWER` (`ANSWER3` for a fact answer). -/
 def ansBind (a : ByteArray) : ByteArray :=
-  sha3_512Into ByteArray.empty (domB "ANSWER" ++ a.extract 0 (headAt a)) a (headAt a + 128) (a.size - (headAt a + 128))
+  sha3_512Into ByteArray.empty (domB (if factAns a then "ANSWER3" else "ANSWER") ++ a.extract 0 (headAt a)) a (headAt a + 128)
+    (a.size - (headAt a + 128))
 
-/-- Each reason in `Rules.reasons` order: its bit in a line's reason mask (`Rows.bit`), its number (`Reason.idx`) and its leaf
-    bit `2 ^ r.idx`.  Computed once, so no payment searches the reason list. -/
+/-- Each reason in `Rules.reasons` order: its bit in a line's reason mask (`Rows.bit`), its number (`Reason.idx`) and its
+    leaf bit `2 ^ r.idx`.  Computed once, so no payment searches the reason list. -/
 def reasonTab : Array (UInt32 × Nat × Nat) := (Rules.reasons.map fun r => (Rows.bit r, r.idx, 2 ^ r.idx)).toArray
 
 /-- The leaf reason mask (`leafMask` of `Run.leafReasons`) of a payment that fits, whose decided lines' reason masks have
@@ -232,28 +238,100 @@ def batchDigestB (lb : @& ByteArray) (au : ByteArray) (rel unr : Array Nat) : By
 /-- A request's leaf with its input not yet computed, the request, and the admitted grant's id. -/
 abbrev LeafIn := Frame.Leaf × Run.Req × ByteArray
 
-/-- Request `x`'s leaf but its input: `Run.emitWith` (`Run.uncovered` when no entry of the grant covers
-    it), then `leafOf`.  `ent`: the request's entry (`entriesOf`); `gid`: the grant's id as bytes; `unf`: a line of it does
-    not fit; `f` its payment's bits (1 a HOLD line, 2 a line that is not an own ALLOW, 4 any line, 8 a released line that
-    was not ALLOW, 16 a bypass releases it (`Rows.Out.byd`), 32 it goes at HOLD authority (`Rows.Out.lft`,
-    `Run.limited`)) and `m` the union of its lines' reason masks. -/
-def leafIn (a : Run.Admitted) (gid : ByteArray) (x : Run.Req) (ent : Option Authority.Entry) (unf : Bool) (f : UInt8)
-    (m : UInt32) : LeafIn :=
+/-- Request `x` with its payment number, read from its payment key (`Frame.Fast.reqOfFast`'s `q`). -/
+def withQ (x : Run.Req) : Run.Req := { x with q := Frame.Fast.idNatA (Frame.Fast.payKeyOf x.ra) }
+
+/-- The batch's approvals as `Flat.Worker.commitBin` takes them (`Run.approvals`), and the requests they read: with their
+    payment numbers when a bypass or a HOLD-level entry names a payment, and also with their lines when a cause record
+    is admitted (its judgement reads the lines' dates).  None when a request's lines cannot be read. -/
+def approvalsB (hsh : Bytes → Bytes) (adm : Except String Run.Admitted) (reqs : Array Run.Req)
+    (ens : Array (Option Authority.Entry)) (redo : List Nat) : Option (Array Run.Req × Run.Approvals) :=
+  match adm with
+  | .error _ => some (reqs, ⟨[], [], [], []⟩)
+  | .ok a =>
+    if a.causes.isEmpty then
+      let rq := if a.byps.isEmpty && !ens.any (·.any (·.authority == .HOLD)) then reqs else reqs.map withQ
+      some (rq, Run.approvals hsh a.grant a.byps [] rq.toList redo)
+    else (reqs.mapM (Frame.Fast.reqOfFast ·.x)).map fun rq => (rq, Run.approvals hsh a.grant a.byps a.causes rq.toList redo)
+
+/-- The reasons of mask `m`. -/
+def reasonsOf (m : UInt32) : List Reason := Rules.reasons.filter fun r => m &&& Rows.bit r != 0
+
+/-- The reasons `Run.answering` reads: a payment already decided, an exact repeat. -/
+def answerM : UInt32 := Rows.bAlready ||| Rows.bFfsDup ||| Rows.bCapMM
+
+/-- `Run.answering` of a decided batch (`lay`, `out`) as `Flat.Worker.commitBin` reads it, over the decisions that carry
+    a reason it reads (`answering_filter`), and per payment of the layout whether it is answered.  The rows under an
+    exact key are its released rows in row order (`Flat.Worker.relRows`), none when the read did not take all of them
+    (a key past `capN` rows, or in a core frozen past them).  The contested payments are the requests that contest, by
+    payment number.  None when a row does not read back as a line. -/
+def answeringB (today : Nat) (redo : List Nat) (reqs : Array Run.Req) (lay : Rows.Lay) (out : Rows.Out) :
+    Option (Run.Answering × Array Bool) := do
+  let sel := out.ds.toList.filter (·.mask &&& answerM != 0)
+  let ls ← sel.mapM fun d => (lay.lines[d.line]?).bind (·.row.line)
+  let ds : List Decision := (sel.zip ls).map fun (d, l) => ⟨l, Rows.outcomeOf8 d.out, reasonsOf d.mask, []⟩
+  let rowsOf (d : Rows.Dec) : Option (List Line) :=
+    let sl := lay.slots[lay.lines[d.line]!.ke]!
+    if capN < sl.rc || sl.rn != sl.rc then none else (List.range sl.rn).mapM fun i => (lay.relP[sl.rs + i]?).bind RowX.line
+  let got : HashMap Key (Option (List Line)) := (sel.zip ls).foldl (fun m (d, l) => m.insert (exactKey l) (rowsOf d)) ∅
+  let c : Ctx :=
+    { today, dmf := none, providerDeaths := none, exclusions := none, enrollment := none, released := none,
+      unresolved := none, releasedPrior := ⟨0, 0, []⟩, unresolvedPrior := ⟨0, 0, []⟩, anchor := 0, redo }
+  let k := reqs.toList.filterMap fun x => if x.ra.contest then some (withQ x).q else none
+  let ax := Run.answering c (fun key => (got.get? key).getD none) k ds
+  let pa := (sel.zip ls).foldl (fun a (d, l) => if ax.pays.contains l.pay then a.set! (lay.lines[d.line]!.pay) true else a)
+    (Array.replicate lay.pRedo.size false)
+  pure (ax, pa)
+
+/-- `Run.answering` reads only the decisions with a reason it reads. -/
+theorem answering_filter (c : Ctx) (rowsFor : Key → Option (List Line)) (k : List Nat) (ds : List Decision) :
+    Run.answering c rowsFor k (ds.filter fun d => d.reasons.contains .ALREADY_DECIDED ||
+      d.reasons.contains .FFS_DUPLICATE_LINE || d.reasons.contains .CAP_MEMBER_MONTH_DUPLICATE) =
+    Run.answering c rowsFor k ds := by
+  have sub : ∀ (p q : Decision → Bool), (∀ d, q d = true → p d = true) → (ds.filter p).filter q = ds.filter q := by
+    intro p q h
+    rw [List.filter_filter]
+    apply List.filter_congr
+    intro d _
+    cases hq : q d
+    · simp
+    · simp [h d hq]
+  have b1 : ∀ a b c : Bool, a = true → (a || b || c) = true := by decide
+  have b2 : ∀ a b c : Bool, (b || c) = true → (a || b || c) = true := by decide
+  simp only [Run.answering]
+  rw [sub _ (fun d => d.reasons.contains .ALREADY_DECIDED) (fun d h => b1 _ _ _ h),
+    sub _ (fun d => d.reasons.contains .FFS_DUPLICATE_LINE || d.reasons.contains .CAP_MEMBER_MONTH_DUPLICATE)
+      (fun d h => b2 _ _ _ h)]
+
+/-- Request `x`'s leaf but its input, as `Flat.Worker.commitBin` gives it: `Run.emitWith` (`Run.uncovered` when no entry
+    of the grant covers it) with the approvals' bypasses, `Run.causeLeaf`, then `leafOf`, and `ANSWERED` with its earlier
+    list when `Rules.answerLeaf` answers it (`ax`).  `ent`: the request's entry (`entriesOf`); `gid`: the grant's id as
+    bytes; `unf`: a line of it does not fit; `f` its payment's bits (1 a HOLD line, 2 a line that is not an own ALLOW,
+    4 any line, 8 a released line that was not ALLOW, 16 an approval releases it (`Rows.Out.byd`), 32 it goes at HOLD
+    authority (`Rows.Out.lft`, `Run.limited`)) and `m` the union of its lines' reason masks. -/
+def leafIn (ap : Run.Approvals) (ax : Run.Answering) (gid : ByteArray) (x : Run.Req) (ent : Option Authority.Entry)
+    (unf : Bool) (f : UInt8) (m : UInt32) : LeafIn :=
   let r := x.ra
   let z := Gate.zeroDigest
   let (o, rs, au, bp) : Outcome × Nat × Gate.Authority × Bytes :=
     match ent with
     | none => (if r.flow.ruled then .HOLD else .HUMAN_REVIEW, Frame.leafScope, .OBSERVE, z)
     | some en =>
-      let bp : Bytes := match a.byps.filter (fun b => b.program == r.programId.toList && b.payment == r.paymentId.toList) with
+      let bp : Bytes := match ap.byps.filter (fun b => b.program == r.programId.toList && b.payment == r.paymentId.toList) with
         | [y] => if !unf && f &&& 16 != 0 && y.request == Run.hB x.x && y.id != z then y.id else z
         | _ => z
       let o0 : Outcome := if f &&& 1 != 0 then .HOLD else if f &&& 4 != 0 && f &&& 2 == 0 then .ALLOW else .HUMAN_REVIEW
       let o : Outcome := if unf then .HOLD else if bp != z || f &&& 32 != 0 then .ALLOW else o0
       (o, if unf then Frame.leafUnencodable else leafBits m, en.authority, bp)
+  -- the payment number is read only when an approval or an answer can name the payment
+  let q := if ap.ids.isEmpty && ax.ds.isEmpty then x.q else (withQ x).q
+  let p := Run.causeLeaf ap (fun _ => f &&& 16 != 0) (fun _ => unf) ⟨q, o, "", au, [], bp⟩
   let leaf : Frame.Leaf :=
-    { outcome := Frame.outCode o, reasons := rs, authority := [Gate.Authority.OBSERVE, .HOLD, .TRANSFER].idxOf au
-      bypass := bp.toByteArray, input := .empty }
+    { outcome := Frame.outCode p.outcome, reasons := rs, authority := [Gate.Authority.OBSERVE, .HOLD, .TRANSFER].idxOf au
+      bypass := p.bypass.toByteArray, input := .empty }
+  let leaf := match Rules.answerLeaf ax.c ax.k ax.ds (fun _ => unf) p.outcome q, Run.earlierBody ax.c ax.ds q with
+    | .ANSWERED, some e => { leaf with outcome := 3, earlier := e.toByteArray }
+    | _, _ => leaf
   (leaf, x, gid)
 
 /-- `Frame.Fast.linesRootA` with each line's leaf hash read in place after its domain. -/
@@ -263,7 +341,7 @@ def linesRootS (ls : List ByteArray) : ByteArray :=
 
 /-- The answer of a decided batch (word OK, head and root zero) in one buffer of its final size, its `an` and the batch's
     identity (`Frame.ident`): the records `recs` (`nr` of 20 bytes), the grant id (the leaves', zero when there are none),
-    the notes, each request's leaf (`ls`) with its input (`INPUT/v6` over the context `ctx` and the payment digest over
+    the notes, each request's leaf (`ls`) with its input (`INPUT/v7` over the context `ctx`, its bytes and
     its lines root) computed here, and the rows the sets gain, lines `rel` (tag 1) then `unr` (tag 2) of the store lines
     `lb`. -/
 def ansW (tm : Bool) (shard batch : Nat) (dg recs : ByteArray) (nr : Nat) (au : ByteArray) (notes : List ByteArray)
@@ -279,13 +357,13 @@ def ansW (tm : Bool) (shard batch : Nat) (dg recs : ByteArray) (nr : Nat) (au : 
   let st (i : Nat) {α : Type} (x : α) : α := if tm then stamp i x else x
   let b := st 36 (Frame.Fast.putL (ByteArray.emptyWithCapacity cap) Frame.magicAns)
   let put := Frame.Fast.put
-  let b := put (put (put (put (put b 2 Frame.ansVersion) 1 (Word.code .OK)) 4 shard) 8 batch) 4 nr
+  let b := put (put (put (put (put b 2 Frame.version) 1 (Word.code .OK)) 4 shard) 8 batch) 4 nr
   let b := b ++ dg ++ recs ++ zero64 ++ zero64 ++ noExt.hold ++ grant ++ au
   let b := st 35 (notes.foldl Frame.Fast.putBlob2 (put b 4 notes.length))
   let inPre := Frame.Fast.inputDomain ++ ctx
   let (b, rqs) := ls.foldl (fun (b, rqs) (l, x, _) =>
     let root := st 30 (linesRootS x.ra.lines)
-    let input := st 31 (hashDom inPre (Frame.Fast.payDigestR x root))
+    let input := st 31 (Frame.Fast.inputR inPre x root)
     (st 32 (Frame.Fast.putLeaf b { l with input }), rqs.push input)) (put b 4 ls.size, Array.mkEmpty ls.size)
   let b := st 33 (unr.foldl (fun b i => pushRowStore (put b 2 rowLen) lb (lineW2 * i) 2)
     (rel.foldl (fun b i => pushRowStore (put b 2 rowLen) lb (lineW2 * i) 1) (put b 4 nAdd)))

@@ -13,8 +13,8 @@ import BlindLedger.Gate.Frame.Fast
     the log, its trailer last) and answers with one record per decided line, the new head and state root, and the extension.
     No row list is carried or kept.  A corrupt page or entry or an I/O error refuses the whole frame and decides nothing.
     The shard's authority record (genesis pin, key-set ratchet, grant serial floor) is in every frame's trailer and bound by
-    its state root, so an open restores it.  A payment's lines come from its request bytes (`Run.reqOf`), the bypasses from
-    the signed bypass requests (`Run.admit`, `Run.bypOf`).  Bench only: with `RR_FLAT_PROF` set the commit writes its
+    its state root, so an open restores it.  A payment's lines come from its request bytes (`Run.reqOf`), the bypasses and cause
+    releases from the signed approvals (`Run.admit`, `Run.approvals`).  Bench only: with `RR_FLAT_PROF` set the commit writes its
     counters and phase times to stderr.  Synthetic, nonpayment, non-PHI, activation=false. -/
 
 namespace BlindLedger.Gate.Flat.Worker
@@ -46,33 +46,112 @@ def ti {α : Type} (pf : Prof) (i : Nat) (act : IO α) : IO α := do
 def H (b : Bytes) : Bytes := (Bin.HB ⟨b.toArray⟩).toList
 
 /-- The shard's authority record (`ChunkIo.CS.au`, in every frame's trailer): the key-set genesis pin, the ratchet of the
-    head last admitted, and the highest grant serial admitted.  A committed batch with requests moves it, forward only
-    (`Run.floor_monotone`). -/
+    head last admitted, the highest grant serial admitted, and the digest and version of the newest rule-set record
+    admitted (`zeroDigest` and 0 for none).  A committed batch with requests moves it, forward only
+    (`Run.floor_monotone`, `ChunkIo.authFollows`). -/
 structure AuthRec where
   pin : Bytes
   rat : Keyset.Ratchet
   floor : Nat
+  rs : Bytes
+  rsv : Nat
 
-/-- pin 64 ‖ epoch u32 ‖ head 64 ‖ day u32 ‖ cp 64 ‖ floor u64 (`authLen` = 208 bytes). -/
+/-- pin 64 ‖ epoch u32 ‖ head 64 ‖ day u32 ‖ cp 64 ‖ floor u64 ‖ rs 64 ‖ rsv u32 (`authLen` bytes). -/
 def encAuth (a : AuthRec) : Bytes :=
-  a.pin ++ natBE 4 a.rat.epoch ++ a.rat.head ++ natBE 4 a.rat.day ++ a.rat.cp ++ natBE 8 a.floor
+  a.pin ++ natBE 4 a.rat.epoch ++ a.rat.head ++ natBE 4 a.rat.day ++ a.rat.cp ++ natBE 8 a.floor ++ a.rs ++ natBE 4 a.rsv
 
 def decAuth (v : Bytes) : Option AuthRec :=
-  if v.length != 208 then none else
+  if v.length != authLen then none else
   some ⟨v.take 64, ⟨beNat ((v.drop 64).take 4), (v.drop 68).take 64, beNat ((v.drop 132).take 4), (v.drop 136).take 64⟩,
-    beNat (v.drop 200)⟩
+    beNat ((v.drop 200).take 8), (v.drop 208).take 64, beNat ((v.drop 272).take 4)⟩
+
+/-- `decAuth` reads exactly the `authLen`-byte records: every other length is refused. -/
+theorem decAuth_isSome (v : Bytes) : (decAuth v).isSome = true ↔ v.length = authLen := by
+  unfold decAuth
+  by_cases h : v.length = authLen <;> simp [h]
+
+/-- A record of fields that fit their widths reads back as itself. -/
+theorem decAuth_encAuth (a : AuthRec) (hp : a.pin.length = 64) (hh : a.rat.head.length = 64)
+    (hc : a.rat.cp.length = 64) (hs : a.rs.length = 64) (he : a.rat.epoch < 256 ^ 4) (hd : a.rat.day < 256 ^ 4)
+    (hf : a.floor < 256 ^ 8) (hv : a.rsv < 256 ^ 4) : decAuth (encAuth a) = some a := by
+  obtain ⟨pin, ⟨e, h, d, c⟩, f, rs, v⟩ := a
+  simp only at hp hh hc hs he hd hf hv
+  have l4 := Keyset.natBE_length 4
+  have l8 := Keyset.natBE_length 8
+  have hl : (encAuth ⟨pin, ⟨e, h, d, c⟩, f, rs, v⟩).length = authLen := by
+    simp [encAuth, hp, hh, hc, hs, l4, l8, authLen]
+  unfold decAuth
+  simp only [hl, bne_self_eq_false, Bool.false_eq_true, ↓reduceIte]
+  simp only [encAuth, List.append_assoc]
+  simp [List.drop_append, List.take_of_length_le, List.drop_of_length_le, hp, hh, hc, hs, l4, l8,
+    beNat_natBE 4 e he, beNat_natBE 4 d hd, beNat_natBE 8 f hf, beNat_natBE 4 v hv]
+
+/-- The hold of a frame with requests whose asserted rule-set floor (`a.rsv`, `a.rs`) a shard at version `rsv` under
+    digest `rs` does not meet: a lower version is `RULESET_STALE`; the same version under another digest is
+    `RULESET_FORK`. -/
+def floorHold (rs : Bytes) (rsv : Nat) (a : Frame.Auth) : Option String :=
+  if rsv < a.rsv then some "RULESET_STALE"
+  else if rsv == a.rsv && rs != a.rs then some "RULESET_FORK"
+  else none
+
+/-- The rule-set hold of the engine that does not run signed rule sets (conformance/RULESET_V1.md section 9): the floor
+    holds against the shard's record `r`; while a rule set is in force (`r.rsv > 0`) every frame is `RULESET_MISSING`;
+    and a frame that presents rule-set records is `RULESET_NOT_RUN`, because this engine does not admit them.  It is
+    taken beside the authority check, so the record is unchanged. -/
+def rulesetHold (r : AuthRec) (a : Frame.Auth) : Option String :=
+  match floorHold r.rs r.rsv a with
+  | some w => some w
+  | none =>
+    if r.rsv != 0 then some "RULESET_MISSING"
+    else if !a.rsets.isEmpty then some "RULESET_NOT_RUN"
+    else none
+
+theorem rulesetHold_stale (r : AuthRec) (a : Frame.Auth) (h : r.rsv < a.rsv) :
+    rulesetHold r a = some "RULESET_STALE" := by
+  simp [rulesetHold, floorHold, h]
+
+theorem rulesetHold_fork (r : AuthRec) (a : Frame.Auth) (h : r.rsv = a.rsv) (hs : r.rs ≠ a.rs) :
+    rulesetHold r a = some "RULESET_FORK" := by
+  simp [rulesetHold, floorHold, h, hs]
+
+/-- A floor hold passes only when the shard meets the asserted version, and at that version holds the asserted digest. -/
+theorem floorHold_none {rs : Bytes} {rsv : Nat} {a : Frame.Auth} (h : floorHold rs rsv a = none) :
+    a.rsv ≤ rsv ∧ (rsv = a.rsv → rs = a.rs) := by
+  unfold floorHold at h
+  split at h
+  · cases h
+  split at h
+  · cases h
+  rename_i h1 h2
+  refine ⟨by omega, fun e => ?_⟩
+  simpa [e] using h2
+
+/-- A frame passes the rule-set holds only when neither the shard's record nor the frame names a rule set, and the frame
+    presents no rule-set record. -/
+theorem rulesetHold_none {r : AuthRec} {a : Frame.Auth} (h : rulesetHold r a = none) :
+    r.rsv = 0 ∧ a.rsv = 0 ∧ r.rs = a.rs ∧ a.rsets = [] := by
+  unfold rulesetHold at h
+  split at h
+  · cases h
+  rename_i hf
+  obtain ⟨h1, h2⟩ := floorHold_none hf
+  split at h
+  · cases h
+  split at h
+  · cases h
+  rename_i h3 h4
+  have hr : r.rsv = 0 := by simpa using h3
+  have ha : a.rsv = 0 := by omega
+  exact ⟨hr, ha, h2 (by omega), by simpa using h4⟩
 
 structure FlatW where
   /-- Test only (the crash-test exe): where a commit kills the process; the pinned exes pass "none". -/
   crash : String := "none"
-  /-- The signature check `Run.admit` uses on a frame's authority; the pinned exes pass `mlDsaOk`.  Test only, never
-      pinned: `gate_engine_unsigned` passes one that accepts every signature (the signer-free decision check). -/
-  verify : Bytes → Bytes → Bytes → Bool := mlDsaOk
   /-- The exclusive lock on the open index's directory, held for the worker's life: a second writer is refused. -/
   lock : Option (String × IO.FS.Handle) := none
   /-- The open chunk store. -/
   cs : Option ChunkIo.CS := none
-  /-- The identity of the frame being run (`Frame.ident`): its context and each request's `INPUT/v6`. -/
+  /-- The identity of the frame being run (`Frame.ident`): its context and each request's `INPUT/v7`. -/
   rq : Bytes := []
   /-- The bytes hashed for `rq` (bench count). -/
   rqLen : Nat := 0
@@ -87,14 +166,10 @@ def feedsOf (c : Ctx) : Feeds :=
   let pd := by_ (entries c.providerDeaths) (·.id)
   let ex := by_ (entries c.exclusions) (·.id)
   let sp := by_ (entries c.enrollment) (·.member)
-  let el := by_ (entries c.eligibility) (·.member)
   { dmfSome := c.dmf.isSome, pdSome := c.providerDeaths.isSome, exclSome := c.exclusions.isSome, spanSome := c.enrollment.isSome,
-    eligSome := c.eligibility.isSome,
     dmfOk := usable c.today 90 okDeath c.dmf, pdOk := usable c.today 90 okDeath c.providerDeaths,
     exclOk := usable c.today 31 okExclusion c.exclusions, spanOk := usable c.today 7 okSpan c.enrollment,
-    eligOk := usable c.today 7 okElig c.eligibility,
-    dmf := fun i => dmf.getD i [], pdeath := fun i => pd.getD i [], excl := fun i => ex.getD i [], span := fun i => sp.getD i [],
-    elig := fun i => el.getD i [] }
+    dmf := fun i => dmf.getD i [], pdeath := fun i => pd.getD i [], excl := fun i => ex.getD i [], span := fun i => sp.getD i [] }
 
 /-- The worker holding the exclusive lock on `dir` (file `lock`); `none`: another worker has it. -/
 def lockDir (w : FlatW) (dir : String) : IO (Option FlatW) := do
@@ -159,7 +234,7 @@ def guardIO {α : Type} (x : IO α) : IO (Option α) := do
 
 open BlindLedger.Gate.Frame (Word Rec Rule Leaf Ext AnsFrame)
 
-def noExt : Ext := ⟨⟨Array.replicate 16 0⟩, Frame.Fast.zero64B, ⟨Array.replicate 208 0⟩, [], [], []⟩
+def noExt : Ext := ⟨⟨Array.replicate 16 0⟩, Frame.Fast.zero64B, ⟨Array.replicate authLen 0⟩, [], [], []⟩
 
 /-- A feed as a snapshot, when its rows hash to its declared pin (`Run.snapshot`, `Frame.snap`). -/
 def snapF {α : Type} (kind : Nat) (fields : α → List (Nat × Nat)) (f : Frame.Feed α) : Option (Snapshot α × Bytes) :=
@@ -184,7 +259,7 @@ def leafMask (s : String) : Nat :=
     if n == "UNENCODABLE_PAYMENT" then m ||| Frame.leafUnencodable else if n == "SCOPE" then m ||| Frame.leafScope
     else m ||| (reasonBits.lookup n).getD 0) 0
 
-/-- A request's leaf: its pay line `m` and its input `rq` (`INPUT/v6`). -/
+/-- A request's leaf: its pay line `m` and its input `rq` (`INPUT/v7`). -/
 def leafOf (m : Run.Pay) (rq : ByteArray) : Frame.Leaf :=
   { outcome := Frame.outCode m.outcome, reasons := leafMask m.reasons,
     authority := [Gate.Authority.OBSERVE, .HOLD, .TRANSFER].idxOf m.authority, bypass := m.bypass.toByteArray, input := rq }
@@ -208,6 +283,53 @@ def firstRefFast (loc : Bool → Key → Option (Nat × Nat)) (x : Fast.Ix) (l :
   | some k => loc false k
   | none => ((keys l).find? fun k => !(Fast.hits x.unr x.unrPost [k] fun y => (keys l).any (x.claim y).contains).isEmpty).bind (loc true)
 
+/-- The released rows `Run.answering` reads under exact key `k` from the entries fetched for a batch (`relM`): the
+    entry's head rows, in row order; none when the key has more than `capN` postings, which cannot be read whole
+    (`Flat.answer_eq`, `Flat.answer_cap`). -/
+def relRows (relM : HashMap Key Entry) (k : Key) : Option (List Line) :=
+  let e := relM.getD k Entry.empty
+  if capN < e.count then none else some ((heads e).map (·.row))
+
+/-- The payments whose senders contest an exact repeat (`Request.contest`): `Run.answering` decides them as before. -/
+def contested (reqs : List Run.Req) : List Nat := reqs.filterMap fun e => if e.ra.contest then some e.q else none
+
+/-- A batch's decisions by payment number, each payment's in decision order. -/
+def byPay (ds : List Decision) : HashMap Nat (List Decision) :=
+  ds.foldr (fun d m => m.insert d.line.pay (d :: m.getD d.line.pay [])) ∅
+
+/-- The index a commit decides on (`commitBin`, `Flat.commit_leaves`, `Flat.leaf_capped`). -/
+def leafIx (hr hu : Head) (fe : Fetched) (fc : FCtx) (b : List Line) : Fast.Ix :=
+  localIx hr hu fe (localRows fe.rel) (localRows fe.unr) fc b
+
+/-- A payment's decisions out of `byPay`, in decision order. -/
+def leafGrp (bp : HashMap Nat (List Decision)) (p : Nat) : List Decision := bp.getD p []
+
+/-- The worker's bypass test of payment `p`. -/
+def leafByd (x : Fast.Ix) (bp : HashMap Nat (List Decision)) (p : Nat) : Bool := x.bypassed (leafGrp bp p) p
+
+/-- Request `e`'s leaf before an exact-repeat answer: `Run.emitWith` over the payment's own decisions `grp e.q` with the
+    payment outcome `out`, the bypass test `byd` and the re-decision test `rdo` (a request no grant entry covers is held
+    alone, `Run.uncovered`), then `Run.causeLeaf` (`Flat.commit_leaves`). -/
+def payOf (hsh : Bytes → Bytes) (g : Authority.Grant) (bps : List Authority.Bypass) (ap : Run.Approvals)
+    (out : Nat → Outcome) (byd rdo : Nat → Bool) (grp : Nat → List Decision) (unf : Nat → Bool) (e : Run.Req) : Run.Pay :=
+  Run.causeLeaf ap byd unf ((Run.emitWith hsh g (Run.bypsFor hsh bps e) out byd rdo (grp e.q) unf e).getD (Run.uncovered g e))
+
+/-- Leaf `m` of request bytes `rq` as written: ANSWERED (3) with its earlier list when `ExactDuplicate.answerLeaf` over
+    `c`, `k`, `ds` answers it and the list can be written (`Run.earlierBody`), else `m` as it is. -/
+def leafAt (c : Ctx) (k : List Nat) (ds : List Decision) (unf : Nat → Bool) (m : Run.Pay) (rq : ByteArray) : Frame.Leaf :=
+  match Rules.answerLeaf c k ds unf m.outcome m.q, Run.earlierBody c ds m.q with
+  | .ANSWERED, some e => { leafOf m rq with outcome := 3, earlier := e.toByteArray }
+  | _, _ => leafOf m rq
+
+/-- The set a decided line's record names: released, released by an approval or at HOLD authority (bypassed),
+    unresolved (a new held or reviewed line of a payment not answered, `ans`), or decided only. -/
+def ruleOf (x : Fast.Ix) (grp : Nat → List Decision) (ans : Std.HashSet Nat) (e : Decision) : Rule :=
+  if e.outcome == .ALLOW && !x.redo.contains e.line.pay && x.payOutcome (grp e.line.pay) e.line.pay == .ALLOW then .released
+  else if x.bypassed (grp e.line.pay) e.line.pay || x.limitedPay (grp e.line.pay) e.line.pay && !x.own e.line then .bypassed
+  else if e.outcome != .ALLOW && !e.reasons.contains .ALREADY_DECIDED && !x.own e.line && !x.ownU e.line &&
+    !ans.contains e.line.pay then .unresolved
+  else .decided
+
 /-- One batch: `Frame.answerOf` for the request `q` (header digest `dg`, each request's input `rqs`) on the open store
     `cs0`, and the store after it.  A refusal leaves the store as it was. -/
 def commitBin (pf : Prof) (w : FlatW) (cs0 : ChunkIo.CS) (q : Frame.Req) (dg : ByteArray) (rqs : Array ByteArray) :
@@ -215,15 +337,17 @@ def commitBin (pf : Prof) (w : FlatW) (cs0 : ChunkIo.CS) (q : Frame.Req) (dg : B
   let keep := { w with cs := some cs0 }
   let fail (wd : Word) : FlatW × AnsFrame := (keep, ⟨wd, q.shard, q.batch, dg, [], .empty, .empty, noExt⟩)
   let au := q.auth
-  -- requests commit to the release, as the host's frame must carry it
-  if !au.reqs.isEmpty && au.release.isEmpty then return fail .RECORD
+  -- requests commit to the release, as the host's frame must carry it; rule-set records are presented for requests
+  if !au.reqs.isEmpty && au.release.isEmpty || au.reqs.isEmpty && !au.rsets.isEmpty then return fail .RECORD
   -- an unsigned frame is already in the log (`retryOf`): only the request that made it may go on (CONFLICT), unless it
-  -- was decided under authority floors this request's have passed: it can never be signed, so it is cut from the log
+  -- was decided under authority floors this request's have passed (`right_rail_gate_chain.behind`): it can never be
+  -- signed, so it is cut from the log
   let cs0 ← match cs0.pend with
     | some (prq, pau, _) =>
       if prq == w.rq then pure cs0 else
       let passed := match decAuth pau with
-        | some p => !(au.floor.all (· ≤ p.floor)) || p.rat.epoch < au.kfloor
+        | some p => !(au.floor.all (· ≤ p.floor)) || p.rat.epoch < au.kfloor || p.rsv < au.rsv ||
+            (p.rsv == au.rsv && p.rs != au.rs)
         | none => false
       if !passed then return fail .CONFLICT
       if (← Io.pgTrunc cs0.log cs0.logLen.toUInt64) != 0 || (← Io.pgSync cs0.log) != 0 then return fail .IO
@@ -241,7 +365,9 @@ def commitBin (pf : Prof) (w : FlatW) (cs0 : ChunkIo.CS) (q : Frame.Req) (dg : B
     { today := q.today, redo := q.redo, reqs := au.reqs.toArray, grant := opt au.grant, release := opt au.release
       byps := au.byps, floorIn := au.floor, kfloorIn := some au.kfloor, keyset := opt au.keyset, ksteps := au.ksteps }
   let adm : Except String Run.Admitted :=
-    if st.reqs.isEmpty then .error "" else Run.admit w.verify au0.pin au0.rat au0.floor st
+    if st.reqs.isEmpty then .error "" else match rulesetHold au0 au with
+      | some why => .error why
+      | none => Run.admit mlDsaOk au0.pin au0.rat au0.floor st
   -- a frame whose authority is not admitted decides nothing and writes nothing: it is refused visibly
   if !st.reqs.isEmpty then
     if let .error why := adm then
@@ -251,8 +377,11 @@ def commitBin (pf : Prof) (w : FlatW) (cs0 : ChunkIo.CS) (q : Frame.Req) (dg : B
     | .ok a => (Authority.entryFor a.grant e.r.programId e.r.flow).isSome
     | .error _ => false
   let b := Run.keep all
+  let ap : Run.Approvals := match adm with
+    | .ok a => Run.approvals hsh a.grant a.byps a.causes st.reqs.toList st.redo
+    | .error _ => ⟨[], [], [], []⟩
   let (bps, byp, lim, notes) := match adm with
-    | .ok a => (a.byps, Run.bypOf hsh a.byps st.reqs.toList, Run.limOf a.grant st.reqs.toList, a.notes)
+    | .ok a => (ap.byps, ap.byp, Run.limOf a.grant st.reqs.toList, a.notes ++ ap.notes)
     | .error _ => ([], [], [], [])
   let dmf := snapF 1 Death.fields q.dmf
   let pd := snapF 2 Death.fields q.pdeath
@@ -260,7 +389,7 @@ def commitBin (pf : Prof) (w : FlatW) (cs0 : ChunkIo.CS) (q : Frame.Req) (dg : B
   let sp := snapF 4 Span.fields q.span
   let c : Ctx :=
     { today := q.today, dmf := dmf.map (·.1), providerDeaths := pd.map (·.1), exclusions := ex.map (·.1)
-      enrollment := sp.map (·.1), eligibility := none, released := none, unresolved := none, releasedPrior := ⟨0, 0, []⟩, unresolvedPrior := ⟨0, 0, []⟩
+      enrollment := sp.map (·.1), released := none, unresolved := none, releasedPrior := ⟨0, 0, []⟩, unresolvedPrior := ⟨0, 0, []⟩
       anchor := 0, redo := q.redo, byp := byp, lim := lim }
   let fc : FCtx := ⟨c.today, c.redo, feedsOf c, byp, lim⟩
   let pg ← IO.mkRef 0
@@ -268,21 +397,22 @@ def commitBin (pf : Prof) (w : FlatW) (cs0 : ChunkIo.CS) (q : Frame.Req) (dg : B
   let some fe := fetched | return fail .CORRUPT
   let hr := cs0.fs.hr
   let hu := cs0.fs.hu
-  let ((ds, fr, fu), x) ← tp pf 3 (fun _ => (decideFetched hr hu fe fc [] b, localIx hr hu fe (localRows fe.rel) (localRows fe.unr) fc b))
+  let ((ds, fr, fu), x) ← tp pf 3 (fun _ => (decideFetched hr hu fe fc [] b, leafIx hr hu fe fc b))
     fun ((d, a, c), _) => d.length + a.length + c.length
   let unf := Run.unfit all
   -- a payment's decisions, once: every per-payment question below looks only at its own
-  let byPay : HashMap Nat (List Decision) := ds.foldr (fun d m => m.insert d.line.pay (d :: m.getD d.line.pay [])) ∅
-  let grp (p : Nat) : List Decision := byPay.getD p []
-  let out (p : Nat) : Outcome := x.payOutcome (grp p) p
-  let byd (p : Nat) : Bool := x.bypassed (grp p) p
-  -- one leaf per request (`Flat.pay_req`: the Spec's `Run.emit`); a request no grant entry covers is held alone (`Run.uncovered`)
-  let pays : List Run.Pay := match adm with
-    | .ok a => st.reqs.toList.map fun e =>
-        (Run.emitWith hsh a.grant (Run.bypsFor hsh bps e) out byd x.redo.contains (grp e.q) unf.contains e).getD
-          (Run.uncovered a.grant e)
-    | .error _ => []
+  let bp := byPay ds
+  let grp := leafGrp bp
+  let byd := leafByd x bp
+  -- an exact repeat of a paid line, its sender not contesting, is answered at once and joins neither set
+  -- (`Run.answering`) over the fetched rows (`relRows`)
   let relM : HashMap Key Entry := HashMap.ofList fe.rel
+  let ax := Run.answering c (relRows relM) (contested st.reqs.toList) ds
+  let fu := fu.filter fun l => !ax.pays.contains l.pay
+  -- one leaf per request, the Spec's over `ExactDuplicate.decideBatchX`'s decisions (`Flat.commit_leaves`)
+  let pays : List Run.Pay := match adm with
+    | .ok a => st.reqs.toList.map (payOf hsh a.grant bps ap (fun p => x.payOutcome (grp p) p) byd x.redo.contains grp unf.contains)
+    | .error _ => []
   let unrM : HashMap Key Entry := HashMap.ofList fe.unr
   let look (ns : UInt8) (k : Key) : Entry := ((if ns == 5 then relM else unrM).get? k).getD Entry.empty
   let u := (Upd.rows {} look 5 hr.n fr).rows look 6 hu.n fu
@@ -301,7 +431,7 @@ def commitBin (pf : Prof) (w : FlatW) (cs0 : ChunkIo.CS) (q : Frame.Req) (dg : B
       changed := changed.push (kb, e.toEntry); kills := kills.insert kb hs
   -- the record after the batch: a batch with admitted requests moves the ratchet and the floor, any other keeps it
   let au' : AuthRec := match adm with
-    | .ok a => ⟨au0.pin, a.ratchet, a.grant.serial⟩
+    | .ok a => { au0 with rat := a.ratchet, floor := a.grant.serial }
     | .error _ => au0
   let ti0 ← IO.monoNanosNow
   -- `cs0` is owned from here: the store is not in `w`, so the directory changes in place; a failure drops it (the next open reloads)
@@ -313,23 +443,18 @@ def commitBin (pf : Prof) (w : FlatW) (cs0 : ChunkIo.CS) (q : Frame.Req) (dg : B
   -- the answer: a record per decided line, then those held for width
   let kmemoLoc (u : Bool) (k : Key) : Option (Nat × Nat) :=
     (kmemo[ChunkIo.mkBK (ChunkIo.skeyB u k)]?).bind fun (_, hs) => hs.head?.map fun (ch, row, _) => (ch, row)
-  let ruleOf (e : Decision) : Rule :=
-    if e.outcome == .ALLOW && !x.redo.contains e.line.pay && out e.line.pay == .ALLOW then .released
-    else if byd e.line.pay || x.limitedPay (grp e.line.pay) e.line.pay && !x.own e.line then .bypassed
-    else if e.outcome != .ALLOW && !e.reasons.contains .ALREADY_DECIDED && !x.own e.line && !x.ownU e.line then .unresolved
-    else .decided
   let decided : List Rec ← tp pf 29 (fun _ =>
     let pos := placeFast (all.zipIdx.filterMap fun (l, i) => if unf.contains l.pay then none else some (i, l)) (ds.map (·.line))
-    (pos.zip ds).map fun (i, e) => ⟨i, Frame.outCode e.outcome, ruleOf e, Frame.maskOf e.reasons, firstRefFast kmemoLoc x e.line⟩) (·.length)
+    (pos.zip ds).map fun (i, e) => ⟨i, Frame.outCode e.outcome, ruleOf x grp ax.pays e, Frame.maskOf e.reasons, firstRefFast kmemoLoc x e.line⟩) (·.length)
   let held : List Rec ← tp pf 30 (fun _ => all.zipIdx.filterMap fun (l, i) =>
     if !Run.fits l then some ⟨i, 1, .wide, 0, none⟩
     else if unf.contains l.pay then some ⟨i, 1, .sibling, 0, none⟩ else none) (·.length)
   let rowsOf (tag : UInt8) (ls : List Line) : Option (List ByteArray) := ls.mapM (Run.rowBytesFast tag)
   let some (adds1, adds2) ← tp pf 31 (fun _ => (do pure (← rowsOf 1 fr, ← rowsOf 2 fu) : Option (List ByteArray × List ByteArray))) (fun r => (r.map fun (a, b) => a.length + b.length).getD 0)
     | return fail .CORRUPT
-  let leaves ← tp pf 32 (fun _ => (pays.zip rqs.toList).map fun (m, rq) => leafOf m rq) (·.length)
+  let leaves ← tp pf 32 (fun _ => (pays.zip rqs.toList).map fun (m, rq) => leafAt ax.c ax.k ax.ds unf.contains m rq) (·.length)
   let bn ← tp pf 33 (fun _ => notes ++ (match adm with
-    | .ok _ => Run.bypNotes hsh bps st.reqs.toList byd
+    | .ok _ => Run.bypNotes hsh bps st.reqs.toList byd ++ Run.causeNotes ap byd
     | .error _ => [])) (·.length)
   let ans : AnsFrame := ⟨.OK, q.shard, cs1.batches, dg, decided ++ held, cs1.head.toByteArray, (ChunkIo.stateRootOf cs1).toByteArray,
     ⟨noExt.hold, (match adm with | .ok a => a.grant.id.toByteArray | .error _ => noExt.grant), (encAuth au').toByteArray,
@@ -358,7 +483,7 @@ def openFor (w : FlatW) (dir : String) (q : Frame.Req) : IO (FlatW × Except Wor
   if q.batch == 1 then
     let nb ← nbOf
     if nb == 0 then return (w, .error .INIT)
-    let a : AuthRec := ⟨q.auth.pin, Keyset.Ratchet.init q.auth.pin, 0⟩
+    let a : AuthRec := ⟨q.auth.pin, Keyset.Ratchet.init q.auth.pin, 0, zeroDigest, 0⟩
     match ← (try ChunkIo.initStore dir q.shard q.asOf nb (encAuth a) catch _ => pure none) with
     | some cs => pure (w, if cs.head == q.prev then .ok cs else .error .HEAD)
     | none => pure (w, .error .INIT)
@@ -377,10 +502,9 @@ def handle (w : FlatW) (dir : String) (shard : Nat) (bs : ByteArray) : IO (FlatW
   | .error wd => pure (w, refuse wd)
   | .ok (q, dg) =>
     if q.shard != shard then return (w, refuse .SHARD)
-    if pf.isSome then  -- bench only: the request parse alone, the lines the decider reads, the frame digest
+    if pf.isSome then  -- bench only: the request parse alone, the lines the decider reads
       let _ ← tp pf 21 (fun _ => q.auth.reqs.foldl (fun n e => n + ((Frame.Fast.decodeRows e.x).map (·.rows.size)).getD 0) 0) id
       let _ ← tp pf 22 (fun _ => q.auth.reqs.foldl (fun n e => n + (e.ra.lines.map (Frame.Fast.lineOfBytes e.q)).length) 0) id
-      let _ ← tp pf 23 (fun _ => (Bin.HB (⟨(domain "FRAME").toArray⟩ ++ bs.extract Frame.hdrBytes bs.size)).size) id
     let some w ← lockDir w dir | return ({ w with cs := none }, refuse .LOCK)
     let (ib, rqs) := Frame.Fast.identFast bs q
     let w := { w with rq := ib.toList, rqLen := bs.size }

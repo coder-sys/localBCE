@@ -8,7 +8,7 @@ open BlindLedger.Gate BlindLedger.Gate.Engine3 BlindLedger.Gate.Engine3.Run Blin
 def z64 : ByteArray := ByteArray.mk (Array.replicate 64 0)
 
 def answer (ls : List Frame.Leaf) : ByteArray :=
-  Frame.Fast.encodeAnsFast ⟨.OK, 0, 1, z64, [], z64, z64, ⟨ByteArray.mk (Array.replicate 16 0), z64, ByteArray.mk (Array.replicate 208 0), [], ls, []⟩⟩
+  Frame.Fast.encodeAnsFast ⟨.OK, 0, 1, z64, [], z64, z64, ⟨ByteArray.mk (Array.replicate 16 0), z64, ByteArray.mk (Array.replicate Flat.authLen 0), [], ls, []⟩⟩
 
 def main : IO UInt32 := do
   let bad ← IO.mkRef (0 : Nat)

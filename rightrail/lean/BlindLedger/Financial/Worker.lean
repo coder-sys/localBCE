@@ -12,8 +12,8 @@ namespace BlindLedger.Financial
 /-! Evaluator worker frames. On the pipe each frame is a u32 big-endian length
     and its bytes. A request frame is one BLFIN02 input. A response frame is one
     outcome: tag 0 then the BLFRES02 result, or the single byte 1 (decode),
-    2 (evaluation) or 3 (encoding) rejection. The worker adds no policy; it decodes with the length-free twin
-    `Fast.decodeFinancialInput`, proved equal to `decodeFinancialInput`. Item frames start with a magic:
+    2 (evaluation) or 3 (encoding) rejection. The worker adds no policy; it decodes in place on the array with
+    `Cursor.decodeFinancialInput`, proved equal to `decodeFinancialInput` on the frame's list. Item frames start with a magic:
     BLFPAY01 (payment), BLFCMD03 (correction transition) and BLFOFA01 (offset authorization: the magic
     then one unchanged BLFCMD03 request, answered `0 :: BLFCRES3`, `[1]` or `[3]`). -/
 
@@ -150,10 +150,11 @@ def offsetRespondBA₂ (wire : ByteArray) : Bytes :=
     | none => [UInt8.ofNat 3]
     | some b => UInt8.ofNat 0 :: b.toList
 
-/-- The frame arrives as a `ByteArray`; `Fast.decodeFinancialInputBA₂` is proved equal to the list
+/-- The frame arrives as a `ByteArray`; `Cursor.decodeFinancialInput` is proved equal to the list
     decoder on `wire.toList`, and its input is already well-formed, so this is `workerRespond`
-    with one well-formedness pass and no second large list. The magic tests read only the first
-    bytes of the array, so an evaluator or correction frame is never copied into a list. -/
+    with one well-formedness pass and no list of the frame (a list costs 24 bytes a byte, so an 8 MB
+    frame held 200 MB). The magic tests read only the first bytes of the array, so an evaluator or
+    correction frame is never copied into a list. -/
 def workerRespondBA (wire : ByteArray) : Bytes :=
   if Payment.paymentMagic.isPrefixOf (wire.extract 0 Payment.paymentMagic.length).toList then
     Payment.paymentRespondBA wire
@@ -167,7 +168,7 @@ def workerRespondBA (wire : ByteArray) : Bytes :=
     DecisionPackage.packageRequestRespondFast wire.toList
   else
     encodeWorkerOutcome
-      (match Fast.decodeFinancialInputBA₂ wire with
+      (match Cursor.decodeFinancialInput wire with
         | none => .decodeRejected
         | some input =>
             match evaluateWellFormed input with
@@ -241,7 +242,7 @@ theorem workerRespondBA_eq (wire : ByteArray) : workerRespondBA wire = workerRes
   rw [isPrefixOf_extract]
   split
   · rfl
-  rw [Fast.decodeFinancialInputBA₂_eq]
+  rw [Cursor.decodeFinancialInput_eq, ← Fast.decodeFinancialInputFast_eq]
   cases hd : Fast.decodeFinancialInput wire.toList with
   | none => rfl
   | some input =>
@@ -264,7 +265,9 @@ attribute [local partial_fixpoint_monotone] Lean.Order.MonadTail.monotone_bind_r
   if header.size = 0 then return 0
   let some (length, _) := readNatBE 4 header.toList | return workerExitFrame
   if length > maxWorkerFrameBytes then return workerExitFrame
-  let frame ← readUpTo read length .empty
+  -- The size check above runs before this reservation, so a peer holds at most one buffer of up to 8 MiB.
+  -- Sized once: 64 KiB appends regrew and freed the frame buffer.
+  let frame ← readUpTo read length (ByteArray.emptyWithCapacity length)
   if frame.size < length then return workerExitFrame
   let response := workerRespondBA frame
   write (natBE 4 response.length ++ response).toByteArray

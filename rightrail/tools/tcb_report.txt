@@ -1,30 +1,45 @@
-manifest  3a1f0208cf1550e7a711ac5976cdb0278de2e33a0fb796e83590d40108a808b5
-gate  6c7dcb05a151a2732bd9d6268b0841db36d28168349408f417c6129c3439a0c4
-exe blind_financial_worker  2ac5f5eb783ac99111b4a28b35df6f23f47e773c2f10a281c01bc02e878841d8
-exe gate_verify  bf86e5cfd725355ea1b35092ae581ac84e6a7c944c66ea1aa467f7e9900730a5
-exe gate_engine  2d720b52f40cc6a3cd5a0a7ed56489d18dc8c362568b0b9ae6faa89879304e30
-toolchain oleans  7884bb9b5f584355ffc6e01eb9ed31118e62001f95cf9d64cda719356add5cf0  11610 files
-blind_financial_worker: 10812 constants walked; axioms [lcProof, propext, Classical.choice, Quot.sound]
+manifest  211a6dcb6ece2b5b707727aa376dd3efb81486562683559b4c78b41b0f2755a2
+gate  e3247d7168558a1a420f7b6ad0a8bfa76bf651e5b8356807c856e4acdc7bf16f
+exe blind_financial_worker  4bae13d7adca231ac2eb66bca4ba4906dadf824af91c9bb2c020e1068e4a1213
+exe gate_verify  836622ed9578d9470060fbfb5cfdf639040b53b9f1be4c2439116334fae18f90
+exe gate_engine  8baf1ba3763baefbd827fe3c5a827e9c919740f5dab5b8af6b963c93dd5c7dc1
+exe obligations_shard  3829cbfacd9523376c8751fae6c16fdaa8238628dd1ea5c4bf8a80159110a004
+toolchain oleans  0297bb975b30b336aa48747832249271ec2e8d1a9b4bd0090360eb44bd89b991  12095 files
+blind_financial_worker: 13290 constants walked; axioms [lcProof, propext, Classical.choice, Quot.sound]
   startup initializers: 1, 0 in BlindLedger []
-  csimp: 57 theorems walked; replaced constants still called by compiled code: [List.range', Nat.all, Nat.any]
-  allowlist Init.* x186: toolchain `Init`: compiler and C runtime primitives, trusted as the pinned toolchain (tools/tcb_toolchain.txt)
-  allowlist BlindLedger.Financial.WorkerCli.reserveArena x2: the worker's mimalloc arena reservation, one C call, no decision logic
+  csimp: 62 theorems walked, 0 from project modules []; 15 constant-equality constants also rooted; replaced constants still called by compiled code: [List.range', Nat.all, Nat.any]
+  allowlist Init.* x195: toolchain `Init`: compiler and C runtime primitives, trusted as the pinned toolchain (tools/tcb_toolchain.txt)
   allowlist BlindLedger.Financial.serveWorker x1: the worker's frame loop, unbounded by design (answers until end of input); kernel-visible body, serveWorker_run and serveWorker_stateless
+  compiler-built ctorIdx pairs x27: `I.ctorIdx` by `I.casesOn` and its unsafe `I.ctorIdx._impl` tag read, each pair accepted by structure (Lean/Meta/Constructions/CtorIdx.lean)
   0 violations
-gate_verify: 7727 constants walked; axioms [lcProof, propext, Classical.choice, Quot.sound]
+gate_verify: 10732 constants walked; axioms [lcProof, propext, Classical.choice, Quot.sound]
   startup initializers: 1, 0 in BlindLedger []
-  csimp: 57 theorems walked; replaced constants still called by compiled code: [List.range', Nat.all, Nat.any]
-  allowlist Init.* x200: toolchain `Init`: compiler and C runtime primitives, trusted as the pinned toolchain (tools/tcb_toolchain.txt)
+  csimp: 62 theorems walked, 0 from project modules []; 0 constant-equality constants also rooted; replaced constants still called by compiled code: [List.range', Nat.all, Nat.any]
+  allowlist Init.* x211: toolchain `Init`: compiler and C runtime primitives, trusted as the pinned toolchain (tools/tcb_toolchain.txt)
+  compiler-built ctorIdx pairs x11: `I.ctorIdx` by `I.casesOn` and its unsafe `I.ctorIdx._impl` tag read, each pair accepted by structure (Lean/Meta/Constructions/CtorIdx.lean)
   0 violations
-gate_engine: 13069 constants walked; axioms [lcProof, propext, Classical.choice, Quot.sound]
+gate_engine: 15160 constants walked; axioms [lcProof, propext, Classical.choice, Quot.sound]
   startup initializers: 1, 0 in BlindLedger []
-  csimp: 57 theorems walked; replaced constants still called by compiled code: [List.range', Nat.all, Nat.any]
-  allowlist Init.* x277: toolchain `Init`: compiler and C runtime primitives, trusted as the pinned toolchain (tools/tcb_toolchain.txt)
-  allowlist BlindLedger.Gate.Engine.OneProc.reserveArena x2: gate_engine's mimalloc arena reservation, one C call, no decision logic
+  csimp: 62 theorems walked, 0 from project modules []; 5 constant-equality constants also rooted; replaced constants still called by compiled code: [List.range', Nat.all, Nat.any]
+  allowlist Init.* x286: toolchain `Init`: compiler and C runtime primitives, trusted as the pinned toolchain (tools/tcb_toolchain.txt)
   allowlist BlindLedger.Gate.Flat.Io.pgOpen x2: gate_engine flat history file open: CRT _wopen on a path converted by kernel32 MultiByteToWideChar, asm-labelled C, no decision logic
   allowlist BlindLedger.Gate.Flat.Io.pgRead x2: gate_engine flat history file positioned page read: CRT _lseeki64 + _read, asm-labelled C, no decision logic
   allowlist BlindLedger.Gate.Flat.Io.pgWrite x2: gate_engine flat history file positioned page write: CRT _lseeki64 + _write, asm-labelled C, no decision logic
   allowlist BlindLedger.Gate.Flat.Io.pgSync x2: gate_engine flat history file CRT _commit(fd), asm-labelled C, no decision logic
   allowlist BlindLedger.Gate.Flat.Io.pgTrunc x2: gate_engine flat history file CRT _chsize_s(fd, len), asm-labelled C, no decision logic
   allowlist BlindLedger.Gate.Flat.Io.pgClose x2: gate_engine flat history file CRT _close(fd), asm-labelled C, no decision logic
+  compiler-built ctorIdx pairs x19: `I.ctorIdx` by `I.casesOn` and its unsafe `I.ctorIdx._impl` tag read, each pair accepted by structure (Lean/Meta/Constructions/CtorIdx.lean)
+  0 violations
+obligations_shard: 13444 constants walked; axioms [lcProof, propext, Classical.choice, Quot.sound]
+  startup initializers: 1, 0 in BlindLedger []
+  csimp: 62 theorems walked, 0 from project modules []; 16 constant-equality constants also rooted; replaced constants still called by compiled code: [List.range', Nat.all, Nat.any]
+  allowlist Init.* x252: toolchain `Init`: compiler and C runtime primitives, trusted as the pinned toolchain (tools/tcb_toolchain.txt)
+  allowlist BlindLedger.Gate.Obligations.openExclusive x2: obligations_shard log open with no sharing: CRT _wsopen (_SH_DENYRW) on a path converted by kernel32 MultiByteToWideChar, asm-labelled C, no decision logic
+  allowlist BlindLedger.Gate.Flat.Io.pgOpen x2: gate_engine flat history file open: CRT _wopen on a path converted by kernel32 MultiByteToWideChar, asm-labelled C, no decision logic
+  allowlist BlindLedger.Gate.Flat.Io.pgWrite x2: gate_engine flat history file positioned page write: CRT _lseeki64 + _write, asm-labelled C, no decision logic
+  allowlist BlindLedger.Gate.Flat.Io.pgSync x2: gate_engine flat history file CRT _commit(fd), asm-labelled C, no decision logic
+  allowlist BlindLedger.Gate.Flat.Io.pgTrunc x2: gate_engine flat history file CRT _chsize_s(fd, len), asm-labelled C, no decision logic
+  allowlist BlindLedger.Gate.Flat.Io.pgClose x2: gate_engine flat history file CRT _close(fd), asm-labelled C, no decision logic
+  allowlist BlindLedger.Gate.Flat.Io.pgReadAt x2: obligations_shard log record read at an offset: kernel32 ReadFile with an OVERLAPPED offset, asm-labelled C, no decision logic
+  compiler-built ctorIdx pairs x20: `I.ctorIdx` by `I.casesOn` and its unsafe `I.ctorIdx._impl` tag read, each pair accepted by structure (Lean/Meta/Constructions/CtorIdx.lean)
   0 violations

@@ -123,7 +123,7 @@ theorem decodeCorrectionTransitionRequestBA₂_eq (ba : ByteArray) :
     rw [encodeCorrectionTransitionRequestBA_eq]
     cases hE : encodeCorrectionTransitionRequest p.1 with
     | none => simp
-    | some l => simp [beq_toByteArray_iff]
+    | some l => simp [toByteArray_eq_iff]
 
 def mutationHead (mutation : CorrectionMutation) : Bytes :=
   [UInt8.ofNat 1, encodeTransitionKind mutation.transition] ++

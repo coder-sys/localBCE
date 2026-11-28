@@ -1,4 +1,4 @@
-"""Felt-value scorecard ratchet (CONSTITUTION Art. XII, XIII.5).
+"""Felt-value scorecard ratchet (CONSTITUTION Art. XII.4).
 
 Reruns the Hospital H journey through the real staff server and staff.js and
 fails if any measured unit is worse than docs/scorecard/hospital_h.json in its

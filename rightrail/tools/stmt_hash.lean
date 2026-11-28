@@ -21,6 +21,7 @@ open Lean
     dropped), definition safety (safe/unsafe/partial), reducibility hints, and for an inductive numParams, numIndices,
     isRec, isUnsafe and the constructor list with constructor types.  A reached opaque, partial, implemented_by or extern
     constant makes the tool FAIL (non-zero exit, constant named): its kernel value is a stub, so hashing it would be a hole.
+    The one exception is the compiler's own `I.ctorIdx`, implemented by `I.ctorIdx._impl`, when `ctorIdxPair` confirms the pair.
     Digest is SHA3-512 (BlindLedger.Semantic.Fast).  Output, sorted: `name K hash16` (first 16 hex of that constant's
     hash), `path F hash16` per TCB file, then `tcb full`, `root full`.  tcb and root are authoritative; root is over the
     FULL per-name hashes and the tcb line. -/
@@ -139,11 +140,83 @@ def hint : ReducibilityHints → String
   | .abbrev => "a"
   | .regular n => s!"r{n}"
 
+-- CTORIDX-PAIR-BEGIN (tools/stmt_hash.lean carries the same text; tests/test_tcb_gate.py compares them)
+/-! Lean 4.36 (Lean/Meta/Constructions/CtorIdx.lean, `mkCtorIdx` and `mkCtorIdxImpl`) gives every inductive type `I` with more than
+    one constructor a function `I.ctorIdx : I → Nat`, defined by `I.casesOn`, and makes the compiler run the unsafe
+    `I.ctorIdx._impl`, which reads the constructor tag with `getObjTagNat`.  The pair is accepted by its structure and never by its
+    name: any code can define a `Foo.ctorIdx._impl` with another body. -/
+
+/-- Strips `k` lambdas, leaving loose variables; `none` if there are fewer. -/
+def stripLams : Expr → Nat → Option Expr
+  | e, 0 => some e
+  | .lam _ _ b _, k + 1 => stripLams b k
+  | _, _ => none
+
+/-- `fun xs x => getObjTagNat.{l} (I xs) x`, built from the binders of `ctorIdx`'s type (`k` of them, the last is `x`). -/
+def tagReader (l : Level) : Expr → Nat → Expr
+  | .forallE n t b bi, k + 1 =>
+    .lam n t (if k == 0 then mkApp2 (mkConst ``getObjTagNat [l]) (t.liftLooseBVars 0 1) (.bvar 0) else tagReader l b k) bi
+  | e, _ => e
+
+/-- The value `mkCtorIdx` gives `I.ctorIdx` for `I` with several constructors: `fun params indices x => I.casesOn params
+    (fun indices x => Nat) indices x (fun fields => 0) (fun fields => 1) ...`, with the fields' binder types left free. -/
+def casesOnShape (find? : Name → Option ConstantInfo) (info : InductiveVal) (v : Expr) : Bool :=
+  let n := info.numParams + info.numIndices
+  match stripLams v (n + 1) with
+  | none => false
+  | some b =>
+    let args := b.getAppArgs
+    let us := info.levelParams.map mkLevelParam
+    b.getAppFn == mkConst (Name.mkStr info.name "casesOn") (Level.one :: us)
+      && args.size == info.numParams + 1 + info.numIndices + 1 + info.ctors.length
+      && (List.range info.numParams).all (fun i => args[i]! == .bvar (n - i))
+      && (stripLams args[info.numParams]! (info.numIndices + 1)) == some (mkConst ``Nat)
+      && (List.range info.numIndices).all (fun j => args[info.numParams + 1 + j]! == .bvar (n - info.numParams - j))
+      && args[info.numParams + 1 + info.numIndices]! == .bvar 0
+      && (info.ctors.zipIdx).all fun (c, k) =>
+        match find? c with
+        | some (.ctorInfo ci) => (stripLams args[info.numParams + 2 + info.numIndices + k]! ci.numFields) == some (.lit (.natVal ci.cidx))
+        | _ => false
+
+/-- `I.ctorIdx` and `I.ctorIdx._impl` are exactly what the compiler builds for the inductive type `I` with several constructors:
+    `I.ctorIdx` is a safe definition by `I.casesOn`, implemented by `I.ctorIdx._impl` and by nothing else, and the unsafe
+    `I.ctorIdx._impl` has the same type and levels and is the tag read of `ctorIdx`'s own binders. -/
+def ctorIdxPair (find? : Name → Option ConstantInfo) (implBy? : Name → Option Name) (indName : Name) : Bool :=
+  match find? indName, find? (Name.mkStr indName "ctorIdx"), find? (Name.mkStr (Name.mkStr indName "ctorIdx") "_impl") with
+  | some (.inductInfo info), some (.defnInfo d), some (.defnInfo i) =>
+    let n := info.numParams + info.numIndices + 1
+    let rec sortOf : Expr → Nat → Option Level
+      | .sort l, 0 => some l
+      | .forallE _ _ b _, k + 1 => sortOf b k
+      | _, _ => none
+    info.ctors.length > 1 && d.safety == .safe && i.safety == .unsafe
+      && implBy? d.name == some i.name
+      && d.levelParams == info.levelParams && i.levelParams == info.levelParams
+      && i.type.eqv d.type
+      && casesOnShape find? info d.value
+      && (match sortOf info.type (n - 1) with
+          | some l => i.value.eqv (tagReader l d.type n)
+          | none => false)
+  | _, _, _ => false
+
+/-- A constant `c` carrying escape hatch `k` that is half of a compiler-built `ctorIdx` pair (see `ctorIdxPair`). -/
+def isCtorIdxPair (find? : Name → Option ConstantInfo) (implBy? : Name → Option Name) (c : Name) (k : String) : Bool :=
+  match c with
+  | .str ind "ctorIdx" => k == "implemented_by" && ctorIdxPair find? implBy? ind
+  | .str (.str ind "ctorIdx") "_impl" => k == "unsafe" && ctorIdxPair find? implBy? ind
+  | _ => false
+-- CTORIDX-PAIR-END
+
 /-- One reached constant: (line prefix, full hash, constants it points at), or an error naming a stub constant.
     Theorems below a root are skipped. -/
 def entry (db : Db) (c : Name) (isRoot : Bool) : Except String (Option (String × String × Array Name)) :=
   if let some ib := db.implBy[c]? then
-    throw s!"reached constant {c} is implemented_by {ib}: its kernel value is not the compiled code"
+    if isCtorIdxPair (db.consts[·]?) (db.implBy[·]?) c "implemented_by" then
+      -- the compiler's tag read: `ctorIdx`'s kernel value is its `casesOn` definition, which the check above confirms
+      match db.consts[c]? with
+      | some (.defnInfo v) => pure (some (s!"{c} D {safety v.safety} {hint v.hints}", sha (canon [v.type, v.value]), v.type.getUsedConstants ++ v.value.getUsedConstants))
+      | _ => throw s!"reached constant {c} is implemented_by {ib}: its kernel value is not the compiled code"
+    else throw s!"reached constant {c} is implemented_by {ib}: its kernel value is not the compiled code"
   else if db.extern.contains c then
     throw s!"reached constant {c} is extern: its C text is not in the pinned Expr"
   else match db.consts[c]? with

@@ -12,8 +12,9 @@ size without limit and without the caller sizing it.
   `seq + 1` in the low 40 bits (0 = empty).  A slot of choice `c` sits in the bucket of `a_c`.  The reserve holds the
   next bits of `a_c` above its bucket's level under a stop bit: `1` then `v` bits, `v ≤ 13`.  Reserve 0 is a void slot:
   no bits above the level are known.
-* **Bucket:** 8 slots, 64 bytes, one cache line; the used slots are a prefix.  Buckets live in segments of 1024
-  (64 KB), so growth allocates 64 KB at a time and never copies the table.
+* **Bucket:** 8 slots, 64 bytes, one cache line; the used slots are a prefix.  Buckets live in segments of 1023
+  (65,472 bytes), so growth allocates one segment at a time and never copies the table.  With the byte array's header a
+  segment is one 64 KB allocation; 1024 buckets would pass 64 KB by the header and cost the allocator twice that.
 * **Linear hashing:** `2^k + p` buckets.  The address of `a` is `a mod 2^k`, or `a mod 2^(k+1)` when that is below the
   split pointer `p`.  When the slots pass 9/10 of the room, bucket `p` splits: a slot's lowest reserve bit says whether
   it moves to bucket `p + 2^k`, and its reserve shifts down one.  A split reads no key and hashes nothing.  A void
@@ -42,7 +43,7 @@ def wAt (t : @& ByteArray) (j : @& Nat) : UInt64 :=
   (List.range 8).foldl (fun a i => a ||| ((t.get! (8 * j + i)).toUInt64 <<< (8 * i).toUInt64)) 0
 
 /-- Word `j` set, in place when `t` is not shared.  Out of range changes nothing. -/
-@[extern c inline "({ lean_object* a_ = #1; if (!lean_is_exclusive(a_)) a_ = lean_copy_byte_array(a_); if (lean_is_scalar(#2) && 8 * lean_unbox(#2) + 8 <= lean_sarray_size(a_)) *(uint64_t*)(lean_sarray_cptr(a_) + 8 * lean_unbox(#2)) = #3; a_; })"]
+@[extern c inline "({ lean_object* a_ = #1; if (!lean_is_exclusive(a_)) a_ = lean_copy_sarray(a_, lean_sarray_capacity(a_)); if (lean_is_scalar(#2) && 8 * lean_unbox(#2) + 8 <= lean_sarray_size(a_)) *(uint64_t*)(lean_sarray_cptr(a_) + 8 * lean_unbox(#2)) = #3; a_; })"]
 def wSet (t : ByteArray) (j : @& Nat) (v : UInt64) : ByteArray :=
   (List.range 8).foldl (fun a i => a.set! (8 * j + i) (v >>> (8 * i).toUInt64).toUInt8) t
 
@@ -52,17 +53,17 @@ def zeros (n : @& Nat) : ByteArray := ⟨Array.replicate n 0⟩
 
 /-! ## Buckets in segments -/
 
-/-- Slot `j` (taken mod 8) of bucket `b`: word `8 * (b mod 1024) + j` of segment `b / 1024`; 0 (empty) past the end. -/
-@[extern c inline "({ size_t b_ = lean_unbox(#2); lean_object* s_ = (lean_is_scalar(#2) && (b_ >> 10) < lean_array_size(#1)) ? lean_array_get_core(#1, b_ >> 10) : NULL; size_t o_ = 64 * (b_ & 1023) + 8 * (lean_unbox(#3) & 7); (s_ != NULL && lean_is_scalar(#3) && o_ + 8 <= lean_sarray_size(s_)) ? *(uint64_t*)(lean_sarray_cptr(s_) + o_) : (uint64_t)0; })"]
+/-- Slot `j` (taken mod 8) of bucket `b`: word `8 * (b mod 1023) + j` of segment `b / 1023`; 0 (empty) past the end. -/
+@[extern c inline "({ size_t b_ = lean_unbox(#2); lean_object* s_ = (lean_is_scalar(#2) && (b_ / 1023) < lean_array_size(#1)) ? lean_array_get_core(#1, b_ / 1023) : NULL; size_t o_ = 64 * (b_ % 1023) + 8 * (lean_unbox(#3) & 7); (s_ != NULL && lean_is_scalar(#3) && o_ + 8 <= lean_sarray_size(s_)) ? *(uint64_t*)(lean_sarray_cptr(s_) + o_) : (uint64_t)0; })"]
 def slotAt (segs : @& Array ByteArray) (b j : @& Nat) : UInt64 :=
-  wAt (segs.getD (b >>> 10) .empty) (8 * (b &&& 1023) + (j &&& 7))
+  wAt (segs.getD (b / 1023) .empty) (8 * (b % 1023) + (j &&& 7))
 
 /-- Slot `j` of bucket `b` set, in place when the segments are not shared. -/
 @[inline] def slotSet (segs : Array ByteArray) (b j : Nat) (v : UInt64) : Array ByteArray :=
-  segs.modify (b >>> 10) fun s => wSet s (8 * (b &&& 1023) + (j &&& 7)) v
+  segs.modify (b / 1023) fun s => wSet s (8 * (b % 1023) + (j &&& 7)) v
 
 /-- Asks the processor to fetch bucket `b`; no effect on any value (returns 0). -/
-@[extern c inline "({ size_t b_ = lean_unbox(#2); if (lean_is_scalar(#2) && (b_ >> 10) < lean_array_size(#1)) __builtin_prefetch(lean_sarray_cptr(lean_array_get_core(#1, b_ >> 10)) + 64 * (b_ & 1023)); (uint64_t)0; })"]
+@[extern c inline "({ size_t b_ = lean_unbox(#2); if (lean_is_scalar(#2) && (b_ / 1023) < lean_array_size(#1)) __builtin_prefetch(lean_sarray_cptr(lean_array_get_core(#1, b_ / 1023)) + 64 * (b_ % 1023)); (uint64_t)0; })"]
 def warmAt (_segs : @& Array ByteArray) (_b : @& Nat) : UInt64 := 0
 
 /-! ## Slot -/
@@ -157,7 +158,7 @@ def altS (k p b b' : Nat) (s : UInt64) : UInt64 :=
 /-! ## Table -/
 
 structure Idx where
-  /-- Segments of 1024 buckets of 8 slots (64 KB each). -/
+  /-- Segments of 1023 buckets of 8 slots (65,472 bytes each). -/
   segs : Array ByteArray
   k : Nat
   /-- Split pointer, below `2^k`. -/
@@ -187,7 +188,7 @@ initialize procSecret : UInt64 × UInt64 ← do
 /-- An empty table of `2^k0` buckets under the secret `(s0, s1)` (tests use a known one). -/
 def Idx.newKeyed (k0 : Nat) (s0 s1 : UInt64) : Idx := Id.run do
   let mut segs : Array ByteArray := #[]
-  for _ in [0:max 1 ((1 <<< k0) >>> 10)] do segs := segs.push (zeros 65536)
+  for _ in [0:max 1 ((2 ^ k0 + 1022) / 1023)] do segs := segs.push (zeros 65472)
   return ⟨segs, k0, 0, 0, .empty, 0, s0, s1⟩
 
 /-- An empty table of `2^k0` buckets under this process's secret. -/
@@ -199,10 +200,10 @@ def Idx.new (k0 : Nat) : Idx := Idx.newKeyed k0 procSecret.1 procSecret.2
 @[inline] def Idx.nb (x : Idx) : Nat := ((1 : UInt64) <<< x.k.toUInt64).toNat + x.p
 def Idx.cap (x : Idx) : Nat := 8 * x.nb
 /-- Bytes held by the segments and the stash. -/
-def Idx.bytes (x : Idx) : Nat := 65536 * x.segs.size + x.stash.size
+def Idx.bytes (x : Idx) : Nat := 65472 * x.segs.size + x.stash.size
 
 /-- Used slots of bucket `b` (they are a prefix).  Without branches: a branch on each loaded slot mispredicts. -/
-@[extern c inline "({ size_t b_ = lean_unbox(#2); lean_object* s_ = (lean_is_scalar(#2) && (b_ >> 10) < lean_array_size(#1)) ? lean_array_get_core(#1, b_ >> 10) : NULL; size_t u_ = 0; if (s_ != NULL) { size_t z_ = lean_sarray_size(s_); const uint8_t* c_ = lean_sarray_cptr(s_); size_t o_ = 64 * (b_ & 1023); for (int j_ = 0; j_ < 8; j_++) u_ += (o_ + 8 * j_ + 8 <= z_) && ((*(const uint64_t*)(c_ + o_ + 8 * j_) & 0xFFFFFFFFFFULL) != 0); } lean_box(u_); })"]
+@[extern c inline "({ size_t b_ = lean_unbox(#2); lean_object* s_ = (lean_is_scalar(#2) && (b_ / 1023) < lean_array_size(#1)) ? lean_array_get_core(#1, b_ / 1023) : NULL; size_t u_ = 0; if (s_ != NULL) { size_t z_ = lean_sarray_size(s_); const uint8_t* c_ = lean_sarray_cptr(s_); size_t o_ = 64 * (b_ % 1023); for (int j_ = 0; j_ < 8; j_++) u_ += (o_ + 8 * j_ + 8 <= z_) && ((*(const uint64_t*)(c_ + o_ + 8 * j_) & 0xFFFFFFFFFFULL) != 0); } lean_box(u_); })"]
 def usedIn (segs : @& Array ByteArray) (b : @& Nat) : Nat :=
   (List.range 8).foldl (fun u j => if isEmpty (slotAt segs b j) then u else u + 1) 0
 
@@ -213,7 +214,7 @@ def room (out : ByteArray) (w : Nat) : ByteArray := if 8 * w ≤ out.size then o
 
 /-- Bit `j` set for each used slot `j` of bucket `b` that is a hint for `q`, `x` (see `hit`).  Without branches, as
     `usedIn`. -/
-@[extern c inline "({ size_t b_ = lean_unbox(#2); lean_object* s_ = (lean_is_scalar(#2) && (b_ >> 10) < lean_array_size(#1)) ? lean_array_get_core(#1, b_ >> 10) : NULL; uint64_t m_ = 0; if (s_ != NULL) { size_t z_ = lean_sarray_size(s_); const uint8_t* c_ = lean_sarray_cptr(s_); size_t o_ = 64 * (b_ & 1023); for (int j_ = 0; j_ < 8; j_++) { uint64_t w_ = (o_ + 8 * j_ + 8 <= z_) ? *(const uint64_t*)(c_ + o_ + 8 * j_) : 0; uint64_t r_ = (w_ >> 42) & 0x3FFF; uint64_t t_ = r_ | (r_ >> 1); t_ |= t_ >> 2; t_ |= t_ >> 4; t_ |= t_ >> 8; t_ >>= 1; m_ |= (uint64_t)(((w_ & 0xFFFFFFFFFFULL) != 0) & ((w_ & 0xFF00020000000000ULL) == #3) & (((r_ ^ #4) & t_) == 0)) << j_; } } m_; })"]
+@[extern c inline "({ size_t b_ = lean_unbox(#2); lean_object* s_ = (lean_is_scalar(#2) && (b_ / 1023) < lean_array_size(#1)) ? lean_array_get_core(#1, b_ / 1023) : NULL; uint64_t m_ = 0; if (s_ != NULL) { size_t z_ = lean_sarray_size(s_); const uint8_t* c_ = lean_sarray_cptr(s_); size_t o_ = 64 * (b_ % 1023); for (int j_ = 0; j_ < 8; j_++) { uint64_t w_ = (o_ + 8 * j_ + 8 <= z_) ? *(const uint64_t*)(c_ + o_ + 8 * j_) : 0; uint64_t r_ = (w_ >> 42) & 0x3FFF; uint64_t t_ = r_ | (r_ >> 1); t_ |= t_ >> 2; t_ |= t_ >> 4; t_ |= t_ >> 8; t_ >>= 1; m_ |= (uint64_t)(((w_ & 0xFFFFFFFFFFULL) != 0) & ((w_ & 0xFF00020000000000ULL) == #3) & (((r_ ^ #4) & t_) == 0)) << j_; } } m_; })"]
 def hitMask (segs : @& Array ByteArray) (b : @& Nat) (q x : UInt64) : UInt64 :=
   (List.range 8).foldl (fun m j =>
     let s := slotAt segs b j
@@ -405,11 +406,11 @@ def half (src : @& ByteArray) (hi : Bool) (t : ByteArray) (o j c : Nat) : Nat �
 
 /-- Bucket `p` split into `p` and `q`: `half` of each, from a copy of bucket `p`.  In C, one pass with no allocation:
     the Lean steps cost about 0.3 us a split even on an empty table. -/
-@[extern c inline "({ lean_object* a_ = lean_ensure_exclusive_array(#1); size_t n_ = lean_array_size(a_); lean_object** e_ = lean_array_cptr(a_); uint64_t w_[8] = {0}; size_t p_ = lean_unbox(#2), q_ = lean_unbox(#3); if (lean_is_scalar(#2) && (p_ >> 10) < n_) { lean_object* sp_ = e_[p_ >> 10]; for (int j_ = 0; j_ < 8; j_++) { size_t f_ = 64 * (p_ & 1023) + 8 * j_; if (f_ + 8 <= lean_sarray_size(sp_)) w_[j_] = *(const uint64_t*)(lean_sarray_cptr(sp_) + f_); } } for (int h_ = 1; h_ >= 0; h_--) { size_t b_ = h_ ? q_ : p_; if (!lean_is_scalar(h_ ? #3 : #2) || (b_ >> 10) >= n_) continue; if (!lean_is_exclusive(e_[b_ >> 10])) e_[b_ >> 10] = lean_copy_byte_array(e_[b_ >> 10]); lean_object* t_ = e_[b_ >> 10]; size_t z_ = lean_sarray_size(t_); uint8_t* d_ = lean_sarray_cptr(t_) + 64 * (b_ & 1023); size_t o_ = 64 * (b_ & 1023); size_t c_ = 0; for (int j_ = 0; j_ < 8; j_++) { uint64_t s_ = w_[j_]; if ((s_ & 0xFFFFFFFFFFULL) == 0) break; uint64_t r_ = (s_ >> 42) & 0x3FFF; if (r_ < 2 || (int)(r_ & 1) == h_) { if (o_ + 8 * c_ + 8 <= z_) *(uint64_t*)(d_ + 8 * c_) = (s_ & ~0x00FFFC0000000000ULL) | ((r_ < 2 ? 0 : r_ >> 1) << 42); c_++; } } for (; c_ < 8; c_++) if (o_ + 8 * c_ + 8 <= z_) *(uint64_t*)(d_ + 8 * c_) = 0; } a_; })"]
+@[extern c inline "({ lean_object* a_ = lean_ensure_exclusive_array(#1); size_t n_ = lean_array_size(a_); lean_object** e_ = lean_array_cptr(a_); uint64_t w_[8] = {0}; size_t p_ = lean_unbox(#2), q_ = lean_unbox(#3); if (lean_is_scalar(#2) && (p_ / 1023) < n_) { lean_object* sp_ = e_[p_ / 1023]; for (int j_ = 0; j_ < 8; j_++) { size_t f_ = 64 * (p_ % 1023) + 8 * j_; if (f_ + 8 <= lean_sarray_size(sp_)) w_[j_] = *(const uint64_t*)(lean_sarray_cptr(sp_) + f_); } } for (int h_ = 1; h_ >= 0; h_--) { size_t b_ = h_ ? q_ : p_; if (!lean_is_scalar(h_ ? #3 : #2) || (b_ / 1023) >= n_) continue; if (!lean_is_exclusive(e_[b_ / 1023])) e_[b_ / 1023] = lean_copy_sarray(e_[b_ / 1023], lean_sarray_capacity(e_[b_ / 1023])); lean_object* t_ = e_[b_ / 1023]; size_t z_ = lean_sarray_size(t_); uint8_t* d_ = lean_sarray_cptr(t_) + 64 * (b_ % 1023); size_t o_ = 64 * (b_ % 1023); size_t c_ = 0; for (int j_ = 0; j_ < 8; j_++) { uint64_t s_ = w_[j_]; if ((s_ & 0xFFFFFFFFFFULL) == 0) break; uint64_t r_ = (s_ >> 42) & 0x3FFF; if (r_ < 2 || (int)(r_ & 1) == h_) { if (o_ + 8 * c_ + 8 <= z_) *(uint64_t*)(d_ + 8 * c_) = (s_ & ~0x00FFFC0000000000ULL) | ((r_ < 2 ? 0 : r_ >> 1) << 42); c_++; } } for (; c_ < 8; c_++) if (o_ + 8 * c_ + 8 <= z_) *(uint64_t*)(d_ + 8 * c_) = 0; } a_; })"]
 def splitB (segs : Array ByteArray) (p q : @& Nat) : Array ByteArray :=
-  let src := (segs.getD (p >>> 10) .empty).extract (64 * (p &&& 1023)) (64 * (p &&& 1023) + 64)
-  let segs := segs.modify (q >>> 10) fun t => half src true t (8 * (q &&& 1023)) 0 0 8
-  segs.modify (p >>> 10) fun t => half src false t (8 * (p &&& 1023)) 0 0 8
+  let src := (segs.getD (p / 1023) .empty).extract (64 * (p % 1023)) (64 * (p % 1023) + 64)
+  let segs := segs.modify (q / 1023) fun t => half src true t (8 * (q % 1023)) 0 0 8
+  segs.modify (p / 1023) fun t => half src false t (8 * (p % 1023)) 0 0 8
 
 /-- Slots of bucket `b` from `j` on that a split copies to both halves. -/
 def copied (segs : @& Array ByteArray) (b j : Nat) : Nat → Nat
@@ -468,7 +469,7 @@ def retry (segs : Array ByteArray) (k p n : Nat) (old nw : ByteArray) (sn : Nat)
 def Idx.split (x : Idx) : Idx :=
   let ⟨segs, k, p, n, st, sn, s0, s1⟩ := x
   let q := (1 <<< k) + p
-  let segs := if q >>> 10 < segs.size then segs else segs.push (zeros 65536)
+  let segs := if q / 1023 < segs.size then segs else segs.push (zeros 65472)
   let n := n + copied segs p 0 8
   let segs := splitB segs p q
   let (k', p') := if p + 1 == 1 <<< k then (k + 1, 0) else (k, p + 1)
@@ -1221,8 +1222,8 @@ theorem bit_one (j : Nat) : bit (1 : UInt64) j = decide (j = 0) := by
 
 /-! ## Bucket memory -/
 
-/-- Every segment is 64 KB. -/
-def SegsWf (segs : Array ByteArray) : Prop := ∀ i (h : i < segs.size), (segs[i]'h).size = 65536
+/-- Every segment is 1023 buckets (65,472 bytes). -/
+def SegsWf (segs : Array ByteArray) : Prop := ∀ i (h : i < segs.size), (segs[i]'h).size = 65472
 
 theorem getD_seg (segs : Array ByteArray) (i : Nat) :
     segs.getD i .empty = if h : i < segs.size then segs[i]'h else .empty := by
@@ -1231,30 +1232,22 @@ theorem getD_seg (segs : Array ByteArray) (i : Nat) :
   · simp [h, Array.getD_eq_getD_getElem?]
 
 theorem slotAt_eq (segs : Array ByteArray) (b j : Nat) (hj : j < 8) :
-    slotAt segs b j = wAt (segs.getD (b / 1024) .empty) (8 * (b % 1024) + j) := by
+    slotAt segs b j = wAt (segs.getD (b / 1023) .empty) (8 * (b % 1023) + j) := by
   unfold slotAt
-  have e1 : b >>> 10 = b / 1024 := by simp [Nat.shiftRight_eq_div_pow]
-  have e2 : b &&& 1023 = b % 1024 := by
-    have := Nat.and_two_pow_sub_one_eq_mod b 10
-    simpa using this
   have e3 : j &&& 7 = j := by
     have := Nat.and_two_pow_sub_one_eq_mod j 3
     have h8 : j % 8 = j := Nat.mod_eq_of_lt hj
     simpa [h8] using this
-  rw [e1, e2, e3]
+  rw [e3]
 
 theorem slotSet_eq (segs : Array ByteArray) (b j : Nat) (hj : j < 8) (v : UInt64) :
-    slotSet segs b j v = segs.modify (b / 1024) fun s => wSet s (8 * (b % 1024) + j) v := by
+    slotSet segs b j v = segs.modify (b / 1023) fun s => wSet s (8 * (b % 1023) + j) v := by
   unfold slotSet
-  have e1 : b >>> 10 = b / 1024 := by simp [Nat.shiftRight_eq_div_pow]
-  have e2 : b &&& 1023 = b % 1024 := by
-    have := Nat.and_two_pow_sub_one_eq_mod b 10
-    simpa using this
   have e3 : j &&& 7 = j := by
     have := Nat.and_two_pow_sub_one_eq_mod j 3
     have h8 : j % 8 = j := Nat.mod_eq_of_lt hj
     simpa [h8] using this
-  rw [e1, e2, e3]
+  rw [e3]
 
 theorem getD_modify (segs : Array ByteArray) (i n : Nat) (f : ByteArray → ByteArray) :
     (segs.modify i f).getD n .empty =
@@ -1277,30 +1270,30 @@ theorem segsWf_slotSet (segs : Array ByteArray) (hw : SegsWf segs) (b j : Nat) (
   intro i hi
   have hi' : i < segs.size := by simpa using hi
   rw [Array.getElem_modify hi]
-  by_cases h : b / 1024 = i
+  by_cases h : b / 1023 = i
   · rw [if_pos h, wSet_size]; exact hw i hi'
   · rw [if_neg h]; exact hw i hi'
 
 theorem slotAt_slotSet (segs : Array ByteArray) (hw : SegsWf segs) (b' j' : Nat) (hj' : j' < 8) (v : UInt64)
     (b j : Nat) (hj : j < 8) :
     slotAt (slotSet segs b' j' v) b j =
-      if b = b' ∧ j = j' ∧ b' / 1024 < segs.size then v else slotAt segs b j := by
+      if b = b' ∧ j = j' ∧ b' / 1023 < segs.size then v else slotAt segs b j := by
   rw [slotAt_eq _ _ _ hj, slotAt_eq _ _ _ hj, slotSet_eq _ _ _ hj', getD_modify]
-  by_cases hc : b' / 1024 = b / 1024 ∧ b / 1024 < segs.size
+  by_cases hc : b' / 1023 = b / 1023 ∧ b / 1023 < segs.size
   · rw [if_pos hc]
-    have hsz : (segs.getD (b / 1024) .empty).size = 65536 := by
+    have hsz : (segs.getD (b / 1023) .empty).size = 65472 := by
       rw [getD_seg, dif_pos hc.2]; exact hw _ hc.2
     rw [wAt_wSet _ (by rw [hsz])]
     split <;> split <;> first | rfl | (exfalso; omega)
   · rw [if_neg hc]
-    have : ¬ (b = b' ∧ j = j' ∧ b' / 1024 < segs.size) := by
+    have : ¬ (b = b' ∧ j = j' ∧ b' / 1023 < segs.size) := by
       rintro ⟨rfl, _, h3⟩
       exact hc ⟨rfl, h3⟩
     rw [if_neg this]
 
 theorem slotAt_ne_zero_inb (segs : Array ByteArray) (b j : Nat) (hj : j < 8) (h : slotAt segs b j ≠ 0) :
-    b / 1024 < segs.size := by
-  by_cases hb : b / 1024 < segs.size
+    b / 1023 < segs.size := by
+  by_cases hb : b / 1023 < segs.size
   · exact hb
   · exfalso
     apply h
@@ -1687,7 +1680,7 @@ theorem wb_set_other (k p : Nat) (segs : Array ByteArray) (hw : SegsWf segs) (a0
   exact ⟨hj, by rw [e]; exact h1, by rw [e]; exact h2, c, by rw [e]; exact h3⟩
 
 theorem wb_new (k p : Nat) (segs : Array ByteArray) (hw : SegsWf segs) (a0 : UInt64) (seq b u : Nat) (hu : u < 8)
-    (hb : b / 1024 < segs.size) (v : UInt64) (hne : isEmpty v = false) (hsq : seqOf v = seq) (c : Bool)
+    (hb : b / 1023 < segs.size) (v : UInt64) (hne : isEmpty v = false) (hsq : seqOf v = seq) (c : Bool)
     (hok : SlotOK k p (addrC a0 c) (a0 >>> 56) c b v) : WB k p (slotSet segs b u v) a0 seq b u := by
   have e : slotAt (slotSet segs b u v) b u = v := by
     rw [slotAt_slotSet segs hw b u hu v b u hu, if_pos ⟨rfl, rfl, hb⟩]
@@ -1727,12 +1720,12 @@ theorem pre_set (segs : Array ByteArray) (hw : SegsWf segs) (hP : Pre segs) (b u
   have e2 := slotAt_slotSet segs hw b u hu v b' (j + 1) (by omega)
   rw [e1] at hE
   rw [e2]
-  by_cases h1 : b' = b ∧ j = u ∧ b / 1024 < segs.size
+  by_cases h1 : b' = b ∧ j = u ∧ b / 1023 < segs.size
   · rw [if_pos h1, hv] at hE
     exact absurd hE (by simp)
   · rw [if_neg h1] at hE
     have h3 := hP b' j hj hE
-    by_cases h2 : b' = b ∧ j + 1 = u ∧ b / 1024 < segs.size
+    by_cases h2 : b' = b ∧ j + 1 = u ∧ b / 1023 < segs.size
     · exfalso
       obtain ⟨rfl, hju, _⟩ := h2
       rcases hT with hT | hT
@@ -1924,8 +1917,8 @@ theorem free_u (S : Array ByteArray) (hP : Pre S) (b : Nat) (h : usedIn S b < 8)
   obtain ⟨_, h2, h3⟩ := usedIn_spec S b (fun j hj => hP b j hj)
   exact ⟨h3 _ (Nat.le_refl _) h, h2⟩
 
-theorem seg_of (S : Array ByteArray) (k p β : Nat) (hnb : 2 ^ k + p ≤ 1024 * S.size) (h : β < 2 ^ k + p) :
-    β / 1024 < S.size := by
+theorem seg_of (S : Array ByteArray) (k p β : Nat) (hnb : 2 ^ k + p ≤ 1023 * S.size) (h : β < 2 ^ k + p) :
+    β / 1023 < S.size := by
   rw [Nat.div_lt_iff_lt_mul (by decide)]; omega
 
 theorem freeAlt_le (S : Array ByteArray) (k p b : Nat) : ∀ fuel j, freeAlt S k p b j fuel ≤ 8 ∨ j + fuel > 8 := by
@@ -2282,7 +2275,7 @@ def StOK (st : ByteArray) (sn m : Nat) : Prop :=
 /-- The table after `m` inserts is well formed: whole segments, slot prefixes, the buckets inside the segments and
     within `m` of the start size, and a well-formed stash. -/
 def Wf (x : Idx) (m : Nat) : Prop :=
-  SegsWf x.segs ∧ Pre x.segs ∧ x.p < 2 ^ x.k ∧ 2 ^ x.k + x.p ≤ 1024 * x.segs.size ∧ 2 ^ x.k + x.p ≤ 2 ^ 20 + m ∧
+  SegsWf x.segs ∧ Pre x.segs ∧ x.p < 2 ^ x.k ∧ 2 ^ x.k + x.p ≤ 1023 * x.segs.size ∧ 2 ^ x.k + x.p ≤ 2 ^ 20 + m ∧
     StOK x.stash x.sn m
 
 /-! ## The insert's stash branch -/
@@ -2643,19 +2636,19 @@ theorem k47 (k p m : Nat) (hnb : 2 ^ k + p ≤ 2 ^ 20 + m) (hm : m < 2 ^ 40) : k
 
 /-! ## Splitting a bucket -/
 
-theorem slotAt_push_lt (segs : Array ByteArray) (b j : Nat) (hb : b / 1024 < segs.size) :
-    slotAt (segs.push (zeros 65536)) b j = slotAt segs b j := by
+theorem slotAt_push_lt (segs : Array ByteArray) (b j : Nat) (hb : b / 1023 < segs.size) :
+    slotAt (segs.push (zeros 65472)) b j = slotAt segs b j := by
   rw [slotAt_mod, slotAt_mod segs, slotAt_eq _ _ _ (Nat.mod_lt _ (by decide)),
     slotAt_eq _ _ _ (Nat.mod_lt _ (by decide))]
   rw [Array.getD_eq_getD_getElem?, Array.getD_eq_getD_getElem?, Array.getElem?_push_lt hb, Array.getElem?_eq_getElem hb]
 
-theorem slotAt_push_out (segs : Array ByteArray) (b j : Nat) (hb : ¬ b / 1024 < segs.size) :
-    slotAt (segs.push (zeros 65536)) b j = 0 := by
+theorem slotAt_push_out (segs : Array ByteArray) (b j : Nat) (hb : ¬ b / 1023 < segs.size) :
+    slotAt (segs.push (zeros 65472)) b j = 0 := by
   rw [slotAt_mod]
-  by_cases h : b / 1024 = segs.size
+  by_cases h : b / 1023 = segs.size
   · rw [slotAt_eq _ _ _ (Nat.mod_lt _ (by decide)), Array.getD_eq_getD_getElem?, h, Array.getElem?_push_size]
     simp [wAt_zeros]
-  · by_cases hne : slotAt (segs.push (zeros 65536)) b (j % 8) = 0
+  · by_cases hne : slotAt (segs.push (zeros 65472)) b (j % 8) = 0
     · exact hne
     exfalso
     have := slotAt_ne_zero_inb _ b (j % 8) (Nat.mod_lt _ (by decide)) hne
@@ -2663,9 +2656,9 @@ theorem slotAt_push_out (segs : Array ByteArray) (b j : Nat) (hb : ¬ b / 1024 <
     omega
 
 theorem push_facts (segs : Array ByteArray) (hw : SegsWf segs) (hP : Pre segs) :
-    SegsWf (segs.push (zeros 65536)) ∧ Pre (segs.push (zeros 65536)) ∧
-      (segs.push (zeros 65536)).size = segs.size + 1 ∧
-      ∀ k p a s, FndB k p segs a s → FndB k p (segs.push (zeros 65536)) a s := by
+    SegsWf (segs.push (zeros 65472)) ∧ Pre (segs.push (zeros 65472)) ∧
+      (segs.push (zeros 65472)).size = segs.size + 1 ∧
+      ∀ k p a s, FndB k p segs a s → FndB k p (segs.push (zeros 65472)) a s := by
   refine ⟨?_, ?_, Array.size_push .., ?_⟩
   · intro i hi
     rw [Array.size_push] at hi
@@ -2675,7 +2668,7 @@ theorem push_facts (segs : Array ByteArray) (hw : SegsWf segs) (hP : Pre segs) :
       subst this
       rw [Array.getElem_push_eq]; exact zeros_size _
   · intro b j hj he
-    by_cases hb : b / 1024 < segs.size
+    by_cases hb : b / 1023 < segs.size
     · rw [slotAt_push_lt _ _ _ hb] at he ⊢; exact hP b j hj he
     · rw [slotAt_push_out _ _ _ hb]; exact isEmpty_zero
   · rintro k p a s ⟨b, j, hj, he, hs, c, hc⟩
@@ -2718,14 +2711,14 @@ theorem full_of_used (S : Array ByteArray) (hP : Pre S) (b : Nat) (h : ¬ usedIn
 
 theorem new_eq (k0 : Nat) (s0 s1 : UInt64) :
     Idx.newKeyed k0 s0 s1 =
-      ⟨Array.replicate (max 1 ((1 <<< k0) >>> 10)) (zeros 65536), k0, 0, 0, .empty, 0, s0, s1⟩ := by
+      ⟨Array.replicate (max 1 ((2 ^ k0 + 1022) / 1023)) (zeros 65472), k0, 0, 0, .empty, 0, s0, s1⟩ := by
   unfold Idx.newKeyed
   simp only [Std.Legacy.Range.forIn_eq_forIn_range']
   simp [List.forIn_pure_yield_eq_foldl, Std.Legacy.Range.size]
   apply Array.ext'
   simp [List.map_const']
 
-theorem slot_rep (m b j : Nat) : slotAt (Array.replicate m (zeros 65536)) b j = 0 := by
+theorem slot_rep (m b j : Nat) : slotAt (Array.replicate m (zeros 65472)) b j = 0 := by
   have hE : (ByteArray.empty : ByteArray) = zeros 0 := rfl
   unfold slotAt
   rw [Array.getD_eq_getD_getElem?, Array.getElem?_replicate]
@@ -2733,8 +2726,6 @@ theorem slot_rep (m b j : Nat) : slotAt (Array.replicate m (zeros 65536)) b j = 
 
 theorem new_wf (k0 : Nat) (hk0 : k0 ≤ 20) (s0 s1 : UInt64) : Wf (Idx.newKeyed k0 s0 s1) 0 := by
   rw [new_eq]
-  have hsh : (1 <<< k0) >>> 10 = 2 ^ k0 / 1024 := by
-    rw [Nat.shiftLeft_eq, Nat.one_mul, Nat.shiftRight_eq_div_pow]
   have hE : (ByteArray.empty : ByteArray) = zeros 0 := rfl
   have hpos := Nat.two_pow_pos k0
   have h20 : 2 ^ k0 ≤ 2 ^ 20 := Nat.pow_le_pow_right (by omega) hk0
@@ -2742,17 +2733,12 @@ theorem new_wf (k0 : Nat) (hk0 : k0 ≤ 20) (s0 s1 : UInt64) : Wf (Idx.newKeyed 
   refine ⟨?_, ?_, hpos, ?_, by omega, ?_⟩
   · intro i hi; simp [zeros_size]
   · intro b j _ _; rw [slot_rep]; exact isEmpty_zero
-  · rw [Array.size_replicate, hsh]
-    by_cases h : k0 < 10
-    · have : 2 ^ k0 ≤ 2 ^ 10 := Nat.pow_le_pow_right (by omega) (by omega)
-      have h1 : (2 : Nat) ^ 10 = 1024 := by decide
-      have := Nat.le_max_left 1 (2 ^ k0 / 1024)
-      omega
-    · obtain ⟨t, rfl⟩ : ∃ t, k0 = 10 + t := ⟨k0 - 10, by omega⟩
-      have h1 : (2 : Nat) ^ 10 = 1024 := by decide
-      rw [Nat.pow_add, h1, Nat.mul_comm, Nat.mul_div_cancel _ (by decide)]
-      have := Nat.le_max_right 1 (2 ^ t)
-      omega
+  · rw [Array.size_replicate]
+    have h1 := Nat.div_add_mod (2 ^ k0 + 1022) 1023
+    have h2 := Nat.mod_lt (2 ^ k0 + 1022) (show 1023 > 0 by decide)
+    have h4 : 1023 * ((2 ^ k0 + 1022) / 1023) ≤ 1023 * max 1 ((2 ^ k0 + 1022) / 1023) :=
+      Nat.mul_le_mul_left _ (Nat.le_max_right _ _)
+    omega
   · show StOK ByteArray.empty 0 0
     rw [hE]
     refine ⟨Or.inl (zeros_size _), by omega, ?_, by omega, by rw [zeros_size]; omega, ?_⟩

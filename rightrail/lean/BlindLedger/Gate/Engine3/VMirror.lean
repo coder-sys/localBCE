@@ -230,7 +230,8 @@ structure Rd where
   deriving Inhabited
 
 /-- Key `q` in set `s`; `walked` holds this batch's cores.  `cut`: the decider uses only the key's first row (released)
-    or its first two rows that differ (unresolved), so a key of a summarised core reads those from its entry. -/
+    or its first two rows that differ (unresolved), so a key of a summarised core reads those from its entry; a released
+    exact key of more than one row reads its chain, since an exact repeat is answered against all of its rows. -/
 def readKey (ctx : KeyCtx) (s : Side) (walked : IO.Ref Walk) (cut : Bool) (q : KeyQ) : IO Rd := do
   if s.f.n == 0 then return ⟨#[], #[], 0⟩
   let kind := q.kb[0]!
@@ -263,7 +264,7 @@ def readKey (ctx : KeyCtx) (s : Side) (walked : IO.Ref Walk) (cut : Bool) (q : K
     match s.sum.find near (keyWord s.sum.seed near q.row) with
     | none => return ⟨#[], #[], if capN < cc then cc else 0⟩
     | some (_, e) =>
-      if !e.mixed then
+      if !e.mixed && !(exact && s.set == 0 && 1 < e.count) then
         let y := RowX.ofChunk (← get s.f s.set e.first) 0
         if !has y then return ⟨#[], #[], if capN < cc then cc else 0⟩
         let n := if capN < cc then cc else e.count
@@ -304,11 +305,15 @@ structure Got where
 def concat (rs : Array Rd) : Array RowX × Array Nat :=
   rs.foldl (fun (a, b) r => (a ++ r.rows, b ++ r.seq)) (#[], #[])
 
-/-- The checker's own copy of `Hist.payLines` (the checker shares no code with `Hist`).  The loop `read` ran inline,
-    moved here unchanged so a lemma can name it (`Flat.PayNum.payLinesV_pidx`). -/
-def payLinesV (reqs : Array Run.Req) (nb : Nat) : Option (ByteArray × Array Nat) := Id.run do
-  let mut lb := ByteArray.emptyWithCapacity (lineW2 * nb)
-  let mut pidx : Array Nat := Array.emptyWithCapacity nb
+/-- The batch of request `q` (bytes `bs`; `reqs` the admitted requests whose lines the batch keeps, which are `b`; `byp`
+    the admitted bypasses; `lim` the HOLD-level payments and their holds masks; `pres` the feeds' presence) on the sets with heads `hr`, `hu`: each key read in both sets,
+    then the id keys of the unresolved CAP rows of redone payments in the released set, then the layout.  None when a
+    kept line has no store line. -/
+def read (m : M) (hr hu : Head) (bs : ByteArray) (q : Frame.Req) (reqs : Array Run.Req) (b : Array Line)
+    (byp lim : List (Nat × Nat)) (pres : Bool × Bool × Bool × Bool) : IO (Option Got) := do
+  let fx := ReadB.feedsW bs q pres (ld64 (← IO.getRandomBytes 8) 0)
+  let mut lb := ByteArray.emptyWithCapacity (lineW2 * b.size)
+  let mut pidx : Array Nat := Array.emptyWithCapacity b.size
   let mut np := 0
   for x in reqs do
     if x.ra.flow.ruled && !x.ra.lines.isEmpty then
@@ -317,16 +322,6 @@ def payLinesV (reqs : Array Run.Req) (nb : Nat) : Option (ByteArray × Array Nat
         lb := ReadB.storeLine lb ln pf
         pidx := pidx.push np
       np := np + 1
-  return some (lb, pidx)
-
-/-- The batch of request `q` (bytes `bs`; `reqs` the admitted requests whose lines the batch keeps, which are `b`; `byp`
-    the admitted bypasses; `lim` the HOLD-level payments and their holds masks; `pres` the feeds' presence) on the sets with heads `hr`, `hu`: each key read in both sets,
-    then the id keys of the unresolved CAP rows of redone payments in the released set, then the layout.  None when a
-    kept line has no store line. -/
-def read (m : M) (hr hu : Head) (bs : ByteArray) (q : Frame.Req) (reqs : Array Run.Req) (b : Array Line)
-    (byp lim : List (Nat × Nat)) (pres : Bool × Bool × Bool × Bool) : IO (Option Got) := do
-  let fx := ReadB.feedsW bs q pres (ld64 (← IO.getRandomBytes 8) 0)
-  let some (lb, pidx) := payLinesV reqs b.size | return none
   if pidx.size != b.size || lb.size != lineW2 * b.size then return none
   let req := (Array.range b.size).map fun i => RowX.ofChunk lb (lineW2 * i)
   let ks := keysOf m.ctx req

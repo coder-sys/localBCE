@@ -1,5 +1,5 @@
 """The provider screen: the server agrees with api + fix_list on every vector, refuses hostile requests with fixed codes,
-and the declared interaction model (Art. XIII.4) matches the page and has no dead control, orphan screen or trap."""
+and the declared interaction model (Art. XII.7) matches the page and has no dead control, orphan screen or trap."""
 
 import http.client
 import itertools
@@ -199,7 +199,7 @@ class InteractionModelTests(unittest.TestCase):
                 self.assertIn(f'show("{name}"', _JS, name)
 
     def test_accessibility(self) -> None:
-        """WCAG 2.1 AA (Art. XIII.3): names, aria-live and contrast in both palettes."""
+        """WCAG 2.1 AA (Art. XII.6): names, aria-live and contrast in both palettes."""
         self.assertIn('<html lang="en">', _HTML)
         self.assertRegex(_HTML, r'<label for="case">\w')
         self.assertRegex(_HTML, r'<button id="check"[^>]*>Check</button>')

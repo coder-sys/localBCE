@@ -478,3 +478,178 @@
   fixed Lean (bbd0e947's rule logic) and the 2026-11-21 decisions D1, D2 and
   D4 are superseded. The work moved to a colleague's x64 machine (31.5 GiB),
   where a baseline build of e5d0f36b is running.
+- 2026-11-24: on the colleague's x64 machine, unmodified trunk e5d0f36b was
+  baselined (TRUNK_MOVE_PLAN.md has the numbers). lake build fails on 17
+  stale RuleSet axiom pins (515 of 516); the 21 executables and side
+  projects build. pytest with every program built: 10 failures left, traced
+  to SQLite (the trunk wants 3.53.1; fixed by swapping that DLL into a
+  private CPython 3.14.4), two trunk test defects (an order-dependent test
+  and a JSON depth only CPython 3.11 refuses) and a timing test that is
+  unstable on this laptop. The browser tests were not run (owner: no Node.js
+  or Playwright download). The maintainer's five answers were checked
+  against the tree and hold. The two test fixes are a local commit on
+  rightrail-main 95066ed4 for the owner to push as a pull request.
+- 2026-11-24: owner decisions. The 14 localBCE commits under rightrail/ on
+  the fc89f9e5 base are dropped from the tree after a commit-by-commit
+  review (kept only as reference: c7ad3c65's FLAT_V1 wording fix, to be
+  rechecked and sent upstream, and bbd0e947's eligibility cases for the
+  rule-set v2 pack; the six reason-bound proofs are not re-ported while
+  trunk has 29 reasons against a cap of 32). "The public-repo question is
+  settled: RightRail's code may be imported into localBCE and pushed."
+- 2026-11-24: TRUNK_MOVE_PLAN.md step M1, owner: "Go ahead with M1 as
+  approved". On new branch codex/rightrail-trunk-e5d0f36b, rightrail/ is
+  the tree of e5d0f36b byte for byte (tree 86fdbe4e, 769 files; no
+  history). RIGHTRAIL_IMPORTED_FROM.md rewritten; the self-check script
+  names the new commit. Check set on this machine, reds reported to the
+  owner before the commit: scan_secrets flags the PEM header literal at
+  rightrail/tests/test_privacy_artifact_scan.py:188 (earlier imports split
+  it; this import is byte-identical); scripts/tests has 1 error
+  (test_elig_snapshot imports gate_rules_v2_ref.py, which the import
+  removes; M4 retargets or parks the builder); tests has 1 error (pypdf not
+  installed); cargo check, test and build and the workflow YAML parse could
+  not run (no Rust, no PyYAML here); the self-check's one FAIL is "default
+  config", from this machine's python3 alias (the config values are
+  right). Pass: validate_ops_scaffold, the review-queue check, the
+  rightrail bloat budget test. The maintainer's axiom-pin fix follows as
+  its own commit, taken from trunk merge 69dec25d.
+- 2026-11-24: owner: the go-ahead for M1 was not acceptance of the reds;
+  clear them before any push. Approved downloads: Rust (rustup, stable),
+  PyYAML, pypdf. Done: Rust 1.100.0 stable (x86_64-pc-windows-gnu, no PATH
+  change) and a Python 3.12 environment at C:\work\localbce-venv with
+  PyYAML 6.0.4 and pypdf 7.1.1. Then, each its own commit on
+  codex/rightrail-trunk-e5d0f36b: the maintainer's axiom-pin fix taken
+  from trunk merge 69dec25d (291534ee; rightrail's lake build 516 of 516);
+  the PEM header literal split at
+  rightrail/tests/test_privacy_artifact_scan.py:188, the only localBCE
+  deviation from the imported tree (aa5e691c); and the eligibility
+  snapshot builder parked, superseded by the maintainer's answer 4:
+  scripts/elig_snapshot.py, scripts/tests/test_elig_snapshot.py and
+  scripts/tests/fixtures/elig/roster_v1.json moved under parked/localbce/
+  at the same relative paths (this replaces "retarget or park" in
+  TRUNK_MOVE_PLAN.md step M4). Check set after these, all passing: cargo
+  check, cargo test (45) and cargo build; scripts/tests; tests (1 skip);
+  rightrail's bloat budget test; the workflow YAML parse;
+  validate_ops_scaffold; scan_secrets; the review-queue check; the
+  self-check with a real python3 (11 PASS, 0 FAIL, 4 NOT-YET). Not pushed.
+- 2026-11-25: the owner decided on 2026-11-24 (entry above) that
+  RightRail's code may be imported
+  into the public localBCE repository. With the owner's approval,
+  codex/rightrail-trunk-e5d0f36b was pushed to coder-sys/localBCE at
+  3fa1c83e as a plain push of a new branch (no force), confirmed with
+  ls-remote. RIGHTRAIL_IMPORTED_FROM.md, TRUNK_MOVE_PLAN.md decision 1 and
+  HANDOFF.md section 1 now say so in place of "push on hold".
+- 2026-11-28: G2 as a rule-set v2 pack, local-only checks (design:
+  G2_RULESET_V2_DESIGN.md; the Python part is commit 6e6ea7d4). With the
+  owner's approval the 43 cases were put to RightRail's Lean tool
+  ruleset_admit, and copies of both records were admitted under test keys.
+  The keys are RightRail's fixed test-only keys, derived in memory by the
+  signer's kat-keygen mode; no key or seed file was made, keygen was not
+  run, and nothing was written into either repository. A test-key
+  admission checks mechanics only and is not a real signed rule set. The
+  owner accepted that scripts/tests/test_g2_ruleset_pack_lean.py is
+  skipped, with the reason named, where G2_LEAN_CHECK=1 is not set or the
+  Lean or signer executable is absent, which includes CI. Run under the
+  memory guard: 3 tests passed, peak 69 MB. Not pushed.
+- 2026-11-28: at the owner's request the guarded local-only G2 test was
+  run five times in a row: 3 tests passed each time (10.7 to 11.0 s, peak
+  67 to 69 MB), and the helper's full output (every Lean answer and
+  admission line) was identical across five further runs. Nothing was
+  written into either repository. The owner then approved committing the
+  local-only checks as one local commit, not pushed.
+- 2026-11-28: with the owner's approval, 2cb875c0 (on 6e6ea7d4) was
+  pushed to codex/rightrail-trunk-e5d0f36b as a plain fast-forward (no
+  force), confirmed with ls-remote. Plan step M4, parity harness: G2's
+  aid code test is mapped to reason bit 26 (PROGRAM_NOT_ELIGIBLE) and
+  compared on the G2 pack's 43 cases, with claim flags derived from each
+  case's eligibility read; G2_BENEFIT_LEVEL_MISSING is not compared.
+  G_RULE_PARITY_REPORT regenerated: 308 lines, 159 agreements, 148
+  differences, 1 not compared. The 265 v1 lines are unchanged (140, 124,
+  1). The G2 cases: 19 agreements, 24 differences (14 review against a
+  localBCE denial, 7 review against a localBCE approval, 3 held by both
+  with localBCE naming G1). The RightRail side for the G2 cases is the
+  pack's pinned expected reasons, not a running gate.
+- 2026-11-28: 6a493e04 (parity harness, M4) was pushed to
+  codex/rightrail-trunk-e5d0f36b as a plain fast-forward with the owner's
+  approval, confirmed with ls-remote; the three CI jobs on draft PR 10
+  passed. The owner approved ELIG_EXTRACT_AND_WIRING_DESIGN.md with
+  changes: placeholders only in an explicit test mode, and a missing
+  status never defaults to eligible (D3); claim_input.json does not
+  change, the converter applies the stated date rule and sets aside a
+  claim whose total is not its line sum (D6); the billing NPI as
+  rendering party is a test-only assumption (D7); only a RightRail allow
+  maps to APPROVED and a hold is not a final denial (D8); a shadow run
+  decides nothing (D9). Part 1 built: scripts/
+  build_elig_extract.py writes a synthetic roster as an RRELIG01 extract.
+  It reproduces trunk's three golden extract files byte for byte, refuses
+  the 17 hostile files a roster can express with the reader's cause, and
+  trunk's independent verifier accepts its output (10 fact rows). The
+  parked snapshot builder stays parked (D1). Benefit level has no field
+  and is dropped. Nothing loads facts into a store or decides a line.
+  Part 2 (claim to payment line, decision back) is not built.
+- 2026-11-28: be54adea (extract writer, part 1) was pushed to
+  codex/rightrail-trunk-e5d0f36b as a plain fast-forward with the owner's
+  approval, confirmed with ls-remote; the three CI jobs on draft PR 10
+  passed, and RightRail's independent extract verifier ran and passed on
+  the Linux and Windows jobs. Read-only date check: feeding the Rust
+  engine yyyymmdd numbers changes no result (288 lines with a calendar
+  service date give the same status and reason as with day counts; 20
+  lines with an invalid date have no day count). The owner decided to
+  leave the harness encoding as it is; the parity report's assumptions
+  now say so. Part 2's two pure functions built
+  (scripts/rightrail_claim_adapter.py): a claim as a RightRail payment
+  request or a set-aside (day-count date rule; a total mismatch or an
+  unconvertible date is set aside, nothing corrected; the billing NPI as
+  rendering party is a flagged test-only assumption), and a decision as
+  an adjudication result (only an allow on every line gives APPROVED; a
+  hold is not a final denial). claim_input.json is unchanged. Nothing
+  calls these functions and nothing runs RightRail.
+- 2026-11-28: 4f8baf4f (wiring part 2) was pushed to
+  codex/rightrail-trunk-e5d0f36b as a plain fast-forward with the owner's
+  approval, confirmed with ls-remote; the three CI jobs on draft PR 10
+  passed (scripts/tests 107 ran on Linux and on Windows, 1 skip each).
+  CORRECTION to that commit and to the entry above: its adapter compared
+  claim_amount with the line sum as if both were cents, and its message
+  said the three existing claim files are set aside (total_mismatch).
+  That was wrong. A read-only check found the unit rule in the parked
+  STARK schema and code (line charges equal claim_amount * 100 cents),
+  and the owner confirmed that claim_amount is in whole dollars and line
+  charges in cents. The adapter's check is now claim_amount * 100 = line
+  sum in cents; a claim that fails is still set aside, never corrected;
+  a total with cents cannot be written and is set aside. The three
+  existing claim files are sendable and unchanged. The pushed commit is
+  not amended. The design states the rule as the adapter's own and cites
+  the parked schema as its origin.
+- 2026-11-28: 7efc96f7 (the unit correction) was pushed to
+  codex/rightrail-trunk-e5d0f36b as a plain fast-forward with the owner's
+  approval, confirmed with ls-remote; the three CI jobs on draft PR 10
+  passed (scripts/tests 109 ran on Linux and on Windows, 1 skip each).
+  The owner approved SHADOW_RUN_DESIGN.md with changes: a scenario set
+  that includes scenarios expected to differ, each with its outcome
+  stated in advance; the pinned engine only (the rows-file engine with a
+  substituted pin is not approved); requests built directly, which
+  bypasses RightRail's claim intake; a separate record file with no raw
+  member id, each record saying in words that it is a test-key run that
+  decides nothing and binds no one; the CI skip accepted. Built: the
+  scenario set (13 scenarios), the pure parts and the runner. The run
+  itself HAS NOT BEEN RUN: RightRail's store fixture needs an epoch key
+  file made by the signer's keygen mode (a sealed seed file in the
+  scratch directory), which the approved key arrangement does not cover.
+  The runner refuses to start without SHADOW_ALLOW_SCRATCH_KEYGEN=1; the
+  owner's decision on that is open (design D11).
+- 2026-11-28: the owner approved the scratch key files (D11): keygen may
+  make the store epoch keys in the scratch directory only; they are never
+  copied, logged or printed; the report confirms they are gone. The
+  scenario table was approved as written. FIRST SHADOW RUN, once, under
+  the memory guard (exit 0, peak 179 MB), run id
+  shadow-20261128T073023+0000, pinned engine gate_engine.exe 8baf1ba3...
+  All 13 scenarios gave their predicted outcome, with no expectation
+  changed: 11 sent, 2 set aside; 3 allow and 4 hold agree (matched, by
+  construction); 4 differ as predicted (member absent from the feed:
+  HOLD MEMBER_NOT_ENROLLED; repeat of a paid claim: ANSWERED
+  FFS_DUPLICATE_LINE; future service date: HUMAN_REVIEW
+  SERVICE_DATE_FUTURE; stale death feed: HUMAN_REVIEW STALE_DMF). The
+  scratch directory (under trunk's test scratch root, outside both
+  repositories) and its key files are gone; no raw member id is in the
+  records; nothing under rightrail/, parked/ or the RightRail clone
+  changed. It is a test-key run: it decided nothing and binds no one.
+  Records are in state/shadow/ (untracked, not committed).

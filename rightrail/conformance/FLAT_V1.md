@@ -30,27 +30,32 @@ batch, not the history. `Root_b` is the state root after the batch (section 5), 
 as the batch. Equal heads mean the same shard, genesis, batch digests and roots, or two distinct inputs of the step share a
 SHA3-512 digest. A head cannot be rebuilt from the rows alone: the roots are needed.
 
-A checkpoint's state digest is the head after its batch. Each token of the batch commits to its input as INPUT/v6,
-`H("RR/GATE/INPUT/v6" ‖ 0x00 ‖ ctx ‖ rd)`: `ctx` is the batch context, the request frame's body before its request
-count (today, the pre-batch head, the feeds with their pins, the redone payments, the key set, grant and bypasses and the
-engine release), and `rd` the payment digest over the request's bytes with its lines replaced by their root
-(`conformance/ENGINE_V3.md` §18, `Gate.inputV6`, injective by `inputV6Pre_inj`). The batch's identity, logged as `rq`,
+A checkpoint's state digest is the head after its batch. Each token of the batch commits to its input as INPUT/v7,
+`H("RR/GATE/INPUT/v7" ‖ 0x00 ‖ ctx ‖ lp32 head ‖ lines root ‖ tail)`: `ctx` is the batch context, the request frame's
+body before its request count (today, the pre-batch head, the feeds with their pins, the redone payments, the key set,
+grant and bypasses and the engine release), and the rest is the request's bytes with its lines replaced by their root
+(`conformance/ENGINE_V3.md` §18, `Gate.inputV7`, injective by `inputV7Pre_inj`). The batch's identity, logged as `rq`,
 is `BATCH-INPUT` over `ctx` and each payment's input in frame order (`Frame.ident`). The worker puts the input in each
 leaf of its answer; the producer stores the frame bytes with the batch.
 
 ### 2.1 Authority record
 
-The shard's authority record (`AuthRec`, `encAuth`, 208 bytes) is
+The shard's authority record (`AuthRec`, `encAuth`, `authLen` = 276 bytes) is
 
-    auth = pin 64 ‖ be4 epoch ‖ head 64 ‖ be4 day ‖ cp 64 ‖ be8 floor
+    auth = pin 64 ‖ be4 epoch ‖ head 64 ‖ be4 day ‖ cp 64 ‖ be8 floor ‖ rs 64 ‖ be4 rsv
 
-the key-set genesis pin, the ratchet of the key-set head last admitted (epoch, head digest, day, checkpoint), and the
-highest grant serial admitted (`floor`). It lives in the trailer (section 6) and every chain step covers it, so a trailer
+the key-set genesis pin, the ratchet of the key-set head last admitted (epoch, head digest, day, checkpoint), the
+highest grant serial admitted (`floor`), and the rule set in force: the digest of the newest rule-set record admitted and
+its version (`rs`, `rsv`; the zero digest and 0 for none). This engine runs no rule set: it writes `rsv` 0 with the zero
+digest, and a store whose record (in the trailer or a pending batch) has `rsv` above 0 is `CORRUPT`. A frame that
+asserts a rule-set version above the record's holds as `RULESET_STALE`, and one that presents rule-set records as
+`RULESET_NOT_RUN` (FRAME_V1 section 2). The record lives in the trailer (section 6) and every chain step covers it, so a trailer
 of another head carries another record. `flat init` stores the pin with the ratchet at the genesis key set and floor 0.
 A batch with no requests carries the record unchanged; a committed batch with requests stores the ratchet its key-set
 head reached and the serial of the grant it admitted. Proved for admission only: `floor_monotone` shows that an admitted
 grant's serial is not below the stored floor or the frame's. The commit step that stores the record and reads it back
-(`encAuth`, `decAuth`) is covered by tests, not by a theorem. The worker prints the record as `RULES_FLAT_AUTH hex` before
+is covered by tests, not by a theorem; the codec is proved: `decAuth` reads exactly `authLen` bytes (`decAuth_isSome`)
+and returns the record `encAuth` wrote (`decAuth_encAuth`). The worker prints the record as `RULES_FLAT_AUTH hex` before
 `RULES_FLAT_HEAD`. The pin is checked in three places, by tests and not by a theorem (the third only when a caller asks):
 
 - Lean, at `flat open` (section 7): the host sends the tenant's pin, and once the open has brought the index to the
@@ -152,10 +157,9 @@ file) and nothing else.
 - The trailer is `dom FLAT/FRAME ‖ leb shard ‖ leb nb0 ‖ leb batches ‖ leb (chunk + 1, or 0 for none) ‖ head(released) ‖
   head(unresolved) ‖ leb nx ‖ auth ‖ rq ‖ prev ‖ digest ‖ head`: the shard, the directory's bucket count when the store
   was created, the batch count, the chunk, the set heads, the next install number, the shard's authority record after the
-  batch (208 bytes: key-set genesis pin 64 ‖ ratchet epoch u32 ‖ ratchet head 64 ‖ day u32 ‖ checkpoint 64 ‖ grant serial
-  floor u64, big endian), the batch identity `rq`, the head before the batch, the batch digest and the head after it. `rq`
-  is `Frame.ident`: `BATCH-INPUT` over the batch context (`CONTEXT/v1`) and each request's INPUT/v6 (ENGINE_V3 §18, §24),
-  not a frame digest. The batch is committed when
+  batch (`authLen` = 276 bytes: key-set genesis pin 64 ‖ ratchet epoch u32 ‖ ratchet head 64 ‖ day u32 ‖ checkpoint 64 ‖
+  grant serial floor u64 ‖ rule-set digest 64 ‖ rule-set version u32, big endian), the request digest `rq`, the head before the batch, the batch digest and the head after it. `rq`
+  is the request frame's own digest, `H(dom FRAME ‖ body)` (FRAME_V1), over the request bytes exactly as the host sent them. The batch is committed when
   its trailer is on disk. A load takes the authority record from the target's frame; the state root binds it, so a record
   swapped or rewound refuses the load.
 
@@ -193,7 +197,7 @@ mismatch prints `RULES_FLAT_HOLD CORRUPT` and writes nothing.
 
 Torn batches. A frame with no whole trailer is not a batch: load cuts the log after the signed head's frame. One whole
 frame after the signed head (the batch was committed and the host never sealed it) is replayed too and kept; the batch is
-then decided again, and it must have the same batch identity (`rq`) and come out as the same frame, else it is refused
+then decided again, and it must be the same request bytes (`rq`) and come out as the same frame, else it is refused
 (`PENDING`). Two whole frames past the signed head are `HEAD`. After a kill at any write step, load at the signed head gives
 the last committed state, and the resent batch answers and commits as an uninterrupted run does, byte for byte.
 

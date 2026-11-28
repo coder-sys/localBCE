@@ -5,7 +5,8 @@ share the column layout in LEIE_COLUMNS. The header row names the columns and is
 Each row is an individual (has a last name) or an entity (business name only), with its exclusion type kept as text
 (a statute code such as 1128a1, of a known shape), its dates as YYYY-MM-DD, and its NPI (10 digits, check digit validated). None is written 0 in the live file
 (also accepted: 00000000 and 0000000000, or blank); it is never a match key. A bad field is set aside with a cause and the row is
-kept with that value missing; a row with no name or no exclusion type is set aside whole. Nothing is guessed.
+kept with that value missing; a row with no name or no exclusion type is set aside whole. A row that does not read (not UTF-8,
+bad quoting, a wrong cell count) is set aside whole with the NPIs it holds, or else its text, so its party can still be held. Nothing is guessed.
 Findings: a missing exclusion date, reinstatement before exclusion, exclusion, reinstatement or waiver after the as-of date, waiver without a state, a duplicate row, one NPI under two names, and a supplement
 row that does not fit its file kind.
 
@@ -19,6 +20,7 @@ is wired in.
 """
 
 import csv
+import io
 from datetime import date
 import re
 from typing import NamedTuple
@@ -109,6 +111,36 @@ def _day(v):
         raise _Bad("bad_date") from None
 
 
+NAME_COLUMNS = ("LASTNAME", "FIRSTNAME", "MIDNAME", "BUSNAME")
+
+
+def name_text(cells) -> str:
+    """A row's name cells (``NAME_COLUMNS``, None as empty) as one CSV line."""
+    out = io.StringIO()
+    csv.writer(out, lineterminator="").writerow([c or "" for c in cells])
+    return out.getvalue()
+
+
+def _named(line: bytes, header: list) -> str:
+    """What a row that does not read still names, as its quarantine's detail: every ten-digit run with a valid check digit in it,
+    space-separated (its NPI is one of them, wherever its cells moved); with none, its ``NAME_COLUMNS`` cells (``name_text``) when
+    it splits into the header's cells (a row that is not UTF-8 read as Latin-1, when its name cells are plain ASCII: the bytes
+    that do not read lie elsewhere); else "" (it names no one, or its name cells cannot be placed or read)."""
+    try:
+        text, plain = line.decode("utf-8"), True
+    except UnicodeDecodeError:
+        text, plain = line.decode("latin-1"), False
+    npis = sorted({n for n in re.findall(r"(?<![0-9])[0-9]{10}(?![0-9])", text) if npi_ok(n)})
+    if npis:
+        return " ".join(npis)
+    try:
+        cells = next(csv.reader([text], strict=True))
+    except (csv.Error, StopIteration):
+        return ""
+    names = [cells[header.index(n)].strip() for n in NAME_COLUMNS] if len(cells) == len(header) else []
+    return name_text(names) if any(names) and (plain or all(n.isascii() for n in names)) else ""
+
+
 def read_leie(data: bytes, *, source: str, as_of: str, kind: str = "full",
               expected_sha3_512: str | None = None) -> ReadResult:
     """source and as_of state what the file covers; as_of is YYYY-MM-DD. kind is "full", "exclusions" or "reinstatements"."""
@@ -130,19 +162,18 @@ def read_leie(data: bytes, *, source: str, as_of: str, kind: str = "full",
             continue
         if line is None:
             continue
-        if not line.strip():
-            res.quarantined.append(Quarantine(off, cause="blank_record", field=None))
+        if not line.strip():  # a blank line holds no row and hides none
             continue
         try:
             cells = next(csv.reader([line.decode("utf-8")], strict=True))
         except UnicodeDecodeError:
-            res.quarantined.append(Quarantine(off, None, "not_utf8"))
+            res.quarantined.append(Quarantine(off, None, "not_utf8", _named(line, header)))
             continue
         except (csv.Error, StopIteration):
-            res.quarantined.append(Quarantine(off, None, "unparseable"))
+            res.quarantined.append(Quarantine(off, None, "unparseable", _named(line, header)))
             continue
         if len(cells) != len(header):
-            res.quarantined.append(Quarantine(off, None, "column_count"))
+            res.quarantined.append(Quarantine(off, None, "column_count", _named(line, header)))
             continue
         raw = dict(zip(header, cells))
         vals = {}
@@ -162,11 +193,10 @@ def read_leie(data: bytes, *, source: str, as_of: str, kind: str = "full",
                 vals[name] = None
                 res.quarantined.append(Quarantine(off, name.lower(), str(e)))
         if not vals["LASTNAME"] and not vals["BUSNAME"]:
-            res.quarantined.append(Quarantine(off, None, "no_name"))
+            res.quarantined.append(Quarantine(off, None, "no_name", vals["NPI"] or ""))
             continue
         if not raw["EXCLTYPE"].strip():
-            res.quarantined.append(Quarantine(off, None, "no_exclusion_type"))
-            continue
+            res.quarantined.append(Quarantine(off, None, "no_exclusion_type", vals["NPI"] or ""))  # a named row is still an exclusion, of no known type
         row = LeieRow("individual" if vals["LASTNAME"] else "entity", vals["LASTNAME"], vals["FIRSTNAME"],
                       vals["MIDNAME"], vals["BUSNAME"], vals["NPI"], vals["EXCLTYPE"], vals["EXCLDATE"],
                       vals["REINDATE"], vals["WAIVERDATE"], vals["WVRSTATE"],
@@ -197,6 +227,8 @@ def read_leie(data: bytes, *, source: str, as_of: str, kind: str = "full",
         elif r.npi and owner.setdefault(r.npi, (r.offset, r[1:5]))[1] != r[1:5]:
             res.findings.append(Finding("npi_two_names", r.offset, f"same NPI as {owner[r.npi][0]}"))
     res.findings.sort(key=lambda f: (f.offset, f.kind))
+    if kind == "full" and not res.rows and not res.quarantined:  # a full list names someone: one with no row at all is a file with its rows lost
+        res.quarantined.append(Quarantine(0, None, "empty_file"))
     if not res.rows and res.quarantined:
         res.coverage = None  # records were there and none could be read, so nothing is known
     return res

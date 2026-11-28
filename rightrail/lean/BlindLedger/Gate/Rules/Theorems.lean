@@ -8,6 +8,12 @@ namespace BlindLedger.Gate.Rules
     the keys of the released view (`seen0`) and those claimed before it.  The axiom pins at
     the end show no theorem here rests on `sorryAx` or `Lean.ofReduceBool`. -/
 
+/-- Lean 4.36 finds `LawfulBEq Nat` through the ordering instances, whose proof uses `Classical.choice`; the axiom pins at
+    the end of this file allow only `propext` and `Quot.sound`.  This instance proves the same fact from `decide`. -/
+local instance (priority := high) natLawfulBEq : LawfulBEq Nat where
+  eq_of_beq h := of_decide_eq_true h
+  rfl := decide_eq_true rfl
+
 theorem keep_row {c : Ctx} {l u : Line} (h : ¬(u = l ∧ (c.byp.lookup l.pay).isSome = true)) :
     (!(u == l && (c.byp.lookup l.pay).isSome)) = true := by
   cases h2 : (c.byp.lookup l.pay).isSome <;> simp_all
@@ -91,14 +97,6 @@ abbrev ProviderDead (c : Ctx) (l : Line) : Prop :=
 abbrev Excluded (c : Ctx) (l : Line) : Prop :=
   ∃ e ∈ entries c.exclusions, (e.id = l.payee ∨ e.id = l.rendering) ∧ e.start ≤ l.date ∧ l.date ≤ e.stop
 
-/-! The facts of G2 (synthetic, from localBCE; not legally verified). -/
-abbrev AidEligible (c : Ctx) (l : Line) : Prop :=
-  ∃ e ∈ entries c.eligibility, e.member = l.member ∧ e.start ≤ l.date ∧ l.date ≤ e.stop ∧ e.aid ∈ allowedAid
-
-abbrev LevelEligible (c : Ctx) (l : Line) : Prop :=
-  ∃ e ∈ entries c.eligibility, e.member = l.member ∧ e.start ≤ l.date ∧ l.date ≤ e.stop ∧ e.aid ∈ allowedAid ∧
-    e.level = 1
-
 def Fact (c : Ctx) (seen : List Key) (l : Line) : Reason → Prop
   | .ALREADY_DECIDED => idKey l ∈ seen ∨ idKey l ∈ pending c l
   | .CAP_MEMBER_MONTH_DUPLICATE => l.flow = .CAP_820 ∧ (exactKey l ∈ seen ∨ nearKey l ∈ seen ∨
@@ -130,14 +128,8 @@ def Fact (c : Ctx) (seen : List Key) (l : Line) : Reason → Prop
   | .STALE_RELEASED => ¬Chained c.today c.releasedPrior c.released
   | .STALE_UNRESOLVED => ¬Chained c.today c.unresolvedPrior c.unresolved
   | .POSTING_CAP => False
-  | .BENEFIT_LEVEL_MISSING => Usable c.today 7 okElig c.eligibility ∧ validDate l.date = true ∧ AidEligible c l ∧
-      ¬LevelEligible c l
-  | .BENEFIT_LEVEL_MISSING_UNVERIFIED => c.eligibility.isSome ∧ ¬Usable c.today 7 okElig c.eligibility ∧
-      validDate l.date = true ∧ AidEligible c l ∧ ¬LevelEligible c l
-  | .PROGRAM_NOT_ELIGIBLE => Usable c.today 7 okElig c.eligibility ∧ validDate l.date = true ∧ ¬AidEligible c l
-  | .PROGRAM_NOT_ELIGIBLE_UNVERIFIED => c.eligibility.isSome ∧ ¬Usable c.today 7 okElig c.eligibility ∧
-      validDate l.date = true ∧ ¬AidEligible c l
-  | .STALE_ELIGIBILITY => ¬Usable c.today 7 okElig c.eligibility
+  | .BENEFIT_LEVEL_MISSING | .BENEFIT_LEVEL_MISSING_UNVERIFIED | .PROGRAM_NOT_ELIGIBLE | .PROGRAM_NOT_ELIGIBLE_UNVERIFIED
+  | .STALE_ELIGIBILITY => False
 
 def seenAt (c : Ctx) (b : List Line) (i : Nat) : List Key :=
   ((order c b).take i).reverse.flatMap (claim c) ++ seen0 c b
@@ -153,7 +145,7 @@ theorem chained_iff {t p o} : chained t p o = true ↔ Chained t p o := by
 
 theorem fires_iff {c seen l} (r : Reason) : fires c seen l r = true ↔ Fact c seen l r := by
   cases r <;> simp [fires, Fact, certain, unverified, notEnrolled, enrolled, covers, party, isCap, memberDead,
-    providerDead, excluded, aidEligible, levelEligible, eligCovers, ← usable_iff, ← chained_iff, and_assoc, or_assoc]
+    providerDead, excluded, ← usable_iff, ← chained_iff, and_assoc, or_assoc]
 
 theorem mem_all (r : Reason) : r ∈ reasons := by cases r <;> simp [reasons]
 
@@ -320,103 +312,12 @@ theorem mem_decideAll {c : Ctx} : ∀ {seen : List Key} {ls : List Line} {d : De
     · obtain ⟨pre, l', rfl⟩ := mem_decideAll h
       exact ⟨pre ++ claim c l, l', by rw [List.append_assoc]⟩
 
-/-! ## Reason budget: one payment's codes fit one token
-
-    TOKEN/v1 carries at most `BlindLedger.Gate.maxReasonCodes` = 32 reason codes per payment (Gate/Spec.lean:32,
-    483; not imported here, so the bound is the literal 32 and `Flat.PayTheorems` restates it against
-    `maxReasonCodes`).  Option 1 (REASON_BOUND_DESIGN.md): the bound is proved per payment, never by capping the rule
-    set's size.  Ported from b5f806df with the trunk's sources and reasons. -/
-
-/-- Each snapshot source's usable bit: DMF, provider deaths, exclusions, enrollment, eligibility (one per source
-    `fires` reads).  All lines of a batch read one `Ctx`, so these are per batch.  G4 adds `soc` (share of cost) with
-    its rule. -/
-structure Bits where
-  dmf : Bool
-  pd : Bool
-  ex : Bool
-  en : Bool
-  el : Bool
-  deriving DecidableEq, Repr
-
-/-- The same `usable` terms `fires` reads. -/
-def bitsOf (c : Ctx) : Bits :=
-  ⟨usable c.today 90 okDeath c.dmf, usable c.today 90 okDeath c.providerDeaths,
-   usable c.today 31 okExclusion c.exclusions, usable c.today 7 okSpan c.enrollment,
-   usable c.today 7 okElig c.eligibility⟩
-
-/-- Whether `r` can appear under bits `b`.  No wildcard: a new reason does not compile until it is classified.
-    `POSTING_CAP` is `true`: `fires` never returns it, but the capped disk engine (`Gate.OnepIndex`) adds it as HOLD,
-    so it can appear on a payment whatever the bits.  `CAP_MEMBER_MONTH_DUPLICATE` is `true`: it also fires on keys
-    seen, whatever the enrollment bit. -/
-def may (b : Bits) : Reason → Bool
-  | .ALREADY_DECIDED | .CAP_MEMBER_MONTH_DUPLICATE | .COLLIDES_WITH_UNRESOLVED_NEAR | .DUPLICATE_OF_UNRESOLVED
-  | .FFS_DUPLICATE_LINE | .FFS_DUPLICATE_UNVERIFIED | .FFS_NEAR_DUPLICATE
-  | .SERVICE_DATE_FUTURE | .SERVICE_DATE_INVALID | .STALE_RELEASED | .STALE_UNRESOLVED
-  | .POSTING_CAP => true
-  | .MEMBER_DECEASED => b.dmf
-  | .MEMBER_DECEASED_UNVERIFIED | .STALE_DMF => !b.dmf
-  | .PROVIDER_DECEASED => b.pd
-  | .PROVIDER_DECEASED_UNVERIFIED | .STALE_PROVIDER_DEATH => !b.pd
-  | .PROVIDER_EXCLUDED => b.ex
-  | .PROVIDER_EXCLUDED_UNVERIFIED | .STALE_EXCLUSION => !b.ex
-  | .MEMBER_NOT_ENROLLED => b.en
-  | .MEMBER_NOT_ENROLLED_UNVERIFIED | .STALE_ENROLLMENT => !b.en
-  | .BENEFIT_LEVEL_MISSING | .PROGRAM_NOT_ELIGIBLE => b.el
-  | .BENEFIT_LEVEL_MISSING_UNVERIFIED | .PROGRAM_NOT_ELIGIBLE_UNVERIFIED | .STALE_ELIGIBILITY => !b.el
-
-/-- The link: a reason that fires is allowed by the batch's bits. -/
-theorem may_sound {c seen l} (r : Reason) (h : fires c seen l r = true) : may (bitsOf c) r = true := by
-  revert h
-  cases r <;> simp +contextual [fires, may, bitsOf, certain, unverified, notEnrolled]
-
-/-- The finite check, closed by the kernel. -/
-private theorem budget_bool : ∀ a b d e f : Bool, (reasons.filter (may ⟨a, b, d, e, f⟩)).length ≤ 32 := by
-  decide +kernel
-
-/-- At most 32 (`maxReasonCodes`) reasons are allowed under any bits. -/
-theorem budget (b : Bits) : (reasons.filter (may b)).length ≤ 32 := by
-  cases b; exact budget_bool ..
-
-/-- Per payment: reasons that all fired under one batch's bits give at most 32 distinct codes. -/
-theorem pay_budget (b : Bits) (rs : List Reason) (h : ∀ r ∈ rs, may b r = true) :
-    (reasons.filter rs.contains).length ≤ 32 := by
-  rw [← List.countP_eq_length_filter]
-  refine Nat.le_trans (List.countP_mono_left (p := rs.contains) (q := may b)
-    fun r _ hr => h r (List.contains_iff_mem.mp hr)) ?_
-  rw [List.countP_eq_length_filter]
-  exact budget b
-
--- Headroom pin (not a protected statement; bumped deliberately with each rule).  The maximum over every tuple is 23
--- with G2 (12 always-possible reasons and the 11 `_UNVERIFIED`/`STALE_` ones), reached at the all-false tuple, so 9
--- codes of headroom remain under 32.  Both by `decide +kernel`.  `may_sound` cannot check the POSTING_CAP arm
--- (`fires` never returns it; the capped engine adds it); `Flat.decideFetched_may` does, through `capD`, which needs
--- `may b .POSTING_CAP = true` for every `b`.  `headroom_all` (12 always-possible and the 6 certain ones) also catches a
--- `!b.x` arm loosened to `true`, which the all-false count cannot see.
-private theorem headroom_le : ∀ a b d e f : Bool, (reasons.filter (may ⟨a, b, d, e, f⟩)).length ≤ 23 := by
-  decide +kernel
-
-private theorem headroom_eq : (reasons.filter (may ⟨false, false, false, false, false⟩)).length = 23 := by
-  decide +kernel
-
-private theorem headroom_all : (reasons.filter (may ⟨true, true, true, true, true⟩)).length = 18 := by
-  decide +kernel
-
-/-- Every reason on a batch's decisions is allowed by the batch's bits (Reason budget above). -/
-theorem decideAll_may (c : Ctx) :
-    ∀ (seen : List Key) (ls : List Line), ∀ d ∈ decideAll c seen ls, ∀ r ∈ d.reasons, may (bitsOf c) r = true := by
-  intro seen ls d hd r hr
-  obtain ⟨pre, l, rfl⟩ := mem_decideAll hd
-  simp only [decideLine, List.mem_filter] at hr
-  exact may_sound r hr.2
-
 /-- Fail-closed: when any reference snapshot is not usable (missing or failing
     its pin, an invalid today or asOf, dated after today, too old, empty, a
     parsed row count other than the declared one, or a malformed row), or the
     released or unresolved set is not chained (missing, miscounted, misdated
     or not extending the checkpoint), no line is ALLOW: each is HUMAN_REVIEW,
-    or HOLD on a certain reason (which never rests on the unusable data).  The
-    hypothesis names the six sources below; G2's eligibility snapshot (the
-    seventh) is `fail_closed_eligibility`. -/
+    or HOLD on a certain reason (which never rests on the unusable data). -/
 theorem fail_closed {c b d}
     (h : ¬Usable c.today 90 okDeath c.dmf ∨ ¬Usable c.today 90 okDeath c.providerDeaths ∨
       ¬Usable c.today 31 okExclusion c.exclusions ∨ ¬Usable c.today 7 okSpan c.enrollment ∨
@@ -432,43 +333,6 @@ theorem fail_closed {c b d}
   · exact line_complete (r := .STALE_ENROLLMENT) h
   · exact line_complete (r := .STALE_RELEASED) h
   · exact line_complete (r := .STALE_UNRESOLVED) h
-
-/-- `fail_closed` for G2's eligibility snapshot (the seventh source): when it is not usable, no line is ALLOW. -/
-theorem fail_closed_eligibility {c b d} (h : ¬Usable c.today 7 okElig c.eligibility)
-    (hd : d ∈ (decideBatch c b).decisions) :
-    d.outcome = .HUMAN_REVIEW ∨ (d.outcome = .HOLD ∧ ∃ r ∈ d.reasons, review r = false) := by
-  obtain ⟨_, l, rfl⟩ := mem_decideAll (seen := seen0 c b) (ls := order c b) hd
-  exact outcome_cases (line_complete (r := .STALE_ELIGIBILITY) h)
-
-/-- G2's two certain reasons make a line HOLD; the other three only send it to review. -/
-theorem g2_review :
-    review .PROGRAM_NOT_ELIGIBLE = false ∧ review .BENEFIT_LEVEL_MISSING = false ∧
-      review .PROGRAM_NOT_ELIGIBLE_UNVERIFIED = true ∧ review .BENEFIT_LEVEL_MISSING_UNVERIFIED = true ∧
-      review .STALE_ELIGIBILITY = true := by decide
-
-/-- G2 reports at most one of its certain reasons, as localBCE's first failing gate does. -/
-theorem g2_exclusive {c seen l} :
-    ¬(Fact c seen l .PROGRAM_NOT_ELIGIBLE ∧ Fact c seen l .BENEFIT_LEVEL_MISSING) :=
-  fun ⟨⟨_, _, hn⟩, ⟨_, _, ha, _⟩⟩ => hn ha
-
-/-- A G2 HOLD rests only on a usable eligibility snapshot. -/
-theorem g2_hold_usable {c seen l}
-    (h : Fact c seen l .PROGRAM_NOT_ELIGIBLE ∨ Fact c seen l .BENEFIT_LEVEL_MISSING) :
-    Usable c.today 7 okElig c.eligibility := by
-  rcases h with ⟨hu, _⟩ | ⟨hu, _⟩ <;> exact hu
-
-/-- An ALLOWed line has a usable eligibility snapshot and one covering row with an allowed aid code and a
-    benefit level. -/
-theorem g2_allow {c seen l} (h : (decideLine c seen l).outcome = .ALLOW) :
-    Usable c.today 7 okElig c.eligibility ∧ LevelEligible c l := by
-  have nf : ∀ r, ¬Fact c seen l r := fun r f => line_complete f h
-  have hu : Usable c.today 7 okElig c.eligibility := Classical.byContradiction fun hn => nf .STALE_ELIGIBILITY hn
-  have hd : validDate l.date = true := by
-    cases hv : validDate l.date
-    · exact (nf .SERVICE_DATE_INVALID hv).elim
-    · rfl
-  have ha : AidEligible c l := Classical.byContradiction fun hn => nf .PROGRAM_NOT_ELIGIBLE ⟨hu, hd, hn⟩
-  exact ⟨hu, Classical.byContradiction fun hn => nf .BENEFIT_LEVEL_MISSING ⟨hu, hd, ha, hn⟩⟩
 
 theorem not_own_mem {c x} {b : List Line} (h : ¬(own c x = true ∧ x ∈ b)) :
     (!(own c x && b.contains x)) = true := by
@@ -804,14 +668,12 @@ theorem ids_disjoint {c b} (h : ∀ x ∈ releasedSet c, ∀ y ∈ unresolvedSet
 /-! ## Monotonicity -/
 
 /-- `c'` has every death and exclusion row of `c`, the same day, enrollment,
-    eligibility, released and unresolved sets and checkpoints and re-decisions,
-    and each death or exclusion snapshot is usable exactly when it was (so the
-    added rows are well formed and counted).  Eligibility must be equal, not
-    grown: an added eligibility row can clear `PROGRAM_NOT_ELIGIBLE`. -/
+    released and unresolved sets and checkpoints and re-decisions, and each
+    death or exclusion snapshot is usable exactly when it was (so the added
+    rows are well formed and counted). -/
 structure Grows (c c' : Ctx) : Prop where
   today : c'.today = c.today
   enrollment : c'.enrollment = c.enrollment
-  eligibility : c'.eligibility = c.eligibility
   released : c'.released = c.released
   byp : c'.byp = c.byp
   unresolved : c'.unresolved = c.unresolved
@@ -877,8 +739,7 @@ theorem fact_mono {c c' seen l} (g : Grows c c') : ∀ {r}, Fact c seen l r → 
   | .STALE_UNRESOLVED, h => by simpa only [Fact, g.today, g.unresolved, g.unresolvedPrior] using h
   | .POSTING_CAP, h => h
   | .BENEFIT_LEVEL_MISSING, h | .BENEFIT_LEVEL_MISSING_UNVERIFIED, h | .PROGRAM_NOT_ELIGIBLE, h
-  | .PROGRAM_NOT_ELIGIBLE_UNVERIFIED, h | .STALE_ELIGIBILITY, h => by
-    simpa only [Fact, AidEligible, LevelEligible, g.today, g.eligibility] using h
+  | .PROGRAM_NOT_ELIGIBLE_UNVERIFIED, h | .STALE_ELIGIBILITY, h => h
 
 /-- Monotonicity, for one batch under the same day, enrollment, released and
     unresolved sets and checkpoints, and snapshot usability: adding death or
@@ -1073,23 +934,5 @@ theorem one_payment_per_line {c : Nat → Ctx} {b : Nat → List Line}
 #guard_msgs in #print axioms released_iff
 /-- info: 'BlindLedger.Gate.Rules.one_payment_per_line' depends on axioms: [propext, Quot.sound] -/
 #guard_msgs in #print axioms one_payment_per_line
-/-- info: 'BlindLedger.Gate.Rules.may_sound' depends on axioms: [propext, Quot.sound] -/
-#guard_msgs in #print axioms may_sound
-/-- info: 'BlindLedger.Gate.Rules.decideAll_may' depends on axioms: [propext, Quot.sound] -/
-#guard_msgs in #print axioms decideAll_may
-/-- info: 'BlindLedger.Gate.Rules.budget' does not depend on any axioms -/
-#guard_msgs in #print axioms budget
-/-- info: 'BlindLedger.Gate.Rules.pay_budget' depends on axioms: [propext] -/
-#guard_msgs in #print axioms pay_budget
-/-- info: 'BlindLedger.Gate.Rules.fail_closed_eligibility' depends on axioms: [propext, Quot.sound] -/
-#guard_msgs in #print axioms fail_closed_eligibility
-/-- info: 'BlindLedger.Gate.Rules.g2_review' depends on axioms: [propext] -/
-#guard_msgs in #print axioms g2_review
-/-- info: 'BlindLedger.Gate.Rules.g2_exclusive' does not depend on any axioms -/
-#guard_msgs in #print axioms g2_exclusive
-/-- info: 'BlindLedger.Gate.Rules.g2_hold_usable' does not depend on any axioms -/
-#guard_msgs in #print axioms g2_hold_usable
-/-- info: 'BlindLedger.Gate.Rules.g2_allow' depends on axioms: [propext, Classical.choice, Quot.sound] -/
-#guard_msgs in #print axioms g2_allow
 
 end BlindLedger.Gate.Rules

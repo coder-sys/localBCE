@@ -14,7 +14,7 @@ but before the host signed it leaves one whole frame past the signed head: the o
 
 The genesis head hashes the shard, the key-set pin and the two empty sets.  The head after a batch is
 ``SHA3-512("RR/GATE/CHAIN/v1" 00 02 prev digest root)``: the head before, the batch digest
-``SHA3-512("RR/GATE/CHAIN/v1" 00 03 leb(208) auth delta)`` over the shard's authority record after the batch and the rows it
+``SHA3-512("RR/GATE/CHAIN/v1" 00 03 leb(AUTH) auth delta)`` over the shard's authority record after the batch and the rows it
 appended, and the state root after the batch.  The
 frame's trailer (``RR/GATE/FLAT/FRAME/v1``, then the batch count, the chunk, the two sets' heads, the next install number, the
 image and its hash, ``prev``, the digest and the head) holds them.  The producer signs the
@@ -31,8 +31,11 @@ from typing import Iterable, Sequence
 DOMAIN = b"RR/GATE/CHAIN/v1\x00"
 HEAD = 64
 # The shard's authority record (Lean ``Worker.encAuth``): key-set genesis pin 64, ratchet epoch 4, head 64, day 4, checkpoint
-# 64, grant floor 8 (the highest grant serial admitted).
-AUTH = 208
+# 64, grant floor 8 (the highest grant serial admitted), rule-set digest 64 and rule-set version 4 (the newest rule-set
+# record admitted; zero and 0 for none).
+AUTH = 276
+ZERO = bytes(HEAD)
+Floors = tuple[int, int, int, bytes]  # grant serial, key-set epoch, rule-set version, rule-set digest
 # A batch's ``adds`` as the producer stores it: the authority record, the state root after the batch, then the rows.
 ROOT = AUTH + HEAD
 # One RULES_ADDS row: the set tag (1 released, 2 unresolved), then Line.fields: id, pay, flow, member, payee, rendering, date,
@@ -89,9 +92,19 @@ def step_root(head: bytes, digest: bytes, root: bytes) -> bytes:
     return hashlib.sha3_512(DOMAIN + b"\x02" + head + digest + root).digest()
 
 
-def floors_of(record: bytes | None) -> tuple[int, int]:
-    """(grant serial floor, key-set epoch) of an authority record (``AUTH`` bytes); (0, 0) for none."""
-    return (0, 0) if record is None else (int.from_bytes(record[AUTH - 8:AUTH], "big"), int.from_bytes(record[64:68], "big"))
+def floors_of(record: bytes | None) -> Floors:
+    """(grant serial floor, key-set epoch, rule-set version, rule-set digest) of an authority record (``AUTH`` bytes);
+    (0, 0, 0, ``ZERO``) for none or an empty record."""
+    if not record:
+        return 0, 0, 0, ZERO
+    return (int.from_bytes(record[200:208], "big"), int.from_bytes(record[64:68], "big"),
+            int.from_bytes(record[272:276], "big"), record[208:272])
+
+
+def behind(rec: Floors, floor: Floors) -> bool:
+    """Whether floors ``rec`` are below ``floor``: a lower grant serial, key-set epoch or rule-set version, or the same
+    rule-set version under another digest (a fork), so a batch decided under ``rec`` can never pass ``floor``."""
+    return rec[0] < floor[0] or rec[1] < floor[1] or rec[2] < floor[2] or (rec[2] == floor[2] and rec[3] != floor[3])
 
 
 def delta_of_adds(adds: bytes) -> bytes | None:
@@ -130,12 +143,13 @@ def step_adds(head: bytes, adds: bytes) -> bytes | None:
 
 def head_after(first: bytes, pin: bytes, batches: Iterable[bytes]) -> bytes | None:
     """``first`` stepped over each batch's ``adds`` in order; None if any does not decode, names another key-set pin than
-    ``pin``, or lowers the key-set epoch or the grant floor of the batch before it."""
-    head, epoch, floor = first, 0, 0
+    ``pin``, or does not follow the record of the batch before it (Lean ``ChunkIo.authFollows``: a lower key-set epoch,
+    grant floor or rule-set version, another rule-set digest at the same version, or a version above 0 with digest zero)."""
+    head, last = first, floors_of(None)
     for adds in batches:
-        e, f = int.from_bytes(adds[64:68], "big"), int.from_bytes(adds[AUTH - 8:AUTH], "big")
+        now = floors_of(adds[:AUTH])
         new = step_adds(head, adds)
-        if new is None or adds[:64] != pin or e < epoch or f < floor:
+        if new is None or adds[:64] != pin or behind(now, last) or (now[2] and now[3] == ZERO):
             return None
-        head, epoch, floor = new, e, f
+        head, last = new, now
     return head

@@ -24,10 +24,16 @@ name = "blind_financial"
 root = "BlindLedger.Financial.Cli"
 moreLinkArgs = ["-Wl,--no-insert-timestamp"]
 
-# The long-lived evaluator worker (docs/CORE_REDESIGN.md, Lean-live M1): one BLFIN02 frame in, one outcome out.
+# The long-lived evaluator worker: one BLFIN02 frame in, one outcome out.
 [[lean_exe]]
 name = "blind_financial_worker"
 root = "BlindLedger.Financial.WorkerCli"
+moreLinkArgs = ["-Wl,--no-insert-timestamp"]
+
+# The obligations shard: apply commands, write their records, check the records.
+[[lean_exe]]
+name = "obligations_shard"
+root = "BlindLedger.Gate.Obligations.Main"
 moreLinkArgs = ["-Wl,--no-insert-timestamp"]
 
 [[lean_lib]]
@@ -46,7 +52,7 @@ moreLinkArgs = ["-Wl,--no-insert-timestamp"]
 name = "gate_axioms"
 roots = ["BlindLedger.Gate.AxiomCheck"]
 
-# The binary request and answer frames (conformance/FRAME_V1.md): proved; Frame/Spec and Frame/Fast are in `gate_engine`'s closure.
+# The binary request and answer frames (conformance/FRAME_V1.md): statements, not yet proved; not imported by any exe.
 [[lean_lib]]
 name = "frame_statements"
 roots = ["BlindLedger.Gate.Frame.Spec", "BlindLedger.Gate.Frame.Fast", "BlindLedger.Gate.Frame.Answer"]
@@ -73,12 +79,6 @@ moreLinkArgs = ["-Wl,--no-insert-timestamp"]
 [[lean_exe]]
 name = "gate_engine"
 root = "BlindLedger.Gate.Engine.EngineMain"
-moreLinkArgs = ["-Wl,--no-insert-timestamp"]
-
-# Test-only, never pinned: gate_engine whose authority check accepts every signature (tests/gate_unsigned_pairs.py, the signer-free decision check).
-[[lean_exe]]
-name = "gate_engine_unsigned"
-root = "BlindLedger.Gate.Engine.EngineUnsigned"
 moreLinkArgs = ["-Wl,--no-insert-timestamp"]
 
 # Engine v3 decision path on rows files (gate path design step 1): the engine's pipe over `Hist`; not pinned.
@@ -111,10 +111,22 @@ name = "gate_verify"
 root = "BlindLedger.Gate.VerifyCli"
 moreLinkArgs = ["-Wl,--no-insert-timestamp"]
 
+# Test-only, never pinned: admits signed rule sets in order and selects by date and known time (tests/test_ruleset_admission.py).
+[[lean_exe]]
+name = "ruleset_admit"
+root = "BlindLedger.Gate.RuleSet.AdmitCli"
+moreLinkArgs = ["-Wl,--no-insert-timestamp"]
+
 # Test-only, never pinned: times the engine's directory insert and checks it against the model.
 [[lean_exe]]
 name = "engine3_bench"
 root = "BlindLedger.Gate.Engine3.Bench"
+moreLinkArgs = ["-Wl,--no-insert-timestamp"]
+
+# Test-only, never pinned and in no pin list: the cost floor of one obligations command (one-store design 16.3).
+[[lean_exe]]
+name = "obligations_cost"
+root = "BlindLedger.Gate.ObligationsCost"
 moreLinkArgs = ["-Wl,--no-insert-timestamp"]
 
 # Test-only, never pinned: tests of the checker's tagged rows file and its key file (VStore).
@@ -148,7 +160,7 @@ moreLinkArgs = ["-Wl,--no-insert-timestamp"]
 [[lean_lib]]
 name = "gate_rules_main"
 roots = ["BlindLedger.Gate.Rules.RulesMain"]
-needs = ["embed_RulesShip", "embed_OneProc", "embed_MlDsa87", "embed_Payer", "embed_Producer", "embed_Verify", "embed_Batch", "embed_Flat_Bin", "embed_Sha3Lanes", "embed_Sha3Fused", "embed_Flat_Chunk", "embed_Flat_ChunkIo", "embed_Flat_Io", "embed_Flat_Model", "embed_Flat_Store", "embed_Flat_StoreLog", "embed_Flat_StoreTombs", "embed_Flat_Worker", "embed_Frame_Fast", "embed_Frame_Spec", "embed_OnepIndex", "embed_lakefile", "embed_lean-toolchain"]
+needs = ["embed_RulesShip", "embed_OneProc", "embed_MlDsa87", "embed_Payer", "embed_Producer", "embed_Verify", "embed_Batch", "embed_PublishSpec", "embed_Cosign_Codec", "embed_Cosign_Chain", "embed_Cosign_Verify", "embed_Cosign_Link", "embed_Cosign_Install", "embed_Flat_Bin", "embed_Sha3Lanes", "embed_Sha3Fused", "embed_Flat_Chunk", "embed_Flat_ChunkIo", "embed_Flat_Io", "embed_Flat_Model", "embed_Flat_Store", "embed_Flat_StoreLog", "embed_Flat_StoreTombs", "embed_Flat_Worker", "embed_Frame_Fast", "embed_Frame_Spec", "embed_OnepIndex", "embed_lakefile", "embed_lean-toolchain"]
 
 [[input_file]]
 name = "embed_RulesShip"
@@ -168,6 +180,36 @@ text = true
 [[input_file]]
 name = "embed_Payer"
 path = "BlindLedger/Gate/Payer.lean"
+text = true
+
+[[input_file]]
+name = "embed_PublishSpec"
+path = "BlindLedger/Gate/PublishSpec.lean"
+text = true
+
+[[input_file]]
+name = "embed_Cosign_Codec"
+path = "BlindLedger/Gate/Cosign/Codec.lean"
+text = true
+
+[[input_file]]
+name = "embed_Cosign_Chain"
+path = "BlindLedger/Gate/Cosign/Chain.lean"
+text = true
+
+[[input_file]]
+name = "embed_Cosign_Verify"
+path = "BlindLedger/Gate/Cosign/Verify.lean"
+text = true
+
+[[input_file]]
+name = "embed_Cosign_Link"
+path = "BlindLedger/Gate/Cosign/Link.lean"
+text = true
+
+[[input_file]]
+name = "embed_Cosign_Install"
+path = "BlindLedger/Gate/Cosign/Install.lean"
 text = true
 
 [[input_file]]
@@ -264,3 +306,10 @@ text = true
 name = "embed_OnepIndex"
 path = "BlindLedger/Gate/OnepIndex.lean"
 text = true
+
+# The fast X12 reader: bytes in, a flat read out (BlindLedger/X12/Main.lean says how to run it; tested by
+# tests/test_x12_stream.py).  Not pinned yet.
+[[lean_exe]]
+name = "x12_read"
+root = "BlindLedger.X12.Main"
+moreLinkArgs = ["-Wl,--no-insert-timestamp"]

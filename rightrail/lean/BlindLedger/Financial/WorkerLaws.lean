@@ -639,7 +639,8 @@ theorem serveWorker_run (p : Pipe) :
         · show r1.2.input = _; simp [hB]
       · rw [if_neg (show ¬ v > maxWorkerFrameBytes from hBig), if_neg hBig]
         obtain ⟨hA2, hB2, hC2, hD2⟩ := readUpTo_pipe v ByteArray.empty r1.2
-        rw [run_bind']
+        have hcap : ByteArray.emptyWithCapacity v = ByteArray.empty := rfl  -- the capacity is not observable
+        rw [run_bind', hcap]
         generalize (readUpTo Pipe.read v ByteArray.empty).run r1.2 = r2 at hA2 hB2 hC2 hD2 ⊢
         simp only [ByteArray.size_empty, ByteArray.toList_empty, List.nil_append, Nat.sub_zero, hB] at hA2 hB2
         have hsz2 : r2.1.size = (List.take v (p.input.drop 4)).length := by rw [← Fast.length_toList, hA2]

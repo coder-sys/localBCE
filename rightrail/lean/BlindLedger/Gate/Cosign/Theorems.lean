@@ -1,10 +1,8 @@
 import BlindLedger.Gate.Cosign.Verify
-import BlindLedger.Gate.ProducerTheorems
 
 /-! What KEY-CERT/v2 verification guarantees, for every `Crypto`: the accepting condition, the exact condition of
     each refusal code, that a certificate valid for the link of its own generation is accepted however many newer
-    links the chain holds, that no chain without a link of a certificate's generation accepts it, and that a signature
-    made for a certificate cannot serve for a checkpoint. -/
+    links the chain holds, and that no chain without a link of a certificate's generation accepts it. -/
 namespace BlindLedger.Gate.Cosign
 
 open BlindLedger.Gate
@@ -17,7 +15,7 @@ theorem verify_ok {c : Crypto} {ch : Chain} {r : List Link} {b : Bytes} {e : Key
     verify c ch r b = .ok e ↔ decode b = some e ∧ e.tenantId = ch.head.tenantId ∧ ∃ l, ch.linkAt (genOf e.epoch) = some l ∧
       genOf e.epoch ≤ ch.head.gen ∧ e.link = l.digest ∧ keysApart c.hash (ch.links ++ r) e = true ∧ ch.inTime e = true ∧
       c.verify l.root e.body e.rootSig = true ∧ c.verify l.witness e.body e.coSig = true := by
-  unfold verify
+  unfold verify judge judgeWith
   cases hd : decode b with
   | none => simp
   | some x =>
@@ -33,7 +31,7 @@ theorem verify_ok {c : Crypto} {ch : Chain} {r : List Link} {b : Bytes} {e : Key
 
 theorem verify_malformed {c : Crypto} {ch : Chain} {r : List Link} {b : Bytes} :
     verify c ch r b = .error .MALFORMED ↔ decode b = none := by
-  unfold verify
+  unfold verify judge judgeWith
   cases hd : decode b with
   | none => simp
   | some x => dsimp only; repeat' split
@@ -41,7 +39,7 @@ theorem verify_malformed {c : Crypto} {ch : Chain} {r : List Link} {b : Bytes} :
 
 theorem verify_wrong_tenant {c : Crypto} {ch : Chain} {r : List Link} {b : Bytes} :
     verify c ch r b = .error .WRONG_TENANT ↔ ∃ e, decode b = some e ∧ e.tenantId ≠ ch.head.tenantId := by
-  unfold verify
+  unfold verify judge judgeWith
   cases hd : decode b with
   | none => simp
   | some x => dsimp only; repeat' split
@@ -51,7 +49,7 @@ theorem verify_wrong_tenant {c : Crypto} {ch : Chain} {r : List Link} {b : Bytes
 theorem verify_ahead {c : Crypto} {ch : Chain} {r : List Link} {b : Bytes} :
     verify c ch r b = .error .GENERATION_AHEAD ↔
       ∃ e, decode b = some e ∧ e.tenantId = ch.head.tenantId ∧ ch.head.gen < genOf e.epoch := by
-  unfold verify
+  unfold verify judge judgeWith
   cases hd : decode b with
   | none => simp
   | some x =>
@@ -65,7 +63,7 @@ theorem verify_stale {c : Crypto} {ch : Chain} {r : List Link} {b : Bytes} :
     verify c ch r b = .error .STALE_KEYSET ↔
       ∃ e, decode b = some e ∧ e.tenantId = ch.head.tenantId ∧ genOf e.epoch ≤ ch.head.gen ∧
         ch.linkAt (genOf e.epoch) = none := by
-  unfold verify
+  unfold verify judge judgeWith
   cases hd : decode b with
   | none => simp
   | some x =>
@@ -78,7 +76,7 @@ theorem verify_wrong_link {c : Crypto} {ch : Chain} {r : List Link} {b : Bytes} 
     verify c ch r b = .error .WRONG_LINK ↔
       ∃ e l, decode b = some e ∧ e.tenantId = ch.head.tenantId ∧ genOf e.epoch ≤ ch.head.gen ∧
         ch.linkAt (genOf e.epoch) = some l ∧ e.link ≠ l.digest := by
-  unfold verify
+  unfold verify judge judgeWith
   cases hd : decode b with
   | none => simp
   | some x =>
@@ -91,7 +89,7 @@ theorem verify_key_reuse {c : Crypto} {ch : Chain} {r : List Link} {b : Bytes} :
     verify c ch r b = .error .KEY_REUSE ↔
       ∃ e l, decode b = some e ∧ e.tenantId = ch.head.tenantId ∧ genOf e.epoch ≤ ch.head.gen ∧
         ch.linkAt (genOf e.epoch) = some l ∧ e.link = l.digest ∧ keysApart c.hash (ch.links ++ r) e = false := by
-  unfold verify
+  unfold verify judge judgeWith
   cases hd : decode b with
   | none => simp
   | some x =>
@@ -107,7 +105,7 @@ theorem verify_after_rotation {c : Crypto} {ch : Chain} {r : List Link} {b : Byt
       ∃ e l, decode b = some e ∧ e.tenantId = ch.head.tenantId ∧ genOf e.epoch ≤ ch.head.gen ∧
         ch.linkAt (genOf e.epoch) = some l ∧ e.link = l.digest ∧ keysApart c.hash (ch.links ++ r) e = true ∧
         ch.inTime e = false := by
-  unfold verify
+  unfold verify judge judgeWith
   cases hd : decode b with
   | none => simp
   | some x =>
@@ -121,7 +119,7 @@ theorem verify_bad_root {c : Crypto} {ch : Chain} {r : List Link} {b : Bytes} :
       ∃ e l, decode b = some e ∧ e.tenantId = ch.head.tenantId ∧ genOf e.epoch ≤ ch.head.gen ∧
         ch.linkAt (genOf e.epoch) = some l ∧ e.link = l.digest ∧ keysApart c.hash (ch.links ++ r) e = true ∧
         ch.inTime e = true ∧ c.verify l.root e.body e.rootSig = false := by
-  unfold verify
+  unfold verify judge judgeWith
   cases hd : decode b with
   | none => simp
   | some x =>
@@ -135,7 +133,7 @@ theorem verify_bad_witness {c : Crypto} {ch : Chain} {r : List Link} {b : Bytes}
       ∃ e l, decode b = some e ∧ e.tenantId = ch.head.tenantId ∧ genOf e.epoch ≤ ch.head.gen ∧
         ch.linkAt (genOf e.epoch) = some l ∧ e.link = l.digest ∧ keysApart c.hash (ch.links ++ r) e = true ∧
         ch.inTime e = true ∧ c.verify l.root e.body e.rootSig = true ∧ c.verify l.witness e.body e.coSig = false := by
-  unfold verify
+  unfold verify judge judgeWith
   cases hd : decode b with
   | none => simp
   | some x =>
@@ -266,18 +264,5 @@ theorem stale_any_crypto {c c' : Crypto} {ch : Chain} {r r' : List Link} {b : By
     (h : verify c ch r b = .error .STALE_KEYSET) :
     verify c' ch r' b = .error .STALE_KEYSET :=
   verify_stale.2 (verify_stale.1 h)
-
-/-- A certificate body is never a checkpoint header, so a signature made for one cannot serve for the other. -/
-theorem body_ne_checkpoint_header {b : Bytes} {x : SignedCheckpoint} (hx : decodeCheckpoint b = some x) (e : KeyCert) :
-    e.body ≠ x.header := by
-  obtain ⟨t, ht⟩ := checkpoint_header_domain hx
-  intro h
-  have d1 : x.header[8]? = some 67 := by
-    rw [ht]; exact idx_append (by first | decide +kernel | rfl | simp)
-  have d2 : e.body[8]? = some 75 := by
-    simp only [KeyCert.body, List.append_assoc]
-    exact idx_append (by first | decide +kernel | rfl | simp [certTag])
-  rw [h, d1] at d2
-  first | exact absurd d2 (by decide) | simp at d2
 
 end BlindLedger.Gate.Cosign

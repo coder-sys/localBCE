@@ -621,13 +621,12 @@ theorem unc_idCapped (hb : Uncapped fe fd b) {l : Line} (hl : l ∈ b) : idCappe
 
 theorem unc_feed (hb : Uncapped fe fd b) {l : Line} (hl : l ∈ b) :
     feedOver (fd.dmf l.member) = false ∧ feedOver (fd.span l.member) = false ∧ feedOver (fd.pdeath l.payee) = false ∧
-    feedOver (fd.excl l.payee) = false ∧ feedOver (fd.pdeath l.rendering) = false ∧ feedOver (fd.excl l.rendering) = false ∧
-    feedOver (fd.elig l.member) = false := by
+    feedOver (fd.excl l.payee) = false ∧ feedOver (fd.pdeath l.rendering) = false ∧ feedOver (fd.excl l.rendering) = false := by
   have h := hb l hl
   unfold capped feedCapped at h
   simp only [Bool.or_eq_false_iff, List.any_cons, List.any_nil, Bool.or_false] at h
-  obtain ⟨-, ⟨⟨⟨h1, h2⟩, h7⟩, ⟨h3, h4⟩⟩⟩ := h
-  exact ⟨h1, h2, h3.1, h3.2, h4.1, h4.2, h7⟩
+  obtain ⟨-, ⟨⟨h1, h2⟩, ⟨h3, h4⟩⟩⟩ := h
+  exact ⟨h1, h2, h3.1, h3.2, h4.1, h4.2⟩
 
 end Unc
 
@@ -761,34 +760,6 @@ theorem ex_get (hc : FCtxInv fc c₀) {i : Nat} (hmem : i ∈ parties b) (hov : 
   obtain ⟨-, -, -, -, -, -, -, -, -, -, -, -, hEx, -⟩ := hc
   show (idMap fc.feeds.excl (parties b)).getD i [] = _
   rw [idMap_getD, if_pos hmem, facts_of_not_over hov, hEx]
-
-theorem elig_get (hc : FCtxInv fc c₀) {i : Nat} (hmem : i ∈ members b) (hov : feedOver (fc.feeds.elig i) = false) :
-    (locIx s fc b).elig.getD i [] = (entries c₀.eligibility).filter (·.member == i) := by
-  obtain ⟨-, -, -, -, -, -, -, -, -, -, -, -, -, -, -, -, -, -, hEl⟩ := hc
-  show (idMap fc.feeds.elig (members b)).getD i [] = _
-  rw [idMap_getD, if_pos hmem, facts_of_not_over hov, hEl]
-
-theorem aidEligible_loc (hc : FCtxInv fc c₀) {l : Line} (hmem : l.member ∈ members b)
-    (hov : feedOver (fc.feeds.elig l.member) = false) :
-    (locIx s fc b).aidEligible l = aidEligible (carried c₀ rel unr) l := by
-  unfold Ix.aidEligible aidEligible
-  rw [elig_get hc hmem hov, Bool.eq_iff_iff]
-  simp only [List.any_eq_true, List.mem_filter, beq_iff_eq]
-  constructor
-  · rintro ⟨e, ⟨he, _⟩, hcv⟩; exact ⟨e, he, hcv⟩
-  · rintro ⟨e, he, hcv⟩
-    exact ⟨e, ⟨he, eligCovers_member ((Bool.and_eq_true _ _).mp hcv).1⟩, hcv⟩
-
-theorem levelEligible_loc (hc : FCtxInv fc c₀) {l : Line} (hmem : l.member ∈ members b)
-    (hov : feedOver (fc.feeds.elig l.member) = false) :
-    (locIx s fc b).levelEligible l = levelEligible (carried c₀ rel unr) l := by
-  unfold Ix.levelEligible levelEligible
-  rw [elig_get hc hmem hov, Bool.eq_iff_iff]
-  simp only [List.any_eq_true, List.mem_filter, beq_iff_eq]
-  constructor
-  · rintro ⟨e, ⟨he, _⟩, hcv⟩; exact ⟨e, he, hcv⟩
-  · rintro ⟨e, he, hcv⟩
-    exact ⟨e, ⟨he, eligCovers_member ((Bool.and_eq_true _ _).mp ((Bool.and_eq_true _ _).mp hcv).1).1⟩, hcv⟩
 
 theorem enrolled_loc (hc : FCtxInv fc c₀) {l : Line} (hmem : l.member ∈ spanIds b (localRows (fetch s fc.redo b).unr))
     (hov : feedOver (fc.feeds.span l.member) = false) :
@@ -956,7 +927,7 @@ theorem byp_loc (hc : FCtxInv fc c₀) : (locIx s fc b).byp = (carried c₀ rel 
   exact h
 
 theorem lim_loc (hc : FCtxInv fc c₀) : (locIx s fc b).lim = (carried c₀ rel unr).lim := by
-  obtain ⟨-, -, -, -, -, -, -, -, -, -, -, -, -, -, -, h, -⟩ := hc
+  obtain ⟨-, -, -, -, -, -, -, -, -, -, -, -, -, -, -, h⟩ := hc
   exact h
 
 theorem pending_loc (hr : IdxInv H s.rel rel) (hu : IdxInv H s.unr unr) (hc : FCtxInv fc c₀)
@@ -1043,12 +1014,8 @@ theorem fires_loc (hr : IdxInv H s.rel rel) (hu : IdxInv H s.unr unr) (hc : FCtx
   have hid : idKey l ∈ keys l := idKey_mem
   have hex : exactKey l ∈ keys l := by simp [keys]
   have hne : nearKey l ∈ keys l := by simp [keys]
-  obtain ⟨f1, f2, f3, f4, f5, f6, f7⟩ := unc_feed hb hl
+  obtain ⟨f1, f2, f3, f4, f5, f6⟩ := unc_feed hb hl
   obtain ⟨hpay, hrend⟩ := mem_parties hl
-  have hae : (locIx s fc b).aidEligible l = (Ix.build (carried c₀ rel unr) b).aidEligible l :=
-    (aidEligible_loc (s := s) (b := b) (rel := rel) (unr := unr) hc (mem_members hl) f7).trans aidEligible_eq.symm
-  have hle : (locIx s fc b).levelEligible l = (Ix.build (carried c₀ rel unr) b).levelEligible l :=
-    (levelEligible_loc (s := s) (b := b) (rel := rel) (unr := unr) hc (mem_members hl) f7).trans levelEligible_eq.symm
   have hmd : (locIx s fc b).memberDead l = (Ix.build (carried c₀ rel unr) b).memberDead l :=
     (memberDead_loc (s := s) (b := b) (rel := rel) (unr := unr) hc (mem_members hl) f1).trans memberDead_eq.symm
   have hpd : (locIx s fc b).providerDead l = (Ix.build (carried c₀ rel unr) b).providerDead l :=
@@ -1072,9 +1039,7 @@ theorem fires_loc (hr : IdxInv H s.rel rel) (hu : IdxInv H s.unr unr) (hc : FCtx
     rw [looseKeys_eq, this]; simp
   have hrc := relChained_loc (b := b) (unr := unr) hr hc
   have huc := unrChained_loc (b := b) (rel := rel) hu hc
-  obtain ⟨hT, -, hDS, hPS, hES, hSS, hDO, hPO, hEO, hSO, -, -, -, -, -, -, hLS, hLO, -⟩ := hc
-  have hls : (locIx s fc b).eligSome = (Ix.build (carried c₀ rel unr) b).eligSome := hLS
-  have hlo : (locIx s fc b).eligOk = (Ix.build (carried c₀ rel unr) b).eligOk := hLO
+  obtain ⟨hT, -, hDS, hPS, hES, hSS, hDO, hPO, hEO, hSO, -, -, -, -⟩ := hc
   have hto : (locIx s fc b).today = (Ix.build (carried c₀ rel unr) b).today := hT
   have hds : (locIx s fc b).dmfSome = (Ix.build (carried c₀ rel unr) b).dmfSome := hDS
   have hps : (locIx s fc b).pdSome = (Ix.build (carried c₀ rel unr) b).pdSome := hPS
@@ -1085,7 +1050,7 @@ theorem fires_loc (hr : IdxInv H s.rel rel) (hu : IdxInv H s.unr unr) (hc : FCtx
   have heo : (locIx s fc b).exclOk = (Ix.build (carried c₀ rel unr) b).exclOk := hEO
   have hso : (locIx s fc b).spanOk = (Ix.build (carried c₀ rel unr) b).spanOk := hSO
   cases r <;> simp only [Ix.fires, hs _ hex, hs _ hne, hs _ hid, hp _ hex, hp _ hne, hp _ hid, hlk, hmd, hpd, hex', hov,
-    hne', hen, hrc, huc, hto, hds, hps, hes, hss, hdo, hpo, heo, hso, hae, hle, hls, hlo]
+    hne', hen, hrc, huc, hto, hds, hps, hes, hss, hdo, hpo, heo, hso]
 
 
 theorem decideLine_loc (hr : IdxInv H s.rel rel) (hu : IdxInv H s.unr unr) (hc : FCtxInv fc c₀)
@@ -1651,7 +1616,6 @@ theorem work_le (s : St) (fd : Feeds) (redo : List Nat) (b : List Line) :
   have f2 := factWork_le fd.span (spanIds b (localRows (fetch s redo b).unr))
   have f3 := factWork_le fd.pdeath (parties b)
   have f4 := factWork_le fd.excl (parties b)
-  have f5 := factWork_le fd.elig (members b)
   have hp := parties_length b
   have hm : (members b).length = b.length := by simp [members]
   have hs : (spanIds b (localRows (fetch s redo b).unr)).length = b.length + (localRows (fetch s redo b).unr).length := by
@@ -1662,7 +1626,7 @@ theorem work_le (s : St) (fd : Feeds) (redo : List Nat) (b : List Line) :
   rw [List.length_map] at hR
   rw [hrel] at e1
   rw [hunr] at e2 hl
-  rw [hm] at f1 f5
+  rw [hm] at f1
   rw [hs] at f2
   unfold work workC
   simp only [capN] at *

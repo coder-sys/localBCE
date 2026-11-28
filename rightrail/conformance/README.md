@@ -20,17 +20,13 @@ file not pinned (verify from the repository root with
 - **Correction reuse** `.../CORRECTION-REUSE/v1` (`BLFCRU02`→`BLFCRV02`):
  retired 2026-10-02 with the one-shot exe (vectors in git 99ec957); spec
  [§7](CORRECTION_TRANSITION_WIRE.md#7-reuse-blfcru02-request-and-blfcrv02-assessment).
-- **Gate rules v2** (v1 plus G2, the eligibility snapshot kind 7 and READ-SET/v5): spec [GATE_RULES_V2.md](GATE_RULES_V2.md);
- vectors `tests/gate_rules/{rules_v2,demo_zz_v2}.vectors` and must-reject
- `rules_v2_negative.vectors` with its frozen output `rules_v2_negative.expected` (pins in `tools/gate_rules_data.py`);
- impl Lake exe `gate_rules` (`lean/BlindLedger/Gate/Rules/Run.lean`), driven by
+- **Gate rules v1**: spec [GATE_RULES_V1.md](GATE_RULES_V1.md); vectors
+ `tests/gate_rules/{rules_v1,demo_zz}.vectors` and must-reject
+ `rules_v1_negative.vectors` (pins in `tools/gate_rules_data.py`); impl Lake exe
+ `gate_rules` (`lean/BlindLedger/Gate/Rules/Run.lean`), driven by
  `tests/test_gate_rules_vectors.py`; independent checker
- `gate_rules_v2_ref.py` (from the spec alone), `tests/test_gate_rules_v2_spec.py`.
-- **Gate rules v1**: RETIRED 2026-11-18 at trunk step 3 (G2): GATE_RULES_V1.md, `gate_rules_v1_ref.py`,
- `tests/test_gate_rules_v1_spec.py`, `rules_v1.vectors`, `demo_zz.vectors`, `rules_v1_negative.{vectors,expected}` and
- their manifest lines deleted (git keeps them). The localBCE parity harness keeps a byte-identical copy of
- `rules_v1.vectors` outside `rightrail/`. Earlier, G6 (5fa47fa6, anchored batches) rewrote `rules_v1.vectors` in place; the
- pre-G6 bytes were deleted (RETIRED 2026-10-02; git keeps them).
+ `gate_rules_v1_ref.py` (from the spec alone), `tests/test_gate_rules_v1_spec.py`.
+ G6 (5fa47fa6, anchored batches) rewrote `rules_v1.vectors` in place; the pre-G6 bytes were deleted (RETIRED 2026-10-02; git keeps them).
 - **Provider pre-check v1**: vectors
  `provider_app/vectors/synthetic-vectors-v1.json`; JSON Schemas
  `provider_app/schemas/{check-request-v1,check-result-v1,rule-bundle-v1}.schema.json`
@@ -45,14 +41,42 @@ file not pinned (verify from the repository root with
  `tools/gen_segment_v1_vectors.py`, test `tests/test_segment_v1_conformance.py`; impl
  `app/right_rail_financial_owner_independent.py`. v1 covers the segment layer only: event id/head
  content and the 4,096-event boundary are out of scope.
-- **Engine frames** `RRDQ`/`RRDA` v1: spec [FRAME_V1.md](FRAME_V1.md); normative model `lean/BlindLedger/Gate/Frame/`;
- draft; answer vectors in `tests/gate_vectors/gate_v1.vectors`. The engine now answers at `RRDA` header version 3 (u64 reasons); the request stays version 1;
- a page for the version-3 frames is to come.
+- **Engine frames** `RRDQ` v2 / `RRDA` v4: spec [FRAME_V1.md](FRAME_V1.md); normative model `lean/BlindLedger/Gate/Frame/`;
+ draft, no vectors yet.
 - **Combined history engine** (revision 2 of the history store): spec [ENGINE_V3.md](ENGINE_V3.md); normative model
  `lean/BlindLedger/Gate/Engine3/`; draft, no vectors yet.
+- **Obligations records** v1: spec [OBLIGATIONS_V1.md](OBLIGATIONS_V1.md) (layouts, tags, vectors); normative model
+ `lean/BlindLedger/Gate/Obligations/Format/`; second reader [obligations_v1_ref.py](obligations_v1_ref.py); test
+ `tests/test_obligations_format.py` (vectors, fuzzing, module table).
 - **History index** `RR/GATE/CHAIN/v1` and `RR/GATE/{FLAT/FRAME,STORE/CHUNK,STORE/LEAF,STORE/NODE,STORE/PAGE,STORE/STATE3,INDEX/TAIL}/v1` (draft): spec
  [FLAT_V1.md](FLAT_V1.md); normative model `lean/BlindLedger/Gate/Flat/` (statements in `Theorems.lean`); no
  vectors yet.
+- **Signed rule set** `RR/GATE/RULESET/v1` (draft): spec [RULESET_V1.md](RULESET_V1.md); normative model
+ `lean/BlindLedger/Gate/RuleSet/Spec.lean`; frozen codec tests `tests/test_ruleset_v1_codec.py` (must-reject cases,
+ round trips), `tests/test_ruleset_admission.py` (admission and selection).
+- **Signed rule set** `RR/GATE/RULESET/v2` (draft; the eligibility source, aid table and reasons 24-28): spec
+ [RULESET_V2.md](RULESET_V2.md); normative model `lean/BlindLedger/Gate/RuleSet/Spec.lean`; reference evaluator
+ [ruleset_v2_ref.py](ruleset_v2_ref.py); test `tests/test_ruleset_v2.py` (codec, golden digests, Lean against the
+ reference).
+- **Eligibility system extract**, synthetic state layout v1: spec [ELIG_EXTRACT_V1.md](ELIG_EXTRACT_V1.md); vectors
+ `tests/elig_vectors/` (3 golden files with their fact rows and receipts in `golden.json`, 40 must-refuse cases in
+ `hostile.json`); generator `tools/gen_elig_extract_v1_vectors.py`, test `tests/test_reader_elig.py`; impl
+ `app/right_rail_reader_elig.py`, independent verifier `app/right_rail_reader_elig_independent.py`.
+- **State death file**, synthetic state layout v1: spec [STATE_DEATH_V1.md](STATE_DEATH_V1.md); vectors
+ `tests/death_vectors/` (3 golden files in `golden.json`, 28 must-refuse cases in `hostile.json`); generator
+ `tools/gen_state_death_v1_vectors.py`, test `tests/test_reader_state_death.py`; impl
+ `app/right_rail_reader_state_death.py`, independent verifier `app/right_rail_reader_state_death_independent.py`.
+ The state layouts share `app/right_rail_reader_fixed.py` and, for the verifiers, `app/right_rail_reader_fixed_independent.py`.
+- **Provider death list**, synthetic state layout v1: spec [PROVIDER_DEATH_V1.md](PROVIDER_DEATH_V1.md); vectors
+ `tests/provdeath_vectors/` (3 golden files in `golden.json`, 38 must-refuse cases in `hostile.json`); generator
+ `tools/gen_provider_death_v1_vectors.py`, test `tests/test_reader_provider_death.py`; impl
+ `app/right_rail_reader_provider_death.py`, independent verifier `app/right_rail_reader_provider_death_independent.py`.
+- **Exclusion lists** (state list, synthetic state layout v1; federal list, the published CSV): spec
+ [EXCLUSION_V1.md](EXCLUSION_V1.md); vectors `tests/excl_vectors/` (3 state and 3 federal golden files with their fact
+ rows, set-aside entries and receipts in `golden.json`, 28 state and 23 federal must-refuse cases in `hostile.json`);
+ generator `tools/gen_exclusion_v1_vectors.py`, test `tests/test_reader_exclusion.py`; impl
+ `app/right_rail_reader_state_exclusion.py` and `app/right_rail_reader_federal_exclusion.py`, independent verifiers
+ `app/right_rail_reader_state_exclusion_independent.py` and `app/right_rail_reader_federal_exclusion_independent.py`.
 
 ## Running the binary vectors
 

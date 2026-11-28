@@ -35,7 +35,7 @@ def rManyB (b : ByteArray) : Nat → Nat → Option (List ByteArray × Nat)
   | o, 0 => some ([], o)
   | o, k + 1 => (rFramedB b o).bind fun (x, o1) => (rManyB b o1 k).map fun (xs, o2) => (x :: xs, o2)
 
-/-! ### TOKEN/v2 over the array (`pLeaf`, `pToken` of `Spec.lean` with `take` and `nat` replaced by offsets) -/
+/-! ### TOKEN/v3 over the array (`pLeaf`, `pToken` of `Spec.lean` with `take` and `nat` replaced by offsets) -/
 
 def rTag {α : Type} (names : List α) : Rd α := fun b o => do
   let (n, o) ← rNat 1 1 names.length b o
@@ -76,7 +76,7 @@ def rConsumed {α : Type} (r : Rd α) : Rd (α × Bytes) := fun b o => do
   some ((x, (b.extract o o').data.toList), o')
 
 def rLeaf : Rd Leaf := fun b o => do
-  let (_, o) ← rExpect ("RR/GATE/TOKEN/v2".toUTF8.toList ++ [0]) b o
+  let (_, o) ← rExpect ("RR/GATE/TOKEN/v3".toUTF8.toList ++ [0]) b o
   let (tenantId, o) ← rIdent b o
   let (programId, o) ← rIdent b o
   let (shardId, o) ← rNat 4 0 maxNat b o
@@ -94,6 +94,7 @@ def rLeaf : Rd Leaf := fun b o => do
   let (authority, o) ← rTag authorities b o
   let (grantId, o) ← rDigest b o
   let (bypass, o) ← rDigest b o
+  let (earlierRoot, o) ← rDigest b o
   let (ruleVersion, o) ← rDigest b o
   let (engineRelease, o) ← rDigest b o
   let (inputCommitment, o) ← rDigest b o
@@ -105,10 +106,11 @@ def rLeaf : Rd Leaf := fun b o => do
   let (_, o) ← rNeed (if flow.ruled then linesRoot != zeroDigest else outcome == .HUMAN_REVIEW) b o
   let (_, o) ← rNeed (ascending reasonCodes) b o
   let (_, o) ← rNeed (bypass == zeroDigest || (outcome == .ALLOW && flow.ruled)) b o
+  let (_, o) ← rNeed ((earlierRoot == zeroDigest) == (outcome != .ANSWERED)) b o
   let (_, o) ← rNeed (decidedAt ≤ issuedAt && issuedAt ≤ expiresAt && expiresAt ≤ issuedAt + maxTokenLifetime) b o
   some ({ tenantId, programId, shardId, flow, revision, paymentId, memberKey, payeeRef, amountCents, period,
-          linesRoot, outcome, reasonCodes, authority, grantId, bypass, ruleVersion, engineRelease, inputCommitment,
-          decidedAt, epoch, seq, issuedAt, expiresAt }, o)
+          linesRoot, outcome, reasonCodes, authority, grantId, bypass, earlierRoot, ruleVersion, engineRelease,
+          inputCommitment, decidedAt, epoch, seq, issuedAt, expiresAt }, o)
 
 def rToken : Rd Token := fun b o => do
   let (lf, o) ← rConsumed rLeaf b o
@@ -117,12 +119,15 @@ def rToken : Rd Token := fun b o => do
   let (checkpointDigest, o) ← rDigest b o
   some ({ leaf := lf.1, leafBytes := lf.2, siblings, checkpointDigest }, o)
 
-/-- `decodeToken` on one slice. -/
-def decodeTokenB (b : ByteArray) : Option Token :=
-  if b.size > maxTokenBytes then none else
-  match rToken b 0 with
-  | some (t, o) => if o = b.size then some t else none
+/-- `parse` on one slice: none past `limit` bytes or with bytes left over. -/
+def parseB {α : Type} (r : Rd α) (limit : Nat) (b : ByteArray) : Option α :=
+  if b.size > limit then none else
+  match r b 0 with
+  | some (x, o) => if o = b.size then some x else none
   | none => none
+
+/-- `decodeToken` on one slice. -/
+def decodeTokenB (b : ByteArray) : Option Token := parseB rToken maxTokenBytes b
 
 /-! ### The batch decision -/
 
@@ -163,52 +168,48 @@ def tokenFitsTreeB (c : Crypto) (k : Nat) (x : Stored) (lv : List (Array ByteArr
 def storeCheckpointD (c : Crypto) (s : PayerState) (bytes : Bytes) (x : SignedCheckpoint) : Option PayerState :=
   let new : Stored := ⟨c.hash x.header, x.checkpoint, bytes⟩
   if s.certs.any fun e => e.tenantId == x.checkpoint.tenantId && e.epoch == x.checkpoint.epoch &&
-      (c.keyUsable e && c.sigOk e.publicKey x.header x.signature) then
+      c.verify e.key x.header x.signature then
     match s.checkpoints.find? (forks new) with
     | some old => some { s with forked := (old, new) :: s.forked }
     | none =>
       if blocked s x.checkpoint.tenantId x.checkpoint.shardId x.checkpoint.epoch then none
-      else some { s with checkpoints := new :: s.checkpoints }
+      else if s.certs.any fun e => e.tenantId == x.checkpoint.tenantId && e.epoch == x.checkpoint.epoch &&
+          c.verify e.key x.header x.signature && x.cosign.any (cosignOk c e new.digest) then
+        some { s with checkpoints := new :: s.checkpoints }
+      else none
   else none
 
-/-- `realCrypto`'s `rootSigned` without the re-decode of `e.signed` (which holds for a decoded certificate:
-    `decodeKeyCert_signed`). -/
-def rootSignedFast (roots : List (Bytes × Bytes)) (e : EpochCert) : Bool :=
-  roots.any fun r => r.1 == e.tenantId &&
-    mlDsaOk r.2 (e.signed.take (e.signed.length - 2 - mlDsa87Signature)) (e.signed.drop (e.signed.length - mlDsa87Signature))
-
 /-- `accepts` once both decodes are known (`accepts_eq`). -/
-def acceptsD (rootPk new : Bytes) (x : SignedCheckpoint) (e : EpochCert) : Bool :=
-  let roots := [(x.checkpoint.tenantId, rootPk)]
-  let c := { realCrypto roots with rootSigned := rootSignedFast roots }
-  match installCert c emptyState e with
-  | (s, true) => match storeCheckpointD c s new x with
+def acceptsD (link : Cosign.Link) (new : Bytes) (x : SignedCheckpoint) (e : Cosign.KeyCert) : Bool :=
+  match Cosign.install realCrypto (linkState link).toAuth e with
+  | (a, .installed) => match storeCheckpointD realCrypto { linkState link with toAuth := a } new x with
     | some s' => s'.forked.isEmpty
     | none => false
   | _ => false
 
 /-- `publishOkTree` with the tokens as slices of the frame. -/
-def publishOkTreeB (rootPk cert : ByteArray) (last : Option ByteArray) (new : ByteArray)
+def publishOkTreeB (link : Cosign.Link) (cert : ByteArray) (last : Option ByteArray) (new : ByteArray)
     (tokens : List ByteArray) (tpm : Nat) : Bool :=
-  match decodeKeyCert cert.data.toList, decodeCheckpoint new.data.toList, tokens.mapM decodeTokenB with
+  match Cosign.decode cert.data.toList, decodeCheckpoint new.data.toList, tokens.mapM decodeTokenB with
   | some e, some x, some ts =>
     let n : Stored := ⟨sha3 x.header, x.checkpoint, new.data.toList⟩
     let lv := levelsB treeFuel (ts.map fun t => leafHashB t.leafBytes.toByteArray)
-    acceptsD rootPk.data.toList new.data.toList x e &&
+    acceptsD link new.data.toList x e &&
       (last.map (·.data.toList)).all (fun b => (storedOf sha3 b).isSome) &&
       follows ((last.map (·.data.toList)).bind (storedOf sha3)) n && n.checkpoint.counter == tpm + 1 && ts.length == n.checkpoint.count &&
       (lv.getLast?.map fun a => a.toList.map (·.data.toList)) == some [n.checkpoint.tokenRoot] &&
       (ts.zipIdx.all fun (t, i) =>
-        tokenFitsTreeB (realCrypto [(n.checkpoint.tenantId, rootPk.data.toList)]) e.shardCount n lv i t) &&
+        tokenFitsTreeB realCrypto e.shardCount n lv i t) &&
       ascending (ts.map (·.leaf.paymentId))
   | _, _, _ => false
 
 def publishFrameB (b : ByteArray) : Option Bool :=
-  (rdB b 0 mlDsa87Key).bind fun (rootPk, o1) => (rFramedB b o1).bind fun (cert, o2) =>
+  (rFramedB b 0).bind fun (link, o1) => (rFramedB b o1).bind fun (cert, o2) =>
   (rFramedB b o2).bind fun (last, o3) => (rFramedB b o3).bind fun (new, o4) =>
   (rNat 2 0 maxNat b o4).bind fun (k, o5) => (rManyB b o5 k).bind fun (tokens, o6) => (rNat 8 0 maxNat b o6).bind fun (tpm, o7) =>
   if o7 = b.size then
-    some (publishOkTreeB rootPk cert (if last.size = 0 then none else some last) new tokens tpm)
+    some ((Cosign.decodeLink link.data.toList).any fun n =>
+      publishOkTreeB (n.link sha3) cert (if last.size = 0 then none else some last) new tokens tpm)
   else none
 
 end BlindLedger.Gate

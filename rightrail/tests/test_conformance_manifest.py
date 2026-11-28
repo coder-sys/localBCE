@@ -17,7 +17,8 @@ class ConformanceManifest(unittest.TestCase):
     def test_every_conformance_file_is_pinned_with_its_digest(self):
         pins = listed()
         found = []
-        for base, _, names in os.walk(CONF):
+        for base, dirs, names in os.walk(CONF):
+            dirs[:] = [d for d in dirs if d != "__pycache__"]  # Python's own byte-code cache from running a reference reader, not a kit file
             for n in names:
                 rel = os.path.relpath(os.path.join(base, n), ROOT).replace(os.sep, "/")
                 if rel[len("conformance/"):] not in UNPINNED:

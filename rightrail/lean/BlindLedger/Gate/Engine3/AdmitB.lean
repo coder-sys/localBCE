@@ -17,25 +17,71 @@ initialize specEvery : Nat ← do
 
 def specDue (batch : Nat) : BaseIO Bool := pure (batch % specEvery == 1 % specEvery)
 
-/-- The last admission and the inputs it was made from. -/
+/-- Everything `Run.admit` reads of a frame that has a request and no bypass: the stored pin, ratchet and floor, the day,
+    the asserted floor and key-set floor, the first request's tenant, and the bytes of the key set, the grant and the
+    key-set steps. -/
 abbrev AdmKey := (Bytes × Keyset.Ratchet × Nat × Nat × Option Nat × Option Nat × Bytes) × (Option Bytes × Option Bytes × List (Nat × Bytes))
 
+/-- The key of a frame's admission; none when the frame has no request or has a bypass (a bypass is judged against every
+    request and the re-decided payments, which no key holds). -/
+def admKey (pin : Bytes) (rat : Keyset.Ratchet) (stored : Nat) (st : Run.St) : Option AdmKey :=
+  match st.reqs[0]?, st.byps with
+  | some e0, [] => some ((pin, rat, stored, st.today, st.floorIn, st.kfloorIn, e0.r.tenantId), (st.keyset, st.grant, st.ksteps))
+  | _, _ => none
+
+private theorem admKey_some {pin : Bytes} {rat : Keyset.Ratchet} {stored : Nat} {st : Run.St} {k : AdmKey}
+    (h : admKey pin rat stored st = some k) :
+    ∃ e0, st.reqs[0]? = some e0 ∧ st.byps = [] ∧
+      k = ((pin, rat, stored, st.today, st.floorIn, st.kfloorIn, e0.r.tenantId), (st.keyset, st.grant, st.ksteps)) := by
+  unfold admKey at h
+  split at h
+  · next e0 h0 hb => exact ⟨e0, h0, hb, (Option.some.inj h).symm⟩
+  · cases h
+
+/-- Two frames with the same key are admitted alike, whatever else differs between them: the key leaves out nothing
+    `Run.admit` reads.  This is what lets an admission be kept for the next frame. -/
+theorem admit_of_key {verify : Bytes → Bytes → Bytes → Bool} {pin pin' : Bytes} {rat rat' : Keyset.Ratchet}
+    {stored stored' : Nat} {st st' : Run.St} {k : AdmKey}
+    (h : admKey pin rat stored st = some k) (h' : admKey pin' rat' stored' st' = some k) :
+    Run.admit verify pin rat stored st = Run.admit verify pin' rat' stored' st' := by
+  obtain ⟨e0, h0, hb, rfl⟩ := admKey_some h
+  obtain ⟨e0', h0', hb', hk⟩ := admKey_some h'
+  simp only [Prod.mk.injEq] at hk
+  obtain ⟨⟨rfl, rfl, rfl, hd, hf, hkf, ht⟩, hks, hg, hs⟩ := hk
+  unfold Run.admit
+  rw [h0, h0', hb, hb', hd, hf, hkf, hks, hg, hs]
+  cases st'.grant with
+  | none => rfl
+  | some gx =>
+    cases st'.keyset with
+    | none => rfl
+    | some ks =>
+      dsimp only
+      rw [ht]
+      simp only [List.take_nil, List.map_nil, List.drop_nil, List.append_nil, List.filterMap_nil, List.filter_nil]
+
+/-- `RR_E3_ADMIT_FRESH` set (a test hook, as `RR_E3_SPEC` is): no admission is kept, every frame is admitted in full. -/
+initialize admitFresh : Bool ← do
+  pure (← IO.getEnv "RR_E3_ADMIT_FRESH").isSome
+
+/-- This process's last keyed admission and its key.  The engine and the checker are separate processes; each fills its
+    own from its own decoding of the frame and its own stored authority record, and nothing of it is written or read
+    from disk. -/
 initialize admLast : IO.Ref (Option (AdmKey × Except String Run.Admitted)) ← IO.mkRef none
 
-/-- `Run.admit` with `mlDsaMemo`, kept for the next batch when its inputs are the same: with no bypass in the frame it reads
-    the requests only for the first one's tenant, so a batch of the same authority record (pin, ratchet, stored floor, day,
-    asserted floor, asserted key-set floor, tenant, key set, its steps and grant) is admitted once, not once per batch (decoding the key set and the
-    grant and counting their signatures was 12 us a line).  `admitB_eq` covers it; the sampled spec check recomputes it. -/
+/-- `Run.admit` with `mlDsaMemo`.  A frame whose key (`admKey`) equals, byte for byte, the key of the last keyed frame
+    gets that frame's result, which is the result `Run.admit` would give it (`admit_of_key`); so a run of batches under
+    one authority record is admitted once, not once per batch (decoding the key set and the grant and counting their
+    signatures was 10 us a line of the checker).  A frame with a bypass, a frame whose key differs in any byte, and every
+    frame under `RR_E3_ADMIT_FRESH` is admitted in full.  The sampled spec check admits in full from the request lines
+    and must agree. -/
 def admitC (pin : Bytes) (rat : Keyset.Ratchet) (stored : Nat) (st : Run.St) : IO (Except String Run.Admitted) := do
-  match st.reqs[0]?, st.byps with
-  | some e0, [] =>
-    let k := ((pin, rat, stored, st.today, st.floorIn, st.kfloorIn, e0.r.tenantId), (st.keyset, st.grant, st.ksteps))
-    if let some (k', r) := ← admLast.get then
-      if k' == k then return r
-    let r := Run.admit mlDsaMemo pin rat stored st
-    admLast.set (some (k, r))
-    pure r
-  | _, _ => pure (Run.admit mlDsaMemo pin rat stored st)
+  let some k := (if admitFresh then none else admKey pin rat stored st) | return Run.admit mlDsaMemo pin rat stored st
+  if let some (k', r) := ← admLast.get then
+    if k' == k then return r
+  let r := Run.admit mlDsaMemo pin rat stored st
+  admLast.set (some (k, r))
+  pure r
 
 /-- The batch's coverage, which requests have a line that does not fit, and where each kept line sits. -/
 structure AdmB where
@@ -433,14 +479,14 @@ theorem admitB_eq_needs_ra : ¬ (∀ (adm : Except String Run.Admitted) (reqs rs
     (_ : ∀ x ∈ reqs, ∀ e0 ∈ reqs[0]?, x.ra.programId = e0.ra.programId), admB adm reqs = specAdm adm rs) := by
   intro h
   obtain ⟨x0, r0, hr0, hl⟩ : ∃ x r, Run.reqOf x = some r ∧ r.ls = [] := by
-    have hs : (Run.reqOf (domain "DECIDE-REQUEST" ++ identField [65] ++ identField [66] ++ [4] ++ identField [67] ++
+    have hs : (Run.reqOf (decideRequestDomain ++ identField [65] ++ identField [66] ++ [4] ++ identField [67] ++
         identField [68] ++ List.replicate 32 7 ++ identField [69] ++ List.replicate 8 0 ++ identField [70] ++ [0, 0] ++
-        [0, 0]).toByteArray).map (fun r => r.ls.length) = some 0 := by decide +kernel
+        [0, 0] ++ [0]).toByteArray).map (fun r => r.ls.length) = some 0 := by decide +kernel
     obtain ⟨r, hr, hl⟩ := Option.map_eq_some_iff.mp hs
     exact ⟨_, r, hr, by simpa using hl⟩
   obtain ⟨ra, hbad⟩ : ∃ ra : RequestBA, reqFits ra = false :=
     ⟨⟨.empty, .empty, .FFS_CYCLE, .empty, (List.replicate 70 (65 : UInt8)).toByteArray, .empty, .empty, 0, .empty,
-      [ByteArray.empty], []⟩, by decide +kernel⟩
+      [ByteArray.empty], [], false⟩, by decide +kernel⟩
   have h1 := h (.error "e") #[{ r0 with ra := ra, x := x0 }] #[r0] rfl (by
     intro i hi
     have : i = 0 := by simp at hi; omega

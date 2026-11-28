@@ -35,13 +35,13 @@ def _image(store: payer.PayerStore) -> dict[str, list[tuple]]:
 
 class HostileGatePayerTests(fx.Scratch):
     def _keys(self, tmp: str) -> None:
-        handle, self.root_pk, self.cert = fx.custody(tmp)
-        self.signed, tokens = fx.signed_genesis(handle, seal=(self.root_pk, self.cert))
+        handle, self.held, self.cert = fx.custody(tmp)
+        self.signed, tokens = fx.signed_genesis(handle, seal=(self.held, self.cert))
         self.request, self.token = fx.payment_request(0), tokens[0]
 
     def _store(self, tmp: str, name: str = "payer", *, ready: bool = True) -> payer.PayerStore:
         """A store with the clean certificate; ``ready``: also the clean checkpoint stored and the request sent."""
-        store = self.track(payer.PayerStore(Path(tmp) / f"{name}.sqlite3", root_keys={fx.TENANT: self.root_pk},
+        store = self.track(payer.PayerStore(Path(tmp) / f"{name}.sqlite3", links={fx.TENANT: self.held},
                                             grants=((fx.TENANT, fx.D[3], (fx.D[4],), (fx.D[6],)),)))
         store.install_cert(self.cert)
         if ready:

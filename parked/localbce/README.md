@@ -23,6 +23,7 @@ it. Reviving any part needs an explicit decision recorded in
 | `scripts/` | STARK, Sepolia, Anvil and OpenZeppelin validators and the handoff crosswalk builder |
 | `ops/*.example.json` | STARK deployment pins, release profile, Sepolia pilot, policy manifest |
 | `tests/`, `scripts/tests/` | Tests for the parked scripts |
+| `scripts/elig_snapshot.py`, `scripts/tests/test_elig_snapshot.py`, `scripts/tests/fixtures/elig/` | Eligibility snapshot builder (feed kind 7), its tests and fixture. Parked 2026-11-24: the RightRail maintainer's answer 4 puts eligibility in the fact store, not in a feed, and the builder read `rightrail/conformance/gate_rules_v2_ref.py`, which the `e5d0f36b` import removed |
 
 The STARK code removed from `rust-engine/src/main.rs` is recoverable from Git
 history at `e746f58` (`git show e746f58:rust-engine/src/main.rs`).

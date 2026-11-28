@@ -174,12 +174,56 @@ theorem pCheckpoint_inv {b rest : Bytes} {cp : Checkpoint} (h : pCheckpoint.run 
   subst e0 e1 e2 hu
   simp only [checkpointHeader, List.append_assoc]
 
+/-- The cosign record's bytes; none when the checkpoint carries no cosignature. -/
+def cosignBytes : Option VCosign → Bytes
+  | none => []
+  | some v => domain "VCOSIGN" ++ v.vrel ++ natBE 2 mlDsa87Signature ++ v.sig
+
+/-- Exactly what `pCosign` checks: a 64-byte release digest and an ML-DSA-87 signature. -/
+def VCosign.Wf (v : VCosign) : Prop := v.vrel.length = digestBytes ∧ v.sig.length = mlDsa87Signature
+
+theorem pCosign_inv {b r : Bytes} {v : VCosign} (h : pCosign.run b = some (v, r)) :
+    b = cosignBytes (some v) ++ r ∧ v.Wf := by
+  simp only [pCosign, StateT.run_bind] at h
+  obtain ⟨⟨u, m0⟩, h0, h⟩ := bind_some h
+  obtain ⟨⟨vr, m1⟩, h1, h⟩ := bind_some h
+  obtain ⟨⟨sg, m2⟩, h2, h⟩ := bind_some h
+  simp only [StateT.run_pure, Option.pure_def, Option.some.injEq, Prod.mk.injEq] at h
+  obtain ⟨rfl, rfl⟩ := h
+  have e0 := expect_run h0
+  obtain ⟨e1, hv⟩ := take_inv h1
+  obtain ⟨e2, hlo, hhi⟩ := blob_inv h2
+  have hsl : sg.length = mlDsa87Signature := by omega
+  subst e0 e1 e2
+  refine ⟨?_, hv, hsl⟩
+  simp [cosignBytes, hsl]
+
+/-- `orEnd` reads nothing from no bytes, and otherwise exactly what its parser reads. -/
+theorem orEnd_inv {α : Type} {p : P α} {b r : Bytes} {o : Option α} (h : (orEnd p).run b = some (o, r)) :
+    (b = [] ∧ o = none ∧ r = []) ∨ ∃ v, o = some v ∧ p.run b = some (v, r) := by
+  have h' : (if b.isEmpty then some (none, b) else (p b).map fun q => (some q.1, q.2)) = some (o, r) := h
+  by_cases hb : b.isEmpty = true
+  · rw [if_pos hb] at h'
+    cases h'
+    exact .inl ⟨List.isEmpty_iff.mp hb, rfl, List.isEmpty_iff.mp hb⟩
+  · rw [if_neg hb] at h'
+    rcases hp : p b with _ | ⟨v, r'⟩
+    · rw [hp] at h'
+      cases h'
+    · rw [hp] at h'
+      have h2 : some ((some v : Option α), r') = some (o, r) := h'
+      cases h2
+      exact .inr ⟨v, rfl, hp⟩
+
+/-- A decoded checkpoint is its header, its signature, then its cosign record or nothing. -/
 theorem decodeCheckpoint_inv {b : Bytes} {x : SignedCheckpoint} (h : decodeCheckpoint b = some x) :
-    b = x.header ++ natBE 2 mlDsa87Signature ++ x.signature ∧ x.header = checkpointHeader x.checkpoint := by
+    b = x.header ++ natBE 2 mlDsa87Signature ++ x.signature ++ cosignBytes x.cosign ∧
+      x.header = checkpointHeader x.checkpoint := by
   have hr := parse_run h
   simp only [pSignedCheckpoint, StateT.run_bind] at hr
   obtain ⟨⟨⟨c, hdr⟩, m⟩, hc, h⟩ := bind_some hr
   obtain ⟨⟨s, m2⟩, hs, h⟩ := bind_some h
+  obtain ⟨⟨o, m3⟩, ho, h⟩ := bind_some h
   simp only [StateT.run_pure, Option.pure_def, Option.some.injEq, Prod.mk.injEq] at h
   obtain ⟨rfl, rfl⟩ := h
   have ht := consumed_take hc
@@ -189,10 +233,16 @@ theorem decodeCheckpoint_inv {b : Bytes} {x : SignedCheckpoint} (h : decodeCheck
   have hsl : s.length = mlDsa87Signature := by omega
   have hH : hdr = checkpointHeader c := by
     rw [ht, e, List.length_append, Nat.add_sub_cancel, List.take_left' rfl]
+  have ho' : (orEnd pCosign).run m2 = some (o, []) := ho
+  have e3 : m2 = cosignBytes o := by
+    rcases orEnd_inv ho' with ⟨h1, h2, -⟩ | ⟨v, h2, hv⟩
+    · rw [h1, h2]
+      rfl
+    · rw [h2, (pCosign_inv hv).1, List.append_nil]
   dsimp only at hH ⊢
   rw [hH]
   refine ⟨?_, rfl⟩
-  rw [e, e2, hsl]
+  rw [e, e2, hsl, e3]
   simp
 
 theorem decodeCheckpoint_canonical {b : Bytes} {x : SignedCheckpoint} (h : decodeCheckpoint b = some x) :
@@ -206,7 +256,7 @@ theorem drop_tail {l p t : Bytes} (h : l = p ++ t) : l.drop (l.length - t.length
 /-- The header's fixed-width tail is the signed counter (what the boot check reads). -/
 theorem decodeCheckpoint_tail {b : Bytes} {x : SignedCheckpoint} (h : decodeCheckpoint b = some x) :
     x.header.drop (x.header.length - 8) = natBE 8 x.checkpoint.counter ∧
-      b = x.header ++ natBE 2 mlDsa87Signature ++ x.signature := by
+      b = x.header ++ natBE 2 mlDsa87Signature ++ x.signature ++ cosignBytes x.cosign := by
   obtain ⟨hb, hh⟩ := decodeCheckpoint_inv h
   refine ⟨?_, hb⟩
   have ht := drop_tail (l := x.header) (t := natBE 8 x.checkpoint.counter)
@@ -253,31 +303,78 @@ theorem pCheckpoint_app {cp : Checkpoint} {r : Bytes} (hw : cp.Wf) :
   simp [StateT.run_bind, List.append_assoc, expect_app,
     nat_app (by decide : 1 < 256 ^ 1) (Nat.le_refl 1) (Nat.le_refl 1), pCheckpointFields_app hw]
 
-theorem decodeCheckpoint_encode {cp : Checkpoint} {sig : Bytes} (hw : cp.Wf)
-    (hs : sig.length = mlDsa87Signature) :
-    decodeCheckpoint (checkpointHeader cp ++ natBE 2 mlDsa87Signature ++ sig) =
-      some { checkpoint := cp, header := checkpointHeader cp, signature := sig } := by
-  have hp := pCheckpoint_app hw (r := natBE 2 mlDsa87Signature ++ sig)
+theorem cosignBytes_some_length {v : VCosign} (hw : v.Wf) :
+    (cosignBytes (some v)).length = 19 + digestBytes + 2 + mlDsa87Signature := by
+  have hd : (domain "VCOSIGN").length = 19 := by
+    have hm : "RR/GATE/VCOSIGN/v1".toUTF8.toList.length = 18 := by first | decide +kernel | rfl | simp
+    have he : domain "VCOSIGN" = "RR/GATE/VCOSIGN/v1".toUTF8.toList ++ [0] := by
+      first | rfl | decide +kernel | simp [domain]
+    rw [he, List.length_append, hm]
+    rfl
+  obtain ⟨h1, h2⟩ := hw
+  simp only [cosignBytes, List.length_append, natBE_length, hd, h1, h2]
+
+theorem pCosign_app {v : VCosign} (hw : v.Wf) : pCosign.run (cosignBytes (some v)) = some (v, []) := by
+  rcases v with ⟨vr, sg⟩
+  simp only [VCosign.Wf] at hw
+  obtain ⟨hv, hs⟩ := hw
+  have hb : (blob mlDsa87Signature mlDsa87Signature).run (natBE 2 mlDsa87Signature ++ sg) = some (sg, []) := by
+    have := blob_app (lo := mlDsa87Signature) (hi := mlDsa87Signature) (s := sg) (r := [])
+      (by rw [hs]; decide) (by rw [hs]; exact Nat.le_refl _) (by rw [hs]; exact Nat.le_refl _)
+    rwa [List.append_nil, hs] at this
+  simp [pCosign, digest, cosignBytes, StateT.run_bind, List.append_assoc, expect_app, take_app hv, hb]
+
+theorem orEnd_cosign {o : Option VCosign} (hw : ∀ v, o = some v → v.Wf) :
+    (orEnd pCosign).run (cosignBytes o) = some (o, []) := by
+  cases o with
+  | none => rfl
+  | some v =>
+    have hne : (cosignBytes (some v)).isEmpty = false := by
+      cases hc : cosignBytes (some v) with
+      | nil =>
+        have hl := cosignBytes_some_length (hw v rfl)
+        rw [hc] at hl
+        exact absurd hl (by simp only [List.length_nil]; omega)
+      | cons _ _ => rfl
+    have hp : pCosign (cosignBytes (some v)) = some (v, []) := pCosign_app (hw v rfl)
+    show (if (cosignBytes (some v)).isEmpty then some (none, cosignBytes (some v))
+      else (pCosign (cosignBytes (some v))).map fun q => (some q.1, q.2)) = some (some v, [])
+    rw [hne, hp]
+    rfl
+
+/-- The decoder inverts the encoder, with or without a cosign record. -/
+theorem decodeCheckpoint_encode {cp : Checkpoint} {sig : Bytes} {cosign : Option VCosign} (hw : cp.Wf)
+    (hs : sig.length = mlDsa87Signature) (hv : ∀ v, cosign = some v → v.Wf) :
+    decodeCheckpoint (checkpointHeader cp ++ natBE 2 mlDsa87Signature ++ sig ++ cosignBytes cosign) =
+      some { checkpoint := cp, header := checkpointHeader cp, signature := sig, cosign := cosign } := by
+  have hp := pCheckpoint_app hw (r := natBE 2 mlDsa87Signature ++ (sig ++ cosignBytes cosign))
   obtain ⟨hTn, hPn, -, -, -, -, hPv, hEh, hTr, hEr, hSd, -, -, -, -, -, -, -⟩ := id hw
   have h1 := identOk_len hTn
   have h2 := identOk_len hPn
-  have hlen : ¬ ((checkpointHeader cp ++ (natBE 2 mlDsa87Signature ++ sig)).length > maxCheckpointBytes) := by
+  have hcl : (cosignBytes cosign).length ≤ 19 + digestBytes + 2 + mlDsa87Signature := by
+    cases cosign with
+    | none => simp [cosignBytes]
+    | some v => exact Nat.le_of_eq (cosignBytes_some_length (hv v rfl))
+  have hlen : ¬ ((checkpointHeader cp ++ (natBE 2 mlDsa87Signature ++ (sig ++ cosignBytes cosign))).length >
+      maxCheckpointBytes) := by
     simp only [checkpointHeader, checkpointFieldBytes, identBytes, List.length_append, natBE_length, hs, hPv, hEh,
       hTr, hEr, hSd, List.length_cons, List.length_nil]
     have hm : "RR/GATE/CHECKPOINT/v3".toUTF8.toList.length = 21 := by first | decide +kernel | rfl | simp
-    simp only [digestBytes, maxCheckpointBytes, mlDsa87Signature, hm]
+    simp only [digestBytes, maxCheckpointBytes, mlDsa87Signature, hm] at hcl ⊢
     omega
-  have hb : (blob mlDsa87Signature mlDsa87Signature).run (natBE 2 mlDsa87Signature ++ sig) = some (sig, []) := by
-    have := blob_app (lo := mlDsa87Signature) (hi := mlDsa87Signature) (s := sig) (r := [])
+  have hb : (blob mlDsa87Signature mlDsa87Signature).run
+      (natBE 2 mlDsa87Signature ++ (sig ++ cosignBytes cosign)) = some (sig, cosignBytes cosign) := by
+    have := blob_app (lo := mlDsa87Signature) (hi := mlDsa87Signature) (s := sig) (r := cosignBytes cosign)
       (by rw [hs]; decide) (by rw [hs]; exact Nat.le_refl _) (by rw [hs]; exact Nat.le_refl _)
-    rwa [List.append_nil, hs] at this
-  have hc : (consumed pCheckpoint).run (checkpointHeader cp ++ (natBE 2 mlDsa87Signature ++ sig)) =
-      some ((cp, checkpointHeader cp), natBE 2 mlDsa87Signature ++ sig) := by
+    rwa [hs] at this
+  have hc : (consumed pCheckpoint).run
+      (checkpointHeader cp ++ (natBE 2 mlDsa87Signature ++ (sig ++ cosignBytes cosign))) =
+      some ((cp, checkpointHeader cp), natBE 2 mlDsa87Signature ++ (sig ++ cosignBytes cosign)) := by
     show consumed pCheckpoint _ = _
     simp only [consumed, hp, List.length_append, Nat.add_sub_cancel]
     rw [List.take_left' rfl]
-  rw [List.append_assoc]
+  rw [List.append_assoc, List.append_assoc]
   simp only [decodeCheckpoint, parse, if_neg hlen]
-  simp [pSignedCheckpoint, StateT.run_bind, hc, hb]
+  simp [pSignedCheckpoint, StateT.run_bind, hc, hb, orEnd_cosign hv]
 
 end BlindLedger.Gate

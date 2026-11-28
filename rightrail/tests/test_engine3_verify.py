@@ -26,21 +26,26 @@ VERIFY = ec.fw.BIN / "gate_verify3.exe"
 LINES, BATCH = 50000, 2000
 
 
-def drive(d: Path, kind: str, total: int, batch: int = BATCH, hook=None, exe: Path = ec.NEW) -> dict:
-    """The engine `exe` on `d` over the corpus; `hook()` is called after the init batch (the key and the log exist then)."""
+def drive(d: Path, kind: str, total: int, batch: int = BATCH, hook=None, exe: Path = ec.NEW, *, grants=None, env: dict | None = None, after=None, answers: list | None = None) -> dict:
+    """The engine `exe` on `d` over the corpus; `hook()` is called after the init batch (the key and the log exist then).
+    `grants[n - 1]` is batch n's grant (default: the standing one); `env` is added to the engine's environment; `after=(head, n)`
+    continues a store whose last batch was n and ended at `head` (no init batch is sent); each answer is appended to `answers`."""
     bodies = []
     for built in range(0, total, batch):
         k = min(batch, total - built)
         bodies.append([ec.line_body(i, t, kind == "hot") for i, t in enumerate(ec.gate_corpus.lines(ec.gb.SEED, built, k, total), built)])
-    eng = ec.fw.Engine(d, exe)
-    head, n, lines, secs = ec.fw.GENESIS, 0, 0, 0.0
+    eng = ec.fw.Engine(d, exe, env)
+    (head, n), lines, secs = after or (ec.fw.GENESIS, 0), 0, 0.0
     t_all = time.perf_counter()
-    for b in [[]] + bodies:
+    for b in ([] if after else [[]]) + bodies:
         n += 1
-        data = ec.decider.request_frame(ec.g.HEAD, 0, n, ec.g.ASOF, head, ec.g.PIN, ec.fw.floors(head), ec.g.KEYS, ec.g.GRANT, ec.RELEASE, (), b)
+        grant = grants[n - 1] if grants else ec.g.GRANT
+        data = ec.decider.request_frame(ec.g.HEAD, 0, n, ec.g.ASOF, head, ec.g.PIN, ec.fw.floors(head), ec.g.KEYS, grant, ec.RELEASE, (), b)
         t = time.perf_counter()
         out = eng.send(data)
         secs += time.perf_counter() - t
+        if answers is not None:
+            answers.append(out)
         why, recs, head = ec.fw.read(data, out)[:3]
         if why is not None:
             raise RuntimeError(f"batch {n} refused: {why}")
@@ -48,11 +53,11 @@ def drive(d: Path, kind: str, total: int, batch: int = BATCH, hook=None, exe: Pa
         if n == 1 and hook:
             hook()
     eng.close()
-    return {"lines": lines, "batches": n, "send_s": secs, "wall_s": time.perf_counter() - t_all}
+    return {"lines": lines, "batches": n, "send_s": secs, "wall_s": time.perf_counter() - t_all, "head": head}
 
 
-def verify(d: Path, mode: str = "rows-offline", skip: str = "", idle: int = 3000, wait: bool = True, batches: int | None = None):
-    env = {**os.environ, "RR_V3_SKIP": skip}
+def verify(d: Path, mode: str = "rows-offline", skip: str = "", idle: int = 3000, wait: bool = True, batches: int | None = None, env: dict | None = None):
+    env = {**os.environ, "RR_V3_SKIP": skip, **(env or {})}
     cmd = [str(VERIFY), str(d), "0", mode, str(d) + ".verify", str(idle)] + ([] if batches is None else [str(batches)])
     if not wait:
         return subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE, text=True)
@@ -96,15 +101,16 @@ class Verify3Rows(unittest.TestCase):
             self.assertEqual((rc, "VERIFIED" in out), (64, False), out)
 
     def test_flipped_request_byte(self):
-        # a byte of the first request and of a later one (the engine does not read an earlier frame's request on load)
-        for n in (1, 6):
-            d = self.copy(f"request{n}")
+        # a body byte of the first request and of a later one (the engine does not read an earlier frame's request on load),
+        # and a byte of the digest in a request's header: the checker recomputes the digest the engine carried
+        for n, at in ((1, 100), (6, 100), (6, 30)):
+            d = self.copy(f"request{n}-{at}")
             raw = bytearray((d / "log").read_bytes())
             pos, *_ = list(frames(bytes(raw)))[n - 1]
-            raw[pos + 16 + 100] ^= 1
+            raw[pos + 16 + at] ^= 1
             (d / "log").write_bytes(bytes(raw))
             rc, out = verify(d)
-            self.assertEqual((rc, f"batch {n} " in out, "VERIFIED" in out), (3, True, False), out)
+            self.assertEqual((rc, f"batch {n} frame digest:" in out, "VERIFIED" in out), (3, True, False), out)
 
     def copy(self, name: str) -> Path:
         d = self.root / name
@@ -293,6 +299,60 @@ class Verify3Rows(unittest.TestCase):
         rc, out = verify(d, "rows-offline")
         seen = ("VSTORE_REFUSED(0) the log does not hold the checked head" in out, f"batch {self.batches} head" in out, "VERIFIED" in out)
         self.assertEqual((rc, seen), (3, (True, True, False)), out)
+
+
+class KeptAdmission(unittest.TestCase):
+    """The engine and the checker each reuse their last admission while every admission input is the same (`admitC`);
+    `RR_E3_ADMIT_FRESH` (a test hook) admits every batch in full instead.  Both must give the same bytes, also across a batch
+    that differs from the one before it in the grant alone.  The runs continue copies of one store (one key, so equal requests
+    have equal answers) at the product's spec-check rate (1 batch in 64), so no per-batch spec check stands in for the test."""
+
+    PER, DATA = 500, 6  # lines per batch, batches after the init batch
+
+    @classmethod
+    def setUpClass(cls):
+        cls.root = Path(tempfile.mkdtemp(prefix="e3adm_", dir=os.environ.get("E3_SCRATCH")))
+        cls.addClassCleanup(shutil.rmtree, cls.root, ignore_errors=True)
+        (cls.root / "seed").mkdir()
+        init = drive(cls.root / "seed", "mixed", 0)  # the init batch alone: it makes the store's key
+        # the standing grant at OBSERVE level: same tenant, program, flows, serial and signers; other bytes, another grant id
+        cls.observe = ec.g.au.grant([(ec.fx.PROGRAM, 1 << 1 | 1 << 3, 1, 0)])
+        cls.grants = [ec.g.GRANT] * 3 + [cls.observe] * 2 + [ec.g.GRANT] * 2  # by batch; batch 1 is the init batch (nothing admitted)
+        cls.runs = {}
+        for name, grants in (("same", None), ("changed", cls.grants)):
+            for fresh in (False, True):
+                d, answers = cls.root / f"{name}-{'fresh' if fresh else 'kept'}", []
+                shutil.copytree(cls.root / "seed", d)
+                r = drive(d, "mixed", cls.PER * cls.DATA, cls.PER, grants=grants, env=cls.env(fresh), after=(init["head"], 1), answers=answers)
+                cls.runs[name, fresh] = d, r, answers
+
+    @staticmethod
+    def env(fresh: bool) -> dict:
+        return {"RR_E3_SPEC": "64", **({"RR_E3_ADMIT_FRESH": "1"} if fresh else {})}
+
+    def test_kept_and_fresh_admission_give_the_same_answer_bytes(self):
+        for name in ("same", "changed"):
+            (_, r, kept), (_, _, fresh) = self.runs[name, False], self.runs[name, True]
+            self.assertEqual((r["batches"], r["lines"], len(kept)), (1 + self.DATA, self.PER * self.DATA, self.DATA), name)
+            self.assertTrue(kept == fresh, name)  # not assertEqual: its diff of two unequal long answer lists does not finish
+
+    def test_a_batch_whose_grant_alone_changed_is_admitted_anew(self):
+        same, changed = self.runs["same", False][2], self.runs["changed", False][2]  # [i] is the answer to batch i + 2
+        # batches 2 and 3 are the same frames in both runs; batch 4 differs in its grant alone
+        self.assertTrue(same[:2] == changed[:2] and same[2] != changed[2])
+        standing, observe = ec.g.GRANT_ID, ec.g.au.grant_id(self.observe)
+        for n, grant in enumerate(self.grants[1:], 2):  # each answer names its own frame's grant, never the one kept before it
+            own, kept = (standing, observe) if grant == ec.g.GRANT else (observe, standing)
+            self.assertEqual((own in changed[n - 2], kept in changed[n - 2]), (True, False), n)
+
+    def test_the_checker_verifies_both_stores_with_a_kept_and_a_fresh_admission(self):
+        for name in ("same", "changed"):
+            d, r, _ = self.runs[name, False]
+            for fresh in (False, True):
+                rc, out = verify(d, batches=r["batches"], env=self.env(fresh))
+                self.assertEqual(rc, 0, (name, fresh, out))
+                self.assertIn(f"VERIFIED shard 0 batches {r['batches']} lines {r['lines']} ", out)
+                shutil.rmtree(str(d) + ".verify")
 
 
 def cost(kind: str, total: int, batch: int) -> None:

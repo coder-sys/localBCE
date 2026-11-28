@@ -31,8 +31,8 @@ inductive CustodyStep | create | ready | catchUp | refuse (why : CustodyRefusal)
 /-- `newest`, the store's newest sealed checkpoint with its signature, is the shard's first (`follows none`) and
     verifies under its epoch certificate `cert` and the tenant's root key: the store a crash between the first
     seal's signature commit and the counter's first increment leaves. -/
-def firstSealed (rootPk cert newest : Bytes) : Bool :=
-  accepts rootPk cert newest && (storedOf sha3 newest).any (follows none)
+def firstSealed (link : Cosign.Link) (cert newest : Bytes) : Bool :=
+  accepts link cert newest && (storedOf sha3 newest).any (follows none)
 
 /-- `first`: `firstSealed` of the store's newest sealed checkpoint; `tpm`: the shard's counter (`none`: defined,
     never written); `store`: the counter of the store's newest sealed checkpoint (`none`: nothing sealed).  An
@@ -81,14 +81,14 @@ theorem custodyStep_catchUp_unwritten {f : Bool} {s : Nat} :
 /-- The start's step with the store's counter taken from the newest sealed checkpoint `signed` itself (empty: nothing
     sealed), the same bytes `firstSealed` checks, so the two cannot come from different checkpoints.  A non-empty
     `signed` that does not decode is refused. -/
-def custodyOf (rootPk cert signed : Bytes) (tpm : Option Nat) : CustodyStep :=
+def custodyOf (link : Cosign.Link) (cert signed : Bytes) (tpm : Option Nat) : CustodyStep :=
   match storedOf sha3 signed with
-  | some x => custodyStep (firstSealed rootPk cert signed) tpm (some x.checkpoint.counter)
+  | some x => custodyStep (firstSealed link cert signed) tpm (some x.checkpoint.counter)
   | none => if signed.isEmpty then custodyStep false tpm none else .refuse .storeRewound
 
 /-- An unreadable newest checkpoint is never served or created on, whatever the counter. -/
-theorem custodyOf_unreadable {rootPk cert signed : Bytes} {tpm : Option Nat} (h : storedOf sha3 signed = none)
-    (hs : signed.isEmpty = false) : custodyOf rootPk cert signed tpm = .refuse .storeRewound := by
+theorem custodyOf_unreadable {link : Cosign.Link} {cert signed : Bytes} {tpm : Option Nat} (h : storedOf sha3 signed = none)
+    (hs : signed.isEmpty = false) : custodyOf link cert signed tpm = .refuse .storeRewound := by
   simp [custodyOf, h, hs]
 
 /-- Every crash point of the seal order (TPM value, store's newest counter) resumes: before the signature commit,

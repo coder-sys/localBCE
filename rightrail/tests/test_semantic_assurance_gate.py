@@ -719,7 +719,7 @@ class SemanticAssuranceGateNegativeTests(unittest.TestCase):
             Path.home()
             / ".elan"
             / "toolchains"
-            / "leanprover--lean4---v4.33.1"
+            / "leanprover--lean4---v4.36.0"
         )
         installed_bin = installed_root / "bin"
         self.assertTrue(installed_bin.is_dir(), f"installed toolchain is absent: {installed_bin}")

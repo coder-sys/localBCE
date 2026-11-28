@@ -272,6 +272,32 @@ def paymentIdentityReq (scope : Bytes) (item : String) (c : RecordCommand)
     (k : BlindLedger.Financial.Payment.Receipt) : Req :=
   paymentReq scope item c k.paysActionId (some k.recordedRevision)
 
+/-- The stored identity of an alias: a payment id stored only as a second confirmation of a payment with the same
+    common origin and amount (`aliasOf`), with no payment row and no receipt.  Lean answers a retry of it in
+    `recordNew`, where its stored evidence makes it a prior confirmation: the revision is never compared, and the
+    request it pays may be absent or the existing payment's.  So the identity holds no revision, and the request
+    it pays is the command's, else the existing payment's (`existingPays`); a retry is compared in the same form,
+    whatever revision it expects. -/
+def aliasIdentityReq (scope : Bytes) (item : String) (c : RecordCommand) (existingPays : Option String) : Req :=
+  paymentReq scope item c (c.paysActionId <|> existingPays) none
+
+/-- An alias's identity and a recorded payment's never have the same canonical bytes: the alias holds no
+    revision and the recorded payment always holds one.  So a retry compared in the alias form matches only an
+    alias, and a retry compared in the recorded form only a recorded payment. -/
+theorem alias_ne_recorded {scope : Bytes} {item item' : String} {c c' : RecordCommand} {e : Option String}
+    {k : BlindLedger.Financial.Payment.Receipt} (h1 : (aliasIdentityReq scope item c e).WF)
+    (h2 : (paymentIdentityReq scope item' c' k).WF) :
+    canon (aliasIdentityReq scope item c e) ≠ canon (paymentIdentityReq scope item' c' k) := by
+  rw [Ne, request_map_faithful h1 h2]
+  simp [aliasIdentityReq, paymentIdentityReq, paymentReq]
+
+/-- A retry of an alias that pays nothing or the existing payment's request has the alias's own pays field, so
+    only its other fields decide whether it is the same request. -/
+theorem alias_pays_same {c : RecordCommand} {existingPays : Option String}
+    (h : c.paysActionId = none ∨ c.paysActionId = existingPays) :
+    (c.paysActionId <|> existingPays) = existingPays := by
+  rcases h with h | h <;> rw [h] <;> cases existingPays <;> rfl
+
 /-- How the owner stores a payment recorded by `c`: its row, its confirmation evidence received at `recv`, which
     passed the form and time checks, and its receipt. -/
 def PaymentStored (r : PaymentRequest) (c : RecordCommand) (p : Payment) (k : BlindLedger.Financial.Payment.Receipt)

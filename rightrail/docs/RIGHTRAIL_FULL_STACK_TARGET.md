@@ -36,20 +36,44 @@ The evidence model, roles and growth path: `docs/STATE_EVIDENCE_ARCHITECTURE.md`
 
 ## 2. First jobs, gate points and rollout order
 
-**First jobs.** The evidence record is the product, and the gate is its end state, not the first sale. The first paid
-jobs, from 2028, are two. Switch runs a replay test before a late claims-system replacement goes live: the old and the
-new system process the same record and the differences are listed. Mirror gives caseworkers and county offices a
-read-only side-by-side view of the evidence for a determination; the decision stays the worker's and the view records
-what was shown. Eligibility evidence is the centre of 2028 to 2030. Pricing is in Constitution Article VIII. The
-build order is unchanged: speed and proofs as planned, then the staff loop.
+**First jobs.** The evidence record is the product, and the gate is its end state, not the first sale. Tamper
+evidence, post-quantum signing and holds before payment can be bought elsewhere. What only a neutral record across
+every state system can do is answer for a line as of its date, wherever the evidence sits, and name which system's
+step caused a difference. The first paid jobs, from 2028, are built on that, in order:
+
+1. Audit folder. When a federal deferral or audit sample arrives, the state gets a line-level data pull within days;
+   for each sampled line, one folder across every state system as of the service date (claim, enrolment, provider
+   licence and screening, background study, service authorisation, assessment, plan of care, visit verification),
+   listing the paper that is missing and who holds it; and a recompute of the federal sample frame and extrapolation.
+   Most deferred dollars turn on provider paper and policy judgement; the folder makes those quick to settle, it does
+   not decide them.
+2. System and vendor at fault. From the same data, each difference between systems names the system and the vendor
+   whose step caused it, at every seam between systems, so the state can apply the remedies its contracts already
+   hold. Switch uses the same report as a tool the state or its independent tester runs: the old and the new claims
+   system process the same record before a replacement goes live, and the differences are listed by cause, owner,
+   system and dollars.
+3. Determination and notice check. Each eligibility determination and its notice are checked independently against
+   the record: the facts used, when they were known, the rule applied and whether the notice states them.
+4. Caseworker desk. For the cases automatic matching cannot settle, Mirror gives caseworkers and county offices a
+   read-only side-by-side view of the evidence; the decision stays the worker's and the view records what was shown.
+
+None of these depends on a dated federal penalty: they answer deferrals, court orders, go-live dates and staff
+shortage, which already happen. Price (Constitution VIII): about $2M a year for operating the service, plus the marginal 10/7/5-basis-point covered-flow schedule with a 5 bp floor; the Provider App is priced separately. The build order serves these jobs first:
+rules as signed data under one proved interpreter, facts kept under two times, readers for files the state already
+exports, the replay difference report by cause and system, and the eligibility determination record. The readers
+cover sources beyond claims (licensure and screening, background studies, service authorisations, assessments, plans
+of care, visit verification) and records other systems already keep (eligibility evidence history, rule-engine
+traces), each checked independently rather than trusted; provider paper is read with its origin kept. The record
+format, the checker and the interpreter test vectors are to be published so any buyer can check the record without
+us. Speed is measured once at replay volume and then keeps a fixed share of the work; screens follow these.
 
 **Rollout stages.** A state takes the state-side products together (every product except Provider App, which is sold
 to providers on its own) and switches them on in four stages. No stage holds a payment until the stage before it has
 earned that, and every stage must make staff work radically easier and faster from its first month.
 
-1. Answer. Mirror pre-fills renewals from claims data and shows exemptions and proof before any coverage ends; audit
-   and error-rate samples are answered from the record with the documents attached; Switch replays before a new
-   claims system goes live; an exact duplicate payment line is answered at once (Constitution I.4). Nothing is held.
+1. Answer. Federal deferrals, audit and error-rate samples are answered from the record with the documents attached;
+   determinations and notices are checked against the record; Mirror pre-fills renewals from claims data and shows
+   exemptions and proof before any coverage ends; Switch replays before a new claims system goes live; an exact duplicate payment line is answered at once (Constitution I.4). Nothing is held.
 2. Watch. Every product runs on live flows and holds nothing. Each hold it would have made is recorded and checked,
    which gives the measured false-hold rate per cause.
 3. Hold by cause. A hold cause is switched on only once its measured false-hold rate is at most 5%, and its holds are
@@ -202,14 +226,137 @@ holds, the 42 CFR 455.23 5-day suspension clock for fraud reasons,
 before-the-next-820 for capitation, contract terms for plan-to-provider.
 Mirror is the exception queue holding every non-ALLOW item and every bypassed
 payment. Staff see one item per cause, not one per payment (Constitution
-XIV.2). The item lists its payments, and one action settles the cause. Each
+XII.9). The item lists its payments, and one action settles the cause. Each
 payment is still decided and recorded on its own.
 
-**Release by cause** (Constitution I.2; designed, not built). The officials above sign one decision that names the
-exact listed set of held payments sharing one cause. It releases only those payments, never a later one, and follows
-the same roster, threshold, separation and calendar rules; the payer verifies it before any listed payment goes.
-**Exact duplicates** (Constitution I.4) are not held: a line that exactly repeats a paid line is answered at once with
-the earlier payment, and the sender can contest it in one step.
+**Release by cause** (Constitution I.2; built in the engine, `Rules/Run.lean` `admit` and `approvals`; Lean statements
+in `Gate/CauseRelease.lean`). The
+officials sign one decision naming one cause and the exact list of held payments it releases. The list selects; the
+scope only narrows it, so a payment held for the cause but not listed when the decision is signed stays held, and so
+does any later one.
+
+- *Record.* `APPROVAL/v2` kind 3, under the same domain and signature tag as the grant (kind 1) and the bypass
+  (kind 2), whose bytes do not change: kind byte 3, state digest, tenant, not-before and not-after (valid dates at
+  most 31 days apart, the batch day inside them), the cause (one byte: the reason's fixed bit number, `Reason.idx`),
+  the program, a flow mask (1-31), a service-date range (valid dates, from not after to), the total in cents (u64),
+  and 1 to 4,096 entries in strictly ascending payment-id byte order, each a payment id, the SHA3-512 digest of the
+  exact `DECIDE-REQUEST` bytes it was held under, and its amount in cents (u64). The total must equal the sum of the
+  amounts exactly, and like every u64 field each is at most 2^63 - 1. Then the signature block. The record's id is the
+  SHA3-512 digest of its unsigned bytes.
+- *Who signs.* Two live APPROVER keys of the batch head's key set, held by distinct employees with distinct
+  identity-provider subjects: the bypass's quorum. A revoked or expired key, or a key set below the tenant's floor,
+  cannot admit it. The record has no serial and does not touch the grant or key-set floors.
+- *Which causes.* Only a reason a bypass may override (`Rules.bypassable`): facts about members and providers, stale
+  reference files, a near duplicate or near collision, a future service date. A reason that guards release-once or marks
+  malformed input (an already-decided line, an exact, unverified or unresolved duplicate, a capitation member-month
+  duplicate, an invalid date, the posting cap, a stale released or unresolved set) is never a cause.
+- *What it releases.* The record travels in the frame's approval list, beside bypasses (at most 64 approvals are
+  read per batch; each record can list 4,096 payments). A listed payment is released in a batch when every one of
+  these holds: the batch carries its request and the request's digest is the listed one; the request's amount is the
+  listed amount; its program is the record's, its flow is in the mask and every line's service date is in the range;
+  the grant entry covering it has TRANSFER authority; it is not decided again in this batch; a line of it is in the
+  gate's unresolved set; no other admitted approval of the batch names it; and every reason on every line of it, as
+  decided now, is the record's cause. A payment held for the cause and something else as well is not released. A
+  listed payment whose facts have since cleared is released, and the record is the recorded cause of its release, as
+  for a bypass. The released payment's leaf is ALLOW with the record's id in the bypass field, so the payer runs its
+  usual twelve checks and needs no new one. Each payment is still decided and recorded on its own.
+- *Shards and batches.* Payments route by member key, so one record lists payments of many shards and cycles. Every
+  shard reads the same record and releases only the listed payments it decides; a listed payment that is not in the
+  batch, or a payment of another program with a listed id, is not an error and gets no note. The host sends a record
+  only with a batch that carries one of its payments.
+- *Once.* A released payment's lines join the released set, so a resend is `ALREADY_DECIDED` and no record or bypass
+  releases it again (`bypass_once` covers both). A record can be read in many batches during its window, but it never
+  releases a payment that is not on its list. A payment that did not exist when the record was signed cannot match a
+  listed request digest, except through a SHA3-512 collision. The amounts released under one record never exceed its
+  total.
+- *With the bypass.* Both reach the rules the same way, as a (payment, override mask) pair. A cause record's mask is
+  its single cause bit; a bypass can name several reasons. If a bypass and a cause record, or two cause records, name
+  one payment in one batch, neither releases it (`DUPLICATE` for each) and it stays held.
+- *With the grant.* A cause release needs TRANSFER authority, as a bypass does. At HOLD authority the payer does not
+  pay on the gate's token (check 8), and the gate does not learn when the payer pays, so a release recorded there would
+  claim money moved that the gate cannot see. Stage 3 (hold by cause at HOLD authority) can use cause releases only
+  once the payer reports its releases to the gate (STATUS, "Held batches").
+- *Refusals.* Approval bytes are a cause record when they begin with the approval tag and kind byte 3; any other bytes
+  are read as a bypass, as today, so kind 4 or a relabeled record is `RULES_BYPASS - MALFORMED`. For the whole record,
+  each line is `RULES_CAUSE - <why>`: `MALFORMED`, `SCOPE` (another state or tenant),
+  `EXPIRED`, `REASONS` (a cause no bypass may override), `UNSIGNED`, `TOO_MANY` (past the 64 approvals read). For one
+  listed payment in the batch, each line is `RULES_CAUSE <payment> <why>`: `WRONG_REQUEST`, `AMOUNT`, `SCOPE`
+  (a flow outside the mask, a date outside the range, or an entry without TRANSFER), `REDO`,
+  `DUPLICATE`, `NOT_HELD` (not held, held for another cause as well, or already released). A refusal releases nothing
+  and the rest of the batch is decided. These are notes, like the bypass notes, and need no new row in
+  `app/cause_actions.json`.
+- *Not covered,* as for the bypass: separation from the raiser and from the authors of the payment's lines (the
+  decide request carries no author identity), and the payer verifying a release while the gate is down.
+
+**Exact duplicates** (Constitution I.4; built in the engine, `Rules/Run.lean` `answering` over
+`ExactDuplicate.decideBatchX`; Lean statements in `Gate/Rules/ExactDuplicate.lean`).
+
+- *Definition.* A line exactly repeats a paid line when that paid line is in the gate's view of the released set
+  (the chained set, or else the gate's own checkpoint of it, never an unchained set's loose rows), and its canonical
+  line bytes equal the line's in every field except the line id: flow, member key, payee, rendering party, service
+  date, procedure, units and cents. A re-decided payment's own released lines are excluded. Any other match stays
+  with a person as it does today: a line that differs in any one of those fields (a near duplicate, or the same exact
+  key with another rendering party), a repeat of an earlier line of the same batch (not paid yet:
+  `FFS_DUPLICATE_LINE`), or a match with only a loose row (`FFS_DUPLICATE_UNVERIFIED`). Both lines carry the same
+  member key and so route to the same shard, so this check in one shard finds every exact repeat.
+- *Answer.* A payment with one or more exactly repeated lines gets the new outcome `ANSWERED` in the batch that
+  carries it, as a whole payment even if its other lines are clean or held: as sent, its amount includes a paid line,
+  so it can never go. The sender resends it without those lines, and the rest is decided then; a near duplicate among
+  them then goes to a person. An unencodable payment stays HOLD. The leaf keeps the reasons as decided (the repeated
+  line carries `FFS_DUPLICATE_LINE` or `CAP_MEMBER_MONTH_DUPLICATE`) and commits to the list of earlier payments: for
+  each repeated line, ascending by line id, its line id, the earlier program and payment id, and the earlier line id.
+  The sender-facing code is X12 claim adjustment reason 18 (exact duplicate claim or service), with that list. Today
+  the sender gets the outcome and the list in `DECIDE-RESPONSE/v2`, and the reason-18 wording is in the staff table
+  (`app/cause_actions.json`); no X12 reply to senders is built.
+- *No money moves twice.* `ANSWERED` is not ALLOW, so the payer's check 8 refuses it at every authority. The repeated
+  line carries a reason that no bypass, cause release or HOLD-level lift can override, so nothing releases it. Its
+  lines join neither set, so no person is asked and a resend is answered the same way. The released set is exactly what
+  it would be without the amendment.
+- *Contest in one step.* The sender resends the same request with the contest flag set. A contested payment is decided
+  as before the amendment: the repeated line holds for a person (`FFS_DUPLICATE_LINE` or `CAP_MEMBER_MONTH_DUPLICATE`),
+  and releasing it is a determination, which is not a bypass or a cause release and is not built.
+- *Formats.* `TOKEN/v3`: `TOKEN/v2` plus the outcome `ANSWERED` (tag 5) and `earlier_root` after the bypass field,
+  zero unless the outcome is `ANSWERED` and nonzero when it is. `earlier_root` is the SHA3-512 digest of
+  `RR/GATE/EARLIER/v1`, a NUL, the u16 count and the entries, each an identifier, two identifiers and an identifier.
+  The list itself travels in `DECIDE-RESPONSE/v2`, and the requester checks it against the root. The shard's producer
+  store keeps each answered payment's list with its batch, so an exact retry is given it again with the same tokens,
+  and the row the owner signs for that batch says the list was stored. If such a batch's list is later missing, the
+  retry is refused as `store_tampered` and the batch is kept as evidence; the list is not rebuilt. A batch sealed
+  before the store kept lists has no such mark and has its lists rebuilt once from the shard's stored frames. A stored
+  or rebuilt list that does not match its token's root is never served. The mark only moves forward: a producer from
+  before it reads a marked row as `store_tampered`. Each batch row also pledges the root of the set of retry keys, so
+  a retries row deleted or rekeyed is `store_tampered` when its exact retry arrives, never decided again. The root
+  starts at a store's first commit under it (a row deleted before then is not caught), and a producer from before it
+  refuses the store. `DECIDE-REQUEST/v2`
+  is `v1` plus a one-byte contest flag (0 or 1) after the evidence references. The engine's answer leaf gains the
+  outcome and the list. The checkpoint format is unchanged; its token root covers `v3` leaves. Each of these is a
+  protected change under Constitution XI.2.
+
+**Build order for both.** Every step below is built and proved: `tests/test_gate_cause_release.py`,
+`tests/test_gate_exact_duplicate.py` and `tests/test_cause_actions.py` pass with no skips, the
+`tests/test_gate_authority_frames.py` cases are unchanged, and `tests/lean_sorry_allowlist.txt` is empty. The P4
+theorems have axiom pins in `Gate/AxiomCheck.lean`; the P1-P3 theorems do not yet. What remains is the staff screen
+per cause (STATUS).
+
+- *E1, cause record.* Build `CauseRelease.decode` and `admit` into the engine's approval reading (the kind byte picks
+  the reader; `TOO_MANY` past 64), the per-entry judgement, `merge` and the `RULES_CAUSE` notes, and put the record's
+  id on each payment it releases. The host binds a record's id only to a payment that the record lists. The frame, the
+  leaf, the checkpoint and kinds 1 and 2 keep their bytes; kind 3 is a new wire format and the engine pins move, so
+  E1 lands with its own XI.2 record. Acceptance: every case in `test_gate_cause_release.py`, including
+  `CauseReleasePaidTests`.
+- *E2, exact-duplicate answer.* Build `decideBatchX` over the rules and the engine (the unresolved additions leave
+  out answered payments); `ANSWERED` and the earlier list in the engine answer and `Pay`; `TOKEN/v3` and
+  `RR/GATE/EARLIER/v1` in the codec, the producer, the publish check and the payer's leaf reader; `DECIDE-REQUEST/v2`
+  with the contest flag; and `DECIDE-RESPONSE/v2`. One XI.2 record covers these changes and re-pins the golden
+  vectors, gate-rules vectors and engine pins they move. Acceptance: every case in `test_gate_exact_duplicate.py`,
+  and the format and vector suites after re-pinning.
+- *E3, staff and senders.* Update the `app/cause_actions.json` text for `FFS_DUPLICATE_LINE` (answered at once,
+  contested in one step) and the reason-18 mapping to senders, then STATUS. Acceptance: `tests/test_cause_actions.py`.
+- *P1.* Prove `encode_decode`, `kinds_disjoint`, `decode_list`, `admit_sound`, `pairs_listed`, `fits_within_total`
+  and `mem_merge`. *P2.* Prove `releases_only_listed`, `never_other_cause` and `releases_every_listed_held` from
+  `Rules.bypassed`. *P3.* Prove the `ExactDuplicate` statements; `twin_reason` and `near_never_exact` come from the
+  claim order (a re-decision's own lines first). *P4.* Extend the Fast/Spec equality to `decideBatchX` and the
+  approval reading of E1.
 
 **Fail policy.** Every flow fails closed (Constitution III.5): if the gate is
 down or does not allow a payment, the payer holds it. There is no `FAIL_OPEN`

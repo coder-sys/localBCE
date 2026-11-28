@@ -1,0 +1,233 @@
+[
+ {
+  "name": "empty file",
+  "cause": "unterminated_record",
+  "data": ""
+ },
+ {
+  "name": "no final line feed",
+  "cause": "unterminated_record",
+  "data": "HRRELIG01SYNSTATE-ELIG       00000000004220261031FSYNTHETIC-STATE                                                       \nDSYN0000001          SEG-0001            EGMEDICAID-FFS        ABD       20260101999912312025121520251216               \nDSYN0000001          SEG-0002            NRMEDICAID-FFS        ABD       20250701202512312025120120251203               \nDSYN0000002          SEG-0001            PGMEDICAID-FFS        FAM       20261001202610312026100120261002               \nDSYN0000003          SEG-0007            RPMEDICAID-FFS        PE        20261015202611302026101520261015               \nDSYN0000004          SEG-0001            ECCHIP-FFS            CHILD     20240229202612312023112020231121               \nT000000005                                                                                                              "
+ },
+ {
+  "name": "carriage returns",
+  "cause": "bad_record_length",
+  "data": "HRRELIG01SYNSTATE-ELIG       00000000004220261031FSYNTHETIC-STATE                                                       \r\nDSYN0000001          SEG-0001            EGMEDICAID-FFS        ABD       20260101999912312025121520251216               \r\nDSYN0000001          SEG-0002            NRMEDICAID-FFS        ABD       20250701202512312025120120251203               \r\nDSYN0000002          SEG-0001            PGMEDICAID-FFS        FAM       20261001202610312026100120261002               \r\nDSYN0000003          SEG-0007            RPMEDICAID-FFS        PE        20261015202611302026101520261015               \r\nDSYN0000004          SEG-0001            ECCHIP-FFS            CHILD     20240229202612312023112020231121               \r\nT000000005                                                                                                              \r\n"
+ },
+ {
+  "name": "row one byte short",
+  "cause": "bad_record_length",
+  "data": "HRRELIG01SYNSTATE-ELIG       00000000004220261031FSYNTHETIC-STATE                                                       \nDSYN0000001          SEG-0001            EGMEDICAID-FFS        ABD       20260101999912312025121520251216               \nDSYN0000001          SEG-0002            NRMEDICAID-FFS        ABD       20250701202512312025120120251203              \nDSYN0000002          SEG-0001            PGMEDICAID-FFS        FAM       20261001202610312026100120261002               \nDSYN0000003          SEG-0007            RPMEDICAID-FFS        PE        20261015202611302026101520261015               \nDSYN0000004          SEG-0001            ECCHIP-FFS            CHILD     20240229202612312023112020231121               \nT000000005                                                                                                              \n"
+ },
+ {
+  "name": "blank line",
+  "cause": "bad_record_length",
+  "data": "HRRELIG01SYNSTATE-ELIG       00000000004220261031FSYNTHETIC-STATE                                                       \nDSYN0000001          SEG-0001            EGMEDICAID-FFS        ABD       20260101999912312025121520251216               \nDSYN0000001          SEG-0002            NRMEDICAID-FFS        ABD       20250701202512312025120120251203               \n\nDSYN0000002          SEG-0001            PGMEDICAID-FFS        FAM       20261001202610312026100120261002               \nDSYN0000003          SEG-0007            RPMEDICAID-FFS        PE        20261015202611302026101520261015               \nDSYN0000004          SEG-0001            ECCHIP-FFS            CHILD     20240229202612312023112020231121               \nT000000005                                                                                                              \n"
+ },
+ {
+  "name": "row of 130 bytes",
+  "cause": "bad_record_length",
+  "data": "HRRELIG01SYNSTATE-ELIG       00000000004220261031FSYNTHETIC-STATE                                                       \nDSYN0000001          SEG-0001            EGMEDICAID-FFS        ABD       20260101999912312025121520251216               \nDSYN0000001          SEG-0002            NRMEDICAID-FFS        ABD       20250701202512312025120120251203               XXXXXXXXXX\nDSYN0000002          SEG-0001            PGMEDICAID-FFS        FAM       20261001202610312026100120261002               \nDSYN0000003          SEG-0007            RPMEDICAID-FFS        PE        20261015202611302026101520261015               \nDSYN0000004          SEG-0001            ECCHIP-FFS            CHILD     20240229202612312023112020231121               \nT000000005                                                                                                              \n"
+ },
+ {
+  "name": "first record a row",
+  "cause": "no_header",
+  "data": "DSYN0000001          SEG-0001            EGMEDICAID-FFS        ABD       20260101999912312025121520251216               \nDSYN0000001          SEG-0002            NRMEDICAID-FFS        ABD       20250701202512312025120120251203               \nDSYN0000002          SEG-0001            PGMEDICAID-FFS        FAM       20261001202610312026100120261002               \nDSYN0000003          SEG-0007            RPMEDICAID-FFS        PE        20261015202611302026101520261015               \nDSYN0000004          SEG-0001            ECCHIP-FFS            CHILD     20240229202612312023112020231121               \nT000000005                                                                                                              \n"
+ },
+ {
+  "name": "no trailer",
+  "cause": "no_trailer",
+  "data": "HRRELIG01SYNSTATE-ELIG       00000000004220261031FSYNTHETIC-STATE                                                       \nDSYN0000001          SEG-0001            EGMEDICAID-FFS        ABD       20260101999912312025121520251216               \nDSYN0000001          SEG-0002            NRMEDICAID-FFS        ABD       20250701202512312025120120251203               \nDSYN0000002          SEG-0001            PGMEDICAID-FFS        FAM       20261001202610312026100120261002               \nDSYN0000003          SEG-0007            RPMEDICAID-FFS        PE        20261015202611302026101520261015               \nDSYN0000004          SEG-0001            ECCHIP-FFS            CHILD     20240229202612312023112020231121               \n"
+ },
+ {
+  "name": "header only",
+  "cause": "no_trailer",
+  "data": "HRRELIG01SYNSTATE-ELIG       00000000004220261031FSYNTHETIC-STATE                                                       \n"
+ },
+ {
+  "name": "unknown record type",
+  "cause": "unknown_record_type",
+  "data": "HRRELIG01SYNSTATE-ELIG       00000000004220261031FSYNTHETIC-STATE                                                       \nDSYN0000001          SEG-0001            EGMEDICAID-FFS        ABD       20260101999912312025121520251216               \nDSYN0000001          SEG-0002            NRMEDICAID-FFS        ABD       20250701202512312025120120251203               \nXSYN0000002          SEG-0001            PGMEDICAID-FFS        FAM       20261001202610312026100120261002               \nDSYN0000003          SEG-0007            RPMEDICAID-FFS        PE        20261015202611302026101520261015               \nDSYN0000004          SEG-0001            ECCHIP-FFS            CHILD     20240229202612312023112020231121               \nT000000005                                                                                                              \n"
+ },
+ {
+  "name": "second header",
+  "cause": "unknown_record_type",
+  "data": "HRRELIG01SYNSTATE-ELIG       00000000004220261031FSYNTHETIC-STATE                                                       \nDSYN0000001          SEG-0001            EGMEDICAID-FFS        ABD       20260101999912312025121520251216               \nDSYN0000001          SEG-0002            NRMEDICAID-FFS        ABD       20250701202512312025120120251203               \nHRRELIG01SYNSTATE-ELIG       00000000004220261031FSYNTHETIC-STATE                                                       \nDSYN0000002          SEG-0001            PGMEDICAID-FFS        FAM       20261001202610312026100120261002               \nDSYN0000003          SEG-0007            RPMEDICAID-FFS        PE        20261015202611302026101520261015               \nDSYN0000004          SEG-0001            ECCHIP-FFS            CHILD     20240229202612312023112020231121               \nT000000006                                                                                                              \n"
+ },
+ {
+  "name": "second trailer",
+  "cause": "unknown_record_type",
+  "data": "HRRELIG01SYNSTATE-ELIG       00000000004220261031FSYNTHETIC-STATE                                                       \nDSYN0000001          SEG-0001            EGMEDICAID-FFS        ABD       20260101999912312025121520251216               \nDSYN0000001          SEG-0002            NRMEDICAID-FFS        ABD       20250701202512312025120120251203               \nDSYN0000002          SEG-0001            PGMEDICAID-FFS        FAM       20261001202610312026100120261002               \nDSYN0000003          SEG-0007            RPMEDICAID-FFS        PE        20261015202611302026101520261015               \nDSYN0000004          SEG-0001            ECCHIP-FFS            CHILD     20240229202612312023112020231121               \nT000000005                                                                                                              \nT000000005                                                                                                              \n"
+ },
+ {
+  "name": "other layout",
+  "cause": "unknown_layout",
+  "data": "HRRELIG02SYNSTATE-ELIG       00000000004220261031FSYNTHETIC-STATE                                                       \nDSYN0000001          SEG-0001            EGMEDICAID-FFS        ABD       20260101999912312025121520251216               \nDSYN0000001          SEG-0002            NRMEDICAID-FFS        ABD       20250701202512312025120120251203               \nDSYN0000002          SEG-0001            PGMEDICAID-FFS        FAM       20261001202610312026100120261002               \nDSYN0000003          SEG-0007            RPMEDICAID-FFS        PE        20261015202611302026101520261015               \nDSYN0000004          SEG-0001            ECCHIP-FFS            CHILD     20240229202612312023112020231121               \nT000000005                                                                                                              \n"
+ },
+ {
+  "name": "space inside member id",
+  "cause": "bad_text",
+  "data": "HRRELIG01SYNSTATE-ELIG       00000000004220261031FSYNTHETIC-STATE                                                       \nDSYN 0000001         SEG-0001            EGMEDICAID-FFS        ABD       20260101999912312025121520251216               \nDSYN0000001          SEG-0002            NRMEDICAID-FFS        ABD       20250701202512312025120120251203               \nDSYN0000002          SEG-0001            PGMEDICAID-FFS        FAM       20261001202610312026100120261002               \nDSYN0000003          SEG-0007            RPMEDICAID-FFS        PE        20261015202611302026101520261015               \nDSYN0000004          SEG-0001            ECCHIP-FFS            CHILD     20240229202612312023112020231121               \nT000000005                                                                                                              \n"
+ },
+ {
+  "name": "leading space in program",
+  "cause": "bad_text",
+  "data": "HRRELIG01SYNSTATE-ELIG       00000000004220261031FSYNTHETIC-STATE                                                       \nDSYN0000001          SEG-0001            EGMEDICAID-FFS        ABD       20260101999912312025121520251216               \nDSYN0000001          SEG-0002            NR MEDICAID-FFS       ABD       20250701202512312025120120251203               \nDSYN0000002          SEG-0001            PGMEDICAID-FFS        FAM       20261001202610312026100120261002               \nDSYN0000003          SEG-0007            RPMEDICAID-FFS        PE        20261015202611302026101520261015               \nDSYN0000004          SEG-0001            ECCHIP-FFS            CHILD     20240229202612312023112020231121               \nT000000005                                                                                                              \n"
+ },
+ {
+  "name": "non-ASCII byte in aid",
+  "cause": "bad_text",
+  "data": "HRRELIG01SYNSTATE-ELIG       00000000004220261031FSYNTHETIC-STATE                                                       \nDSYN0000001          SEG-0001            EGMEDICAID-FFS        ABD       20260101999912312025121520251216               \nDSYN0000001          SEG-0002            NRMEDICAID-FFS        ABD       20250701202512312025120120251203               \nDSYN0000002          SEG-0001            PGMEDICAID-FFS        \u00e9AM       20261001202610312026100120261002               \nDSYN0000003          SEG-0007            RPMEDICAID-FFS        PE        20261015202611302026101520261015               \nDSYN0000004          SEG-0001            ECCHIP-FFS            CHILD     20240229202612312023112020231121               \nT000000005                                                                                                              \n"
+ },
+ {
+  "name": "blank segment",
+  "cause": "bad_text",
+  "data": "HRRELIG01SYNSTATE-ELIG       00000000004220261031FSYNTHETIC-STATE                                                       \nDSYN0000001          SEG-0001            EGMEDICAID-FFS        ABD       20260101999912312025121520251216               \nDSYN0000001          SEG-0002            NRMEDICAID-FFS        ABD       20250701202512312025120120251203               \nDSYN0000002          SEG-0001            PGMEDICAID-FFS        FAM       20261001202610312026100120261002               \nDSYN0000003                              RPMEDICAID-FFS        PE        20261015202611302026101520261015               \nDSYN0000004          SEG-0001            ECCHIP-FFS            CHILD     20240229202612312023112020231121               \nT000000005                                                                                                              \n"
+ },
+ {
+  "name": "blank sender",
+  "cause": "bad_text",
+  "data": "HRRELIG01                    00000000004220261031FSYNTHETIC-STATE                                                       \nDSYN0000001          SEG-0001            EGMEDICAID-FFS        ABD       20260101999912312025121520251216               \nDSYN0000001          SEG-0002            NRMEDICAID-FFS        ABD       20250701202512312025120120251203               \nDSYN0000002          SEG-0001            PGMEDICAID-FFS        FAM       20261001202610312026100120261002               \nDSYN0000003          SEG-0007            RPMEDICAID-FFS        PE        20261015202611302026101520261015               \nDSYN0000004          SEG-0001            ECCHIP-FFS            CHILD     20240229202612312023112020231121               \nT000000005                                                                                                              \n"
+ },
+ {
+  "name": "letter in fseq",
+  "cause": "bad_number",
+  "data": "HRRELIG01SYNSTATE-ELIG       00000000004O20261031FSYNTHETIC-STATE                                                       \nDSYN0000001          SEG-0001            EGMEDICAID-FFS        ABD       20260101999912312025121520251216               \nDSYN0000001          SEG-0002            NRMEDICAID-FFS        ABD       20250701202512312025120120251203               \nDSYN0000002          SEG-0001            PGMEDICAID-FFS        FAM       20261001202610312026100120261002               \nDSYN0000003          SEG-0007            RPMEDICAID-FFS        PE        20261015202611302026101520261015               \nDSYN0000004          SEG-0001            ECCHIP-FFS            CHILD     20240229202612312023112020231121               \nT000000005                                                                                                              \n"
+ },
+ {
+  "name": "space in trailer count",
+  "cause": "bad_number",
+  "data": "HRRELIG01SYNSTATE-ELIG       00000000004220261031FSYNTHETIC-STATE                                                       \nDSYN0000001          SEG-0001            EGMEDICAID-FFS        ABD       20260101999912312025121520251216               \nDSYN0000001          SEG-0002            NRMEDICAID-FFS        ABD       20250701202512312025120120251203               \nDSYN0000002          SEG-0001            PGMEDICAID-FFS        FAM       20261001202610312026100120261002               \nDSYN0000003          SEG-0007            RPMEDICAID-FFS        PE        20261015202611302026101520261015               \nDSYN0000004          SEG-0001            ECCHIP-FFS            CHILD     20240229202612312023112020231121               \nT 00000005                                                                                                              \n"
+ },
+ {
+  "name": "30 February",
+  "cause": "bad_date",
+  "data": "HRRELIG01SYNSTATE-ELIG       00000000004220261031FSYNTHETIC-STATE                                                       \nDSYN0000001          SEG-0001            EGMEDICAID-FFS        ABD       20260230999912312025121520251216               \nDSYN0000001          SEG-0002            NRMEDICAID-FFS        ABD       20250701202512312025120120251203               \nDSYN0000002          SEG-0001            PGMEDICAID-FFS        FAM       20261001202610312026100120261002               \nDSYN0000003          SEG-0007            RPMEDICAID-FFS        PE        20261015202611302026101520261015               \nDSYN0000004          SEG-0001            ECCHIP-FFS            CHILD     20240229202612312023112020231121               \nT000000005                                                                                                              \n"
+ },
+ {
+  "name": "29 February not leap",
+  "cause": "bad_date",
+  "data": "HRRELIG01SYNSTATE-ELIG       00000000004220261031FSYNTHETIC-STATE                                                       \nDSYN0000001          SEG-0001            EGMEDICAID-FFS        ABD       20260101999912312025121520251216               \nDSYN0000001          SEG-0002            NRMEDICAID-FFS        ABD       20250701202512312025120120251203               \nDSYN0000002          SEG-0001            PGMEDICAID-FFS        FAM       20261001202610312026100120261002               \nDSYN0000003          SEG-0007            RPMEDICAID-FFS        PE        20261015202611302026101520261015               \nDSYN0000004          SEG-0001            ECCHIP-FFS            CHILD     20250229202612312023112020231121               \nT000000005                                                                                                              \n"
+ },
+ {
+  "name": "year zero",
+  "cause": "bad_date",
+  "data": "HRRELIG01SYNSTATE-ELIG       00000000004220261031FSYNTHETIC-STATE                                                       \nDSYN0000001          SEG-0001            EGMEDICAID-FFS        ABD       20260101999912312025121520251216               \nDSYN0000001          SEG-0002            NRMEDICAID-FFS        ABD       20250701202512310000010120251203               \nDSYN0000002          SEG-0001            PGMEDICAID-FFS        FAM       20261001202610312026100120261002               \nDSYN0000003          SEG-0007            RPMEDICAID-FFS        PE        20261015202611302026101520261015               \nDSYN0000004          SEG-0001            ECCHIP-FFS            CHILD     20240229202612312023112020231121               \nT000000005                                                                                                              \n"
+ },
+ {
+  "name": "month 13",
+  "cause": "bad_date",
+  "data": "HRRELIG01SYNSTATE-ELIG       00000000004220261031FSYNTHETIC-STATE                                                       \nDSYN0000001          SEG-0001            EGMEDICAID-FFS        ABD       20260101999912312025121520251216               \nDSYN0000001          SEG-0002            NRMEDICAID-FFS        ABD       20250701202512312025120120251203               \nDSYN0000002          SEG-0001            PGMEDICAID-FFS        FAM       20261001202610312026100120261301               \nDSYN0000003          SEG-0007            RPMEDICAID-FFS        PE        20261015202611302026101520261015               \nDSYN0000004          SEG-0001            ECCHIP-FFS            CHILD     20240229202612312023112020231121               \nT000000005                                                                                                              \n"
+ },
+ {
+  "name": "letter in as-of",
+  "cause": "bad_date",
+  "data": "HRRELIG01SYNSTATE-ELIG       0000000000422026103lFSYNTHETIC-STATE                                                       \nDSYN0000001          SEG-0001            EGMEDICAID-FFS        ABD       20260101999912312025121520251216               \nDSYN0000001          SEG-0002            NRMEDICAID-FFS        ABD       20250701202512312025120120251203               \nDSYN0000002          SEG-0001            PGMEDICAID-FFS        FAM       20261001202610312026100120261002               \nDSYN0000003          SEG-0007            RPMEDICAID-FFS        PE        20261015202611302026101520261015               \nDSYN0000004          SEG-0001            ECCHIP-FFS            CHILD     20240229202612312023112020231121               \nT000000005                                                                                                              \n"
+ },
+ {
+  "name": "blank end date",
+  "cause": "bad_date",
+  "data": "HRRELIG01SYNSTATE-ELIG       00000000004220261031FSYNTHETIC-STATE                                                       \nDSYN0000001          SEG-0001            EGMEDICAID-FFS        ABD       20260101        2025121520251216               \nDSYN0000001          SEG-0002            NRMEDICAID-FFS        ABD       20250701202512312025120120251203               \nDSYN0000002          SEG-0001            PGMEDICAID-FFS        FAM       20261001202610312026100120261002               \nDSYN0000003          SEG-0007            RPMEDICAID-FFS        PE        20261015202611302026101520261015               \nDSYN0000004          SEG-0001            ECCHIP-FFS            CHILD     20240229202612312023112020231121               \nT000000005                                                                                                              \n"
+ },
+ {
+  "name": "unknown status",
+  "cause": "unknown_code",
+  "data": "HRRELIG01SYNSTATE-ELIG       00000000004220261031FSYNTHETIC-STATE                                                       \nDSYN0000001          SEG-0001            XGMEDICAID-FFS        ABD       20260101999912312025121520251216               \nDSYN0000001          SEG-0002            NRMEDICAID-FFS        ABD       20250701202512312025120120251203               \nDSYN0000002          SEG-0001            PGMEDICAID-FFS        FAM       20261001202610312026100120261002               \nDSYN0000003          SEG-0007            RPMEDICAID-FFS        PE        20261015202611302026101520261015               \nDSYN0000004          SEG-0001            ECCHIP-FFS            CHILD     20240229202612312023112020231121               \nT000000005                                                                                                              \n"
+ },
+ {
+  "name": "lower-case basis",
+  "cause": "unknown_code",
+  "data": "HRRELIG01SYNSTATE-ELIG       00000000004220261031FSYNTHETIC-STATE                                                       \nDSYN0000001          SEG-0001            EGMEDICAID-FFS        ABD       20260101999912312025121520251216               \nDSYN0000001          SEG-0002            NgMEDICAID-FFS        ABD       20250701202512312025120120251203               \nDSYN0000002          SEG-0001            PGMEDICAID-FFS        FAM       20261001202610312026100120261002               \nDSYN0000003          SEG-0007            RPMEDICAID-FFS        PE        20261015202611302026101520261015               \nDSYN0000004          SEG-0001            ECCHIP-FFS            CHILD     20240229202612312023112020231121               \nT000000005                                                                                                              \n"
+ },
+ {
+  "name": "unknown cover",
+  "cause": "unknown_code",
+  "data": "HRRELIG01SYNSTATE-ELIG       00000000004220261031DSYNTHETIC-STATE                                                       \nDSYN0000001          SEG-0001            EGMEDICAID-FFS        ABD       20260101999912312025121520251216               \nDSYN0000001          SEG-0002            NRMEDICAID-FFS        ABD       20250701202512312025120120251203               \nDSYN0000002          SEG-0001            PGMEDICAID-FFS        FAM       20261001202610312026100120261002               \nDSYN0000003          SEG-0007            RPMEDICAID-FFS        PE        20261015202611302026101520261015               \nDSYN0000004          SEG-0001            ECCHIP-FFS            CHILD     20240229202612312023112020231121               \nT000000005                                                                                                              \n"
+ },
+ {
+  "name": "row filler",
+  "cause": "bad_filler",
+  "data": "HRRELIG01SYNSTATE-ELIG       00000000004220261031FSYNTHETIC-STATE                                                       \nDSYN0000001          SEG-0001            EGMEDICAID-FFS        ABD       20260101999912312025121520251216               \nDSYN0000001          SEG-0002            NRMEDICAID-FFS        ABD       20250701202512312025120120251203               \nDSYN0000002          SEG-0001            PGMEDICAID-FFS        FAM       20261001202610312026100120261002              Z\nDSYN0000003          SEG-0007            RPMEDICAID-FFS        PE        20261015202611302026101520261015               \nDSYN0000004          SEG-0001            ECCHIP-FFS            CHILD     20240229202612312023112020231121               \nT000000005                                                                                                              \n"
+ },
+ {
+  "name": "header filler",
+  "cause": "bad_filler",
+  "data": "HRRELIG01SYNSTATE-ELIG       00000000004220261031FSYNTHETIC-STATE     X                                                 \nDSYN0000001          SEG-0001            EGMEDICAID-FFS        ABD       20260101999912312025121520251216               \nDSYN0000001          SEG-0002            NRMEDICAID-FFS        ABD       20250701202512312025120120251203               \nDSYN0000002          SEG-0001            PGMEDICAID-FFS        FAM       20261001202610312026100120261002               \nDSYN0000003          SEG-0007            RPMEDICAID-FFS        PE        20261015202611302026101520261015               \nDSYN0000004          SEG-0001            ECCHIP-FFS            CHILD     20240229202612312023112020231121               \nT000000005                                                                                                              \n"
+ },
+ {
+  "name": "trailer filler",
+  "cause": "bad_filler",
+  "data": "HRRELIG01SYNSTATE-ELIG       00000000004220261031FSYNTHETIC-STATE                                                       \nDSYN0000001          SEG-0001            EGMEDICAID-FFS        ABD       20260101999912312025121520251216               \nDSYN0000001          SEG-0002            NRMEDICAID-FFS        ABD       20250701202512312025120120251203               \nDSYN0000002          SEG-0001            PGMEDICAID-FFS        FAM       20261001202610312026100120261002               \nDSYN0000003          SEG-0007            RPMEDICAID-FFS        PE        20261015202611302026101520261015               \nDSYN0000004          SEG-0001            ECCHIP-FFS            CHILD     20240229202612312023112020231121               \nT0000000050                                                                                                             \n"
+ },
+ {
+  "name": "span backwards",
+  "cause": "span_backwards",
+  "data": "HRRELIG01SYNSTATE-ELIG       00000000004220261031FSYNTHETIC-STATE                                                       \nDSYN0000001          SEG-0001            EGMEDICAID-FFS        ABD       20260101999912312025121520251216               \nDSYN0000001          SEG-0002            NRMEDICAID-FFS        ABD       20250701202512312025120120251203               \nDSYN0000002          SEG-0001            PGMEDICAID-FFS        FAM       20261001202610312026100120261002               \nDSYN0000003          SEG-0007            RPMEDICAID-FFS        PE        20261201202611302026101520261015               \nDSYN0000004          SEG-0001            ECCHIP-FFS            CHILD     20240229202612312023112020231121               \nT000000005                                                                                                              \n"
+ },
+ {
+  "name": "determined after as-of",
+  "cause": "determined_after_as_of",
+  "data": "HRRELIG01SYNSTATE-ELIG       00000000004220261031FSYNTHETIC-STATE                                                       \nDSYN0000001          SEG-0001            EGMEDICAID-FFS        ABD       20260101999912312025121520251216               \nDSYN0000001          SEG-0002            NRMEDICAID-FFS        ABD       20250701202512312025120120251203               \nDSYN0000002          SEG-0001            PGMEDICAID-FFS        FAM       20261001202610312026100120261002               \nDSYN0000003          SEG-0007            RPMEDICAID-FFS        PE        20261015202611302026110120261015               \nDSYN0000004          SEG-0001            ECCHIP-FFS            CHILD     20240229202612312023112020231121               \nT000000005                                                                                                              \n"
+ },
+ {
+  "name": "same member and segment twice",
+  "cause": "duplicate_key",
+  "data": "HRRELIG01SYNSTATE-ELIG       00000000004220261031FSYNTHETIC-STATE                                                       \nDSYN0000001          SEG-0001            EGMEDICAID-FFS        ABD       20260101999912312025121520251216               \nDSYN0000001          SEG-0001            NGMEDICAID-FFS        ABD       20260101999912312025121520251216               \nDSYN0000001          SEG-0002            NRMEDICAID-FFS        ABD       20250701202512312025120120251203               \nDSYN0000002          SEG-0001            PGMEDICAID-FFS        FAM       20261001202610312026100120261002               \nDSYN0000003          SEG-0007            RPMEDICAID-FFS        PE        20261015202611302026101520261015               \nDSYN0000004          SEG-0001            ECCHIP-FFS            CHILD     20240229202612312023112020231121               \nT000000006                                                                                                              \n"
+ },
+ {
+  "name": "count too high",
+  "cause": "count_mismatch",
+  "data": "HRRELIG01SYNSTATE-ELIG       00000000004220261031FSYNTHETIC-STATE                                                       \nDSYN0000001          SEG-0001            EGMEDICAID-FFS        ABD       20260101999912312025121520251216               \nDSYN0000001          SEG-0002            NRMEDICAID-FFS        ABD       20250701202512312025120120251203               \nDSYN0000002          SEG-0001            PGMEDICAID-FFS        FAM       20261001202610312026100120261002               \nDSYN0000003          SEG-0007            RPMEDICAID-FFS        PE        20261015202611302026101520261015               \nDSYN0000004          SEG-0001            ECCHIP-FFS            CHILD     20240229202612312023112020231121               \nT000000006                                                                                                              \n"
+ },
+ {
+  "name": "count too low",
+  "cause": "count_mismatch",
+  "data": "HRRELIG01SYNSTATE-ELIG       00000000004220261031FSYNTHETIC-STATE                                                       \nDSYN0000001          SEG-0001            EGMEDICAID-FFS        ABD       20260101999912312025121520251216               \nDSYN0000001          SEG-0002            NRMEDICAID-FFS        ABD       20250701202512312025120120251203               \nDSYN0000002          SEG-0001            PGMEDICAID-FFS        FAM       20261001202610312026100120261002               \nDSYN0000003          SEG-0007            RPMEDICAID-FFS        PE        20261015202611302026101520261015               \nDSYN0000004          SEG-0001            ECCHIP-FFS            CHILD     20240229202612312023112020231121               \nT000000004                                                                                                              \n"
+ },
+ {
+  "name": "no identity for kind 1",
+  "cause": "kind_not_registered",
+  "data": "HRRELIG01SYNSTATE-ELIG       00000000004220261031FSYNTHETIC-STATE                                                       \nDSYN0000001          SEG-0001            EGMEDICAID-FFS        ABD       20260101999912312025121520251216               \nDSYN0000001          SEG-0002            NRMEDICAID-FFS        ABD       20250701202512312025120120251203               \nDSYN0000002          SEG-0001            PGMEDICAID-FFS        FAM       20261001202610312026100120261002               \nDSYN0000003          SEG-0007            RPMEDICAID-FFS        PE        20261015202611302026101520261015               \nDSYN0000004          SEG-0001            ECCHIP-FFS            CHILD     20240229202612312023112020231121               \nT000000005                                                                                                              \n",
+  "entry": {
+   "ids": [
+    [
+     2,
+     [
+      1
+     ]
+    ]
+   ]
+  }
+ },
+ {
+  "name": "identity code 3",
+  "cause": "unknown_identity_field",
+  "data": "HRRELIG01SYNSTATE-ELIG       00000000004220261031FSYNTHETIC-STATE                                                       \nDSYN0000001          SEG-0001            EGMEDICAID-FFS        ABD       20260101999912312025121520251216               \nDSYN0000001          SEG-0002            NRMEDICAID-FFS        ABD       20250701202512312025120120251203               \nDSYN0000002          SEG-0001            PGMEDICAID-FFS        FAM       20261001202610312026100120261002               \nDSYN0000003          SEG-0007            RPMEDICAID-FFS        PE        20261015202611302026101520261015               \nDSYN0000004          SEG-0001            ECCHIP-FFS            CHILD     20240229202612312023112020231121               \nT000000005                                                                                                              \n",
+  "entry": {
+   "ids": [
+    [
+     1,
+     [
+      1,
+      3
+     ]
+    ]
+   ]
+  }
+ },
+ {
+  "name": "segment-only identity repeats",
+  "cause": "duplicate_key",
+  "data": "HRRELIG01SYNSTATE-ELIG       00000000004220261031FSYNTHETIC-STATE                                                       \nDSYN0000001          SEG-0001            EGMEDICAID-FFS        ABD       20260101999912312025121520251216               \nDSYN0000001          SEG-0002            NRMEDICAID-FFS        ABD       20250701202512312025120120251203               \nDSYN0000002          SEG-0001            PGMEDICAID-FFS        FAM       20261001202610312026100120261002               \nDSYN0000003          SEG-0007            RPMEDICAID-FFS        PE        20261015202611302026101520261015               \nDSYN0000004          SEG-0001            ECCHIP-FFS            CHILD     20240229202612312023112020231121               \nT000000005                                                                                                              \n",
+  "entry": {
+   "ids": [
+    [
+     1,
+     [
+      2
+     ]
+    ]
+   ]
+  }
+ }
+]

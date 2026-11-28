@@ -62,7 +62,7 @@ BUILD_TIMEOUT_SECONDS = 900.0
 CHECK_TIMEOUT_SECONDS = 90.0
 NATIVE_TIMEOUT_SECONDS = 15.0
 
-REQUIRED_MANIFEST_SHA256 = "b511bdb6a2ccaeddccaa43ed8e5e78cf2f8cdde3d452ab66f07a504ef836e0c3"
+REQUIRED_MANIFEST_SHA256 = "f054bb484e190e87273f131d69276fc4a2ccccd2d5d03c79a068e1db13326e0c"
 
 # The only axioms a manifest may allow: the ones Lean's own logic rests on.
 STANDARD_LEAN_AXIOMS = frozenset({"propext", "Classical.choice", "Quot.sound"})
@@ -88,8 +88,8 @@ class PinnedExe:
 PINNED_EXE_IDENTITIES = {
     "blind_financial_worker": PinnedExe(
         "artifacts/engine-evaluator/blind_financial_worker.exe",
-        6_510_592,
-        "2ac5f5eb783ac99111b4a28b35df6f23f47e773c2f10a281c01bc02e878841d8",
+        7_425_536,
+        "4bae13d7adca231ac2eb66bca4ba4906dadf824af91c9bb2c020e1068e4a1213",
     ),
 }
 PINNED_EXES = tuple(PINNED_EXE_IDENTITIES)

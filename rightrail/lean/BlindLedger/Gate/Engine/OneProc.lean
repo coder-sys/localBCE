@@ -1,34 +1,21 @@
 import BlindLedger.Gate.Flat.Worker
-import BlindLedger.Gate.Batch
+import BlindLedger.Gate.PublishSpec
 
 open BlindLedger.Gate
 
 /-! `gate_engine`, the resident one-process gate: started once per shard, it answers every frame in-process.  A frame is a
     u32 BE length then its bytes; an answer the same.  The first byte tags the kind: 0x01 then `gate_verify`'s PUBLISH frame
-    after its mode byte, answered `GATE_VERIFY=ACCEPT`, `REJECT` or `FRAME` by `publishOkTree`; 0x04 then a request frame
+    after its mode byte, answered `GATE_VERIFY=ACCEPT`, `REJECT` or `FRAME` by `publishFrame`; 0x04 then a request frame
     (conformance/FRAME_V1.md) on the shard's store in DIR: the answer is the answer frame's bytes, and the worker keeps the
     open store across frames.  Decisions are the proved defs; this file only frames
     them.  Any other tag, like a bad length or bad UTF-8, ends the process (65). -/
 
 namespace BlindLedger.Gate.Engine.OneProc
 
-@[extern c inline "lean_io_result_mk_ok(lean_box_uint32((uint32_t)mi_reserve_os_memory(#1, #2, #3)))"]
-opaque reserveArena (bytes : USize) (commit allowLarge : Bool) : IO UInt32
-
-def publish : P Bool := do
-  let rootPk ← take mlDsa87Key
-  let cert ← take (← nat 4)
-  let last ← take (← nat 4)
-  let new ← take (← nat 4)
-  let tokens ← many (do take (← nat 4)) (← nat 2)
-  let tpm ← nat 8
-  pure (publishOkTree rootPk cert (if last.isEmpty then none else some last) new tokens tpm)
-
 /-- A tag 1 frame's answer; any other tag is none. -/
 def answer (f : ByteArray) : Option String :=
   if f.data[0]? == some 1 then
-    let b := (f.extract 1 f.size).toList
-    some (match parse publish b.length b with
+    some (match publishFrame (f.extract 1 f.size).toList with
       | some true => "GATE_VERIFY=ACCEPT\n" | some false => "GATE_VERIFY=REJECT\n" | none => "GATE_VERIFY=FRAME\n")
   else none
 
@@ -74,13 +61,11 @@ def serve (dir : String) (shard : Nat) (read : USize → IO ByteArray) (write : 
   write (be32 resp.size ++ resp)
   serve dir shard read write fw fuel
 
-def run (crash : IO String) (verify : Bytes → Bytes → Bytes → Bool) (args : List String) : IO UInt32 := do
+def run (crash : IO String) (args : List String) : IO UInt32 := do
   let [dir, sh] := args | return 64
   let some shard := sh.toNat? | return 64
-  if (← reserveArena 1073741824 false false) != 0 then
-    return 70
   let stdin ← IO.getStdin
   let stdout ← IO.getStdout
-  serve dir shard stdin.read (fun b => do stdout.write b; stdout.flush) { crash := ← crash, verify := verify } serveFuel
+  serve dir shard stdin.read (fun b => do stdout.write b; stdout.flush) { crash := ← crash } serveFuel
 
 end BlindLedger.Gate.Engine.OneProc

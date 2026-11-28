@@ -63,7 +63,7 @@ def report_mismatch(label: str, batch: int, index: int, old, new) -> None:
 
 
 def semantic_leaves(leaves):
-    """INPUT/v6 binds each engine's own head (in its context); every other Pay field must agree.
+    """INPUT/v7 binds each engine's own head (in its context); every other Pay field must agree.
 
     This comparator checks decision equivalence, not independent input-commitment validity.
     The engine verifier checks the engine-local binding.
@@ -164,7 +164,7 @@ def checker(d: Path) -> int:
 def events(log: Path) -> dict:
     """Seal, install and reclaim events in the new store's log trailers (all zero on a rows-file store)."""
     raw, pos, ev = log.read_bytes(), 0, {"frames": 0, "seals": 0, "installs": 0, "reclaims": 0, "torn_tail_bytes": 0}
-    trailer_len = 24 + 4 + 8 + 20 + 20 + 24 + 79 + 208 + 7 * 64  # Frame3.Trailer.trailerLen
+    trailer_len = 24 + 4 + 8 + 20 + 20 + 24 + 79 + chain.AUTH + 7 * 64  # Frame3.Trailer.trailerLen
     while pos + 16 <= len(raw):
         if raw[pos : pos + 4] != b"RRF4":
             raise ValueError(f"invalid journal frame magic at offset {pos}")
@@ -175,7 +175,7 @@ def events(log: Path) -> dict:
         if t + tr > len(raw):
             ev["torn_tail_bytes"] = len(raw) - pos  # Engine3.scanFrames permits an incomplete final frame.
             break
-        e = t + tr - 448 - 208 - 79
+        e = t + tr - 448 - chain.AUTH - 79
         if any(raw[e + off] not in (0, 1) for off in (0, 5, 74)):
             raise ValueError(f"invalid event flag at offset {e}")
         ev["frames"] += 1
@@ -256,10 +256,10 @@ def summary(kind: str, p: Pair, root: Path) -> dict:
 
 
 def golden() -> dict:
-    """Each case of tests/gate_rules/rules_v2.vectors that starts from empty sets and only has lines and commits: a fresh pair of
+    """Each case of tests/gate_rules/rules_v1.vectors that starts from empty sets and only has lines and commits: a fresh pair of
     stores, a batch per commit.  Other cases (preloaded sets, redo, drop, own feeds) are counted as skipped."""
     cases, cur = [], None
-    for row in Path(WT, "tests/gate_rules/rules_v2.vectors").read_text("utf-8").splitlines():
+    for row in Path(WT, "tests/gate_rules/rules_v1.vectors").read_text("utf-8").splitlines():
         f = row.split()
         if f[:1] == ["case"]:
             cur = [f[1], []]

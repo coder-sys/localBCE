@@ -1,37 +1,47 @@
 Toolchain pin for the TCB gate (tools/tcb_gate.lean). The live run (tools/tcb_pin.ps1, RR_TCB_LIVE=1) recomputes every hash
 below from the installed toolchain and fails on any difference; the default test only checks that the `toolchain oleans` line matches the report.
 
-lean-toolchain: leanprover/lean4:v4.33.1
-Lean (version 4.33.1, x86_64-w64-windows-gnu, commit 819816b2e0a3bf405af45ae5c7af2491d8f5bee6, Release)
+lean-toolchain: leanprover/lean4:v4.36.0
+Source: https://github.com/leanprover/lean4/releases/tag/v4.36.0, asset lean-4.36.0-windows.zip, SHA-256
+5af5f955df6cfe37082d71c56c7d47fe620faa9f59e14b917b43976c08dc676b (the release's published asset digest; the downloaded file
+hashes the same). Unpacked, all 18,251 files hash identically to the installed toolchain, including every bin\ file below
+(con-leche, con-ron, lean4lean, leanchecker-paranoid, leanexport, nanoda_bin and libLLVM-23 come from the same archive).
+Lean (version 4.36.0, x86_64-w64-windows-gnu, commit 611c117bfaf7b7ae1cfcf246ce6fba31e8f509e9, Release)
 
 SHA-256 of every file in the toolchain's bin\ (lean.exe and lake.exe are launchers; the compiler and runtime are the DLLs,
 clang.exe, and ld.lld.exe); the same lean, lake and leanchecker hashes sit in lean/tools/semantic_assurance_manifest.json:
-b9021f861eec018c1789e08e915eff78dcbbf1b88c54805b9bff8b152a662dce  bin/cadical.exe
-1aea18dca98f91a6a7c65532adc2567efc775904d2a4bd28bf06731bc2c3778c  bin/clang.exe
-565c3976275d79e104421014b6229f4fcf4a8c8edfe164a43b344c91af6f496c  bin/lake.exe
-675e59f33f11cb90500577f116082ed4a6214fcac3a1bad88d6323aa0373179f  bin/ld.lld.exe
-af49bacfabaa1fea71332ca0feae0fa1a60912219d5902291adc79f905bffb8d  bin/lean.exe
-f8278dcae9251347a8cfe877d9ffde1694b47662b867d7880d4a6e143e7f3139  bin/leanc.exe
-31b506f83737b7d629fd11699df5aaf88c3b50be23c28219e6b283f0de98f85c  bin/leanchecker.exe
-14253c761730e6d126f3bde55e9b444b34ba305c832d2699c22577e1f438faea  bin/leanir.exe
+86eac1820396f4cd8b052f9596e41533fe6d561fee2fb161460215ecf6cf60f6  bin/cadical.exe
+8cf0b3d3c1b0211e3f2798074a376d01254d17e4ae8e5b3c510f2613727da449  bin/clang.exe
+5dc6d10f2608e217464b92fbcf823dbff3fc82f80f2610654da5d0b5f58e8538  bin/con-leche.exe
+d9cfda21442da3b5151da9387cecf7ab64ff6a82cede8f6689a36ab92d204f74  bin/con-ron.exe
+fd15d19aedd70272e2b405bd4f26ce936a9198b9748996dd0bcddcdde0423218  bin/lake.exe
+76b1a3ce12afe4d9c3c5b9e92c16a4b08713bd67511c7a0bf13ed5bcfdaa17d6  bin/ld.lld.exe
+f567cc855e5f8006f65076bc813711d581edbae54f1d1d138462e7114351b532  bin/lean.exe
+fd62cbb629b07e0b6a41d1fca2b3fcdfeb69ee6f69055ec891bb0842396011df  bin/lean4lean.exe
+74a151f56d9b689782efd990cd95e17cb68caa27bd729cd93dc79dcb4820f8e0  bin/leanc.exe
+982581199b1b464b227d78eabcd3ff840aa365a15b264afc9a87448eb2b46c37  bin/leanchecker-paranoid.exe
+51f6b4098bb0d5b4a4de5c5f8501fac0c53d7236137b3f32d56b7e2717d05853  bin/leanchecker.exe
+9e5cbe27d714a7c16dc3e35881a6a66c871ec4339c1bb15f640f8998aa0ddcc5  bin/leanexport.exe
+e22de1a2554929a04567c9f2a32aa7512a88745813b822cd9d664eac698cdc04  bin/leanir.exe
 9f0b70acbde379a835c4fe80606501eb2586d6525ae874e802f7ef5ad50c18bb  bin/leanmake
 c7dbe74520f4c7fb132593f9f2bcd894618bf381b793961a4ab1bb37e13ba587  bin/leantar.exe
 8a9deaac6d2f4d2de468a544d1f35cd0dd4bcde03cda3cfb76fb9674749828d4  bin/libc++.dll
-1b32dd58335db4a984237e1fd1993cfd0f0fa413b5d10957290703eb03377ca4  bin/libclang-cpp.dll
-78a70f06876c01c67d44e7ae5595f1447a0df5acaeca642db115d4089cc7002c  bin/libInit_shared.dll
-6bbd4415f804254f1577c2227a46b2d23069ce6539c324c824df17b861d67e0a  bin/libLake_shared.dll
-9a3fdb05f1383ff50780d864d33d05e7385f74dec73209cdefd752ce3c8650cd  bin/libleanshared.dll
-f66e47f5c96556b6592e81ca82ea22a73f835f4f0a3b9863111b459f20048114  bin/libleanshared_1.dll
-b300c2b440f7ed036f56dca5e2de92bedabddfd33fa5f7921866c72127b68b28  bin/libleanshared_2.dll
-beaba61b3176e06fc0c4bf87e8bfae094a2405d01fa8e03d78029471555445d2  bin/libLLVM-22.dll
-675e59f33f11cb90500577f116082ed4a6214fcac3a1bad88d6323aa0373179f  bin/lld.exe
-ff7fcf456130e4fb58bc24f7cf0f2e7113ce96af534fc61f861c54a43e674a9d  bin/llvm-ar.exe
+b991ed9af92868e4f9fe3aa13350ecef526086ee2e133396baa6f8df195c8c95  bin/libclang-cpp.dll
+e3e3cefed6796c084af8780005d5aeb61d2fbb3c9f30522a72f05a4408b30518  bin/libInit_shared.dll
+8ccb7a741c3a45a64cacce0427e8a025f9074a688c91529702f881b923b6d04b  bin/libLake_shared.dll
+c4635ea6a8e9038c50f36135127da4ee3af587bc1d3d714f4e22ecdbb3746e30  bin/libleanshared.dll
+b22bb00d52ba114b7f3abe5116e6be9bbce631f61a85a3b96a97addccf33f243  bin/libleanshared_1.dll
+84ff9396080412e2d973e53b5f8e9602fe2fc76027358d892908860ca7fa5785  bin/libleanshared_2.dll
+9f2a5cf9abb17ff828a8abc05e9d70fa58753f709e95be98ecb24ae7c14c1962  bin/libLLVM-23.dll
+76b1a3ce12afe4d9c3c5b9e92c16a4b08713bd67511c7a0bf13ed5bcfdaa17d6  bin/lld.exe
+8366412f40416837b0e1a48b21e7e14453b6a324aa2e78511f0c505d492560f7  bin/llvm-ar.exe
+a76bed8bc1091842ea7f85996464687ca3945edc6f8194237bf6963503d2d31b  bin/nanoda_bin.exe
 94dd0a72d4da79e25294a91d1edf902d76eade7512d9218609a5fe43e3a7397a  bin/zlib1.dll
 
 The pinned exes link lib\*, lib\lean\*.a statically (Init, Std, the C runtime, gmp, libuv, mingw). One SHA-256 over their
 sorted `sha256  path` lines (paths relative to the toolchain):
-link inputs  588922711d8ba64df98d59de78d10aa45d8aa4d42d0aa2bdb8e7bd0ca9661fb0  48 files
+link inputs  110a595016647dabf8a2c36ee6620a646f9f97ce5218b30c82329b97fa8f3b45  53 files
 
 Every Init, Std and Lean module file the gate and its allowlist trust (`.olean`, `.olean.private`, `.olean.server`, `.ir`; not the
 `.ilean` editor data), one tree hash of the same shape (recomputed by the live gate, RR_TCB_LIVE=1):
-toolchain oleans  7884bb9b5f584355ffc6e01eb9ed31118e62001f95cf9d64cda719356add5cf0  11610 files
+toolchain oleans  0297bb975b30b336aa48747832249271ec2e8d1a9b4bd0090360eb44bd89b991  12095 files

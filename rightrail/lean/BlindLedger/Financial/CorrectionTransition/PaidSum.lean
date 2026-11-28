@@ -1,6 +1,6 @@
 import BlindLedger.Financial.Codec
 
-/-! Paid-so-far from the snapshot (design: docs/CORE_REDESIGN.md, "Lean paid
+/-! Paid-so-far from the snapshot (design: ARCHITECTURE.md, "Lean paid
     sum").  `BLFCMD03` replaces the caller's `correctionPaid` totals with the
     payment-to-action links; Lean sums the active linked payment rows itself.
 

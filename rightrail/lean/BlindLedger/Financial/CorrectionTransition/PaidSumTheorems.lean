@@ -1,7 +1,7 @@
 import BlindLedger.Financial.CorrectionTransition.Theorems
 import BlindLedger.Financial.Theorems.Conservation
 
-/-! Proofs of the statements in docs/CORE_REDESIGN.md, "Lean paid sum".  They
+/-! Proofs of the statements in ARCHITECTURE.md, "Lean paid sum".  They
     name `CorrectionCommand.paymentLinks` and `derivedCorrectionPaid`, and sit
     alongside the caller-trusting B2 theorems they replace. -/
 

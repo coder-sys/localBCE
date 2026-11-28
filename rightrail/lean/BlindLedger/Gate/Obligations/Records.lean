@@ -5,7 +5,7 @@ namespace BlindLedger.Gate.Obligations
 open BlindLedger.Gate.FactCodec
 
 /-! The records of the program-obligations shard (design `one-store` §2.3-§2.6), each a 245-byte `facts` body:
-    the state row (money row form 5), the case, action, command and text records, and the fact rows of kinds 14,
+    the state row (money row form 5), the case, action, command, text, repair and run-end records, and the fact rows of kinds 14,
     15 and 22-26.  Each record is its layout, its cells and its own check; `Layout` proves the round trip, the
     converse, the width and injectivity once, so each record proves only that reading its cells back gives it
     (`*_ok`, with its width).
@@ -120,7 +120,7 @@ def caseC : RecCodec CaseRec where
 theorem caseC_ok : caseC.Lawful ∧ width caseC.L = bodyBytes :=
   ⟨fun y _ => by cases y; rfl, rfl⟩
 
-/-! ## Action record (tag `0x73`) -/
+/-! ## Action record (tag `0xF3`) -/
 
 structure ActionRec where
   op : Nat
@@ -142,7 +142,7 @@ structure ActionRec where
   deriving DecidableEq, Repr
 
 def actionC : RecCodec ActionRec where
-  L := [.lit 1 0x73, .num 1, .blk 32, .blk 32, .num 1, .num 1, .num 4, .num 8, .blk 64, .blk 64, .num 8, .num 5,
+  L := [.lit 1 0xF3, .num 1, .blk 32, .blk 32, .num 1, .num 1, .num 4, .num 8, .blk 64, .blk 64, .num 8, .num 5,
     .num 5, .num 5, .num 1, .num 1, .num 5, z 7]
   toC x := [.n x.op, .b x.ak, .b x.ob, .n x.akind, .n x.status, .n x.attempt, .n x.amount, .b x.payload,
     .b x.idem, .n x.atMs, .n x.claim, .n x.ack, .n x.cmd, .n x.lg, .n x.nt, .n x.rev]
@@ -186,7 +186,7 @@ def cmdC : RecCodec CmdRec where
 theorem cmdC_ok : cmdC.Lawful ∧ width cmdC.L = bodyBytes :=
   ⟨fun y _ => by cases y; rfl, rfl⟩
 
-/-! ## Text record (tag `0x75`) and the split of one element -/
+/-! ## Text record (tag `0xF5`) and the split of one element -/
 
 /-- Text bytes per record. -/
 def textBytes : Nat := 242
@@ -198,7 +198,7 @@ structure TextRec where
   deriving DecidableEq, Repr
 
 def textC : RecCodec TextRec where
-  L := [.lit 1 0x75, .num 1, .num 1, .blk 242]
+  L := [.lit 1 0xF5, .num 1, .num 1, .blk 242]
   toC x := [.n x.part, .n x.len, .b x.bytes]
   build cs := ⟨nAt cs 0, nAt cs 1, bAt cs 2⟩
   -- `len` from 1 to 242 and zeros after it.
@@ -207,22 +207,24 @@ def textC : RecCodec TextRec where
 theorem textC_ok : textC.Lawful ∧ width textC.L = bodyBytes :=
   ⟨fun y _ => by cases y; rfl, rfl⟩
 
-/-- An element's text records, numbered from `i`: full records of 242 bytes, then the rest (1 to 242 bytes). -/
+/-- An element's text records, numbered from `i`: full records of 242 bytes, then the rest (1 to 242 bytes).  The
+    part field is one byte and holds the record's number modulo 256, so an element of any length is stored: a record
+    out of place, missing or repeated still breaks the sequence, and each record also links the record before it. -/
 def partsFrom (i : Nat) (e : Bytes) : List TextRec :=
-  if h : e.length ≤ textBytes then [⟨i, e.length, e ++ List.replicate (textBytes - e.length) 0⟩]
-  else ⟨i, textBytes, e.take textBytes⟩ :: partsFrom (i + 1) (e.drop textBytes)
+  if h : e.length ≤ textBytes then [⟨i % 256, e.length, e ++ List.replicate (textBytes - e.length) 0⟩]
+  else ⟨i % 256, textBytes, e.take textBytes⟩ :: partsFrom (i + 1) (e.drop textBytes)
 termination_by e.length
 decreasing_by simp only [List.length_drop]; simp only [textBytes] at h ⊢; omega
 
 /-- Join text records numbered from `i`: no gap, every record but the last full, the last 1 to 242 bytes. -/
 def joinFrom (i : Nat) : List TextRec → Option Bytes
   | [] => none
-  | [t] => if t.part = i ∧ 1 ≤ t.len ∧ t.len ≤ textBytes then some (t.bytes.take t.len) else none
-  | t :: ts => if t.part = i ∧ t.len = textBytes then (joinFrom (i + 1) ts).map (t.bytes ++ ·) else none
+  | [t] => if t.part = i % 256 ∧ 1 ≤ t.len ∧ t.len ≤ textBytes then some (t.bytes.take t.len) else none
+  | t :: ts => if t.part = i % 256 ∧ t.len = textBytes then (joinFrom (i + 1) ts).map (t.bytes ++ ·) else none
 
 theorem joinFrom_cons {i : Nat} {t : TextRec} {ts : List TextRec} (h : ts ≠ []) :
     joinFrom i (t :: ts) =
-      if t.part = i ∧ t.len = textBytes then (joinFrom (i + 1) ts).map (t.bytes ++ ·) else none := by
+      if t.part = i % 256 ∧ t.len = textBytes then (joinFrom (i + 1) ts).map (t.bytes ++ ·) else none := by
   cases ts with
   | nil => exact absurd rfl h
   | cons _ _ => rfl
@@ -273,7 +275,7 @@ theorem parts_join : ∀ (ts : List TextRec) (i : Nat) (e : Bytes), (∀ t ∈ t
       have hl : (t.bytes.take t.len).length = t.len := by simp only [List.length_take, hb]; omega
       refine ⟨?_, by omega⟩
       calc partsFrom i (t.bytes.take t.len)
-          = [⟨i, t.len, t.bytes.take t.len ++ List.replicate (textBytes - t.len) 0⟩] := by
+          = [⟨i % 256, t.len, t.bytes.take t.len ++ List.replicate (textBytes - t.len) 0⟩] := by
             rw [partsFrom, dif_pos (by omega), hl]
         _ = [⟨t.part, t.len, t.bytes⟩] := by rw [hp.1, ← hz]
         _ = [t] := rfl
@@ -291,7 +293,7 @@ theorem parts_join : ∀ (ts : List TextRec) (i : Nat) (e : Bytes), (∀ t ∈ t
         subst h
         obtain ⟨ih, h1⟩ := parts_join (t' :: ts) (i + 1) e' (fun u hu => hw u (List.mem_cons_of_mem _ hu)) hj
         refine ⟨?_, by simp only [List.length_append]; omega⟩
-        calc partsFrom i (t.bytes ++ e') = ⟨i, textBytes, t.bytes⟩ :: partsFrom (i + 1) e' := by
+        calc partsFrom i (t.bytes ++ e') = ⟨i % 256, textBytes, t.bytes⟩ :: partsFrom (i + 1) e' := by
               rw [partsFrom, dif_neg (by simp only [List.length_append]; omega)]
               simp only [List.take_left' hb, List.drop_left' hb]
           _ = ⟨t.part, t.len, t.bytes⟩ :: t' :: ts := by rw [hp.1, hp.2, ih]
@@ -301,8 +303,7 @@ theorem parts_join : ∀ (ts : List TextRec) (i : Nat) (e : Bytes), (∀ t ∈ t
 /-- Each record of a split, and how many there are, by the length of the element. -/
 theorem parts_props (i : Nat) (e : Bytes) (h : 1 ≤ e.length) :
     (partsFrom i e).length * textBytes < e.length + textBytes ∧
-    ∀ t ∈ partsFrom i e, i ≤ t.part ∧ (t.part - i) * textBytes < e.length ∧ t.len < 256 ∧
-      t.bytes.length = textBytes ∧ textC.chk t = true := by
+    ∀ t ∈ partsFrom i e, t.part < 256 ∧ t.len < 256 ∧ t.bytes.length = textBytes ∧ textC.chk t = true := by
   rw [partsFrom]
   split
   · rename_i hl
@@ -311,7 +312,7 @@ theorem parts_props (i : Nat) (e : Bytes) (h : 1 ≤ e.length) :
     intro t ht
     simp only [List.mem_singleton] at ht
     subst ht
-    refine ⟨Nat.le_refl _, by simp; omega, by simp only; omega, by simp; omega, ?_⟩
+    refine ⟨Nat.mod_lt _ (by decide), by simp only; omega, by simp; omega, ?_⟩
     simp [textC, textBytes, hl, h, allZero_replicate]
   · rename_i hl
     simp only [textBytes] at hl
@@ -321,32 +322,75 @@ theorem parts_props (i : Nat) (e : Bytes) (h : 1 ≤ e.length) :
     intro t ht
     simp only [List.mem_cons] at ht
     rcases ht with rfl | ht
-    · refine ⟨Nat.le_refl _, by simp only [Nat.sub_self]; omega, by simp, by simp; omega, ?_⟩
+    · refine ⟨Nat.mod_lt _ (by decide), by simp, by simp; omega, ?_⟩
       have hd : (e.take 242).drop 242 = [] := by simp
       simp only [textC, hd]
       rfl
-    · obtain ⟨h1, h2, h3, h4, h5⟩ := ihm t ht
-      have e1 : t.part - i = (t.part - (i + 1)) + 1 := by omega
-      rw [e1, Nat.add_mul, Nat.one_mul]
-      generalize (t.part - (i + 1)) * 242 = k at h2 ⊢
-      exact ⟨by omega, by omega, h3, h4, h5⟩
+    · exact ihm t ht
 termination_by e.length
 decreasing_by simp only [List.length_drop]; simp only [textBytes]; omega
 
-/-- An element of 1 to 255 × 242 bytes (`nt` is one byte) splits into at most 255 well-formed records. -/
-theorem parts_wf (e : Bytes) (h1 : 1 ≤ e.length) (h2 : e.length ≤ 255 * textBytes) :
-    (partsFrom 0 e).length ≤ 255 ∧ ∀ t ∈ partsFrom 0 e, textC.WF t := by
+/-- An element of one byte or more splits into well-formed records, one per 242 bytes and one for the rest; an
+    element of at most 255 × 242 bytes into at most 255 (a command record's `nt` is one byte). -/
+theorem parts_wf (e : Bytes) (h1 : 1 ≤ e.length) :
+    (e.length ≤ 255 * textBytes → (partsFrom 0 e).length ≤ 255) ∧ ∀ t ∈ partsFrom 0 e, textC.WF t := by
   obtain ⟨hl, hm⟩ := parts_props 0 e h1
-  simp only [textBytes] at hl h2 hm
-  refine ⟨by omega, fun t ht => ?_⟩
-  obtain ⟨-, hp, hlen, hb, hc⟩ := hm t ht
+  simp only [textBytes] at hl hm ⊢
+  refine ⟨fun h2 => by omega, fun t ht => ?_⟩
+  obtain ⟨hp, hlen, hb, hc⟩ := hm t ht
   refine ⟨?_, hc⟩
   simp only [textC, fit, Nat.pow_one]
-  exact ⟨by decide, by omega, hlen, hb, trivial⟩
+  exact ⟨by decide, hp, hlen, hb, trivial⟩
 
-/-! ## Fact rows of kinds 14, 15 and 22-26 (§2.4) -/
+/-! ## Repair record (tag `0xF6`)
 
-/-- The base fact row from `op` to `roff`; the kind byte is the layout's literal. -/
+    Written when a log is opened and its last command was not wholly written: the records of that command, and any
+    bytes after the last whole record, are cut, and this record takes their place.  It holds its own record number,
+    which is the number of records kept, and the number of bytes cut.  It belongs to no command and starts its own
+    chain. -/
+
+structure RepairRec where
+  at_ : Nat
+  cut : Nat
+  deriving DecidableEq, Repr
+
+def repairC : RecCodec RepairRec where
+  L := [.lit 1 0xF6, .num 5, .num 8, z 231]
+  toC x := [.n x.at_, .n x.cut]
+  build cs := ⟨nAt cs 0, nAt cs 1⟩
+  chk x := decide (1 ≤ x.cut)
+
+theorem repairC_ok : repairC.Lawful ∧ width repairC.L = bodyBytes :=
+  ⟨fun y _ => by cases y; rfl, rfl⟩
+
+/-! ## Run-end record (tag `0x77`)
+
+    Written after a run's records are read back from the disk and pass the check, and synced before any answer of
+    the run is given: every record before it was answered or may have been.  It holds its own record number and the
+    SHA3-512 of every byte of its run, from the record after the run-end record before it (or the first record) to
+    the record before it, as read back.  It belongs to no command and starts its own chain.  A repair record is a
+    commit point in the same way.  Opening a log cuts only records after the last commit point. -/
+
+structure RunEnd where
+  at_ : Nat
+  dig : Bytes
+  deriving DecidableEq, Repr
+
+def endC : RecCodec RunEnd where
+  L := [.lit 1 0x77, .num 5, .blk 64, z 175]
+  toC x := [.n x.at_, .b x.dig]
+  build cs := ⟨nAt cs 0, bAt cs 1⟩
+  chk _ := true
+
+theorem endC_ok : endC.Lawful ∧ width endC.L = bodyBytes :=
+  ⟨fun y _ => by cases y; rfl, rfl⟩
+
+/-! ## Fact rows of kinds 14, 15 and 22-26 (§2.4)
+
+    A fact row's tag is its kind, with bit 7 set when the kind has an odd number of one bits: OBLIG 14 is `0x8E`,
+    CLAIM 22 `0x96`, FUND 25 `0x99`, ACTACK 26 `0x9A`; the others are their kind. -/
+
+/-- The base fact row from `op` to `roff`; the tag byte is the layout's literal. -/
 structure FactHdr where
   op : Nat
   subject : Bytes
@@ -382,7 +426,7 @@ structure ObligF where
   deriving DecidableEq, Repr
 
 def obligC : RecCodec ObligF where
-  L := hdrL 14 ++ [.num 8, .num 8, .num 4, .blk 32, .blk 51, .blk 21, .num 1, z 32]
+  L := hdrL 0x8E ++ [.num 8, .num 8, .num 4, .blk 32, .blk 51, .blk 21, .num 1, z 32]
   toC x := x.h.cells ++ [.n x.owed, .n x.dueMs, .n x.rule, .b x.pop, .b x.item, .b x.period, .n x.ecls]
   build cs := ⟨hdrOf cs, nAt cs 8, nAt cs 9, nAt cs 10, bAt cs 11, bAt cs 12, bAt cs 13, nAt cs 14⟩
   chk x := x.h.ok && decide (x.ecls ≤ 4) && dispOk 51 x.item && dispOk 21 x.period
@@ -410,6 +454,32 @@ def cashC : RecCodec CashF where
 theorem cashC_ok : cashC.Lawful ∧ width cashC.L = bodyBytes :=
   ⟨fun y _ => by cases y with | mk h => cases h; rfl, rfl⟩
 
+/-- Quarantine marker (tag `0x50`, the fact record's §2.5): the statement `sid` of fact kind `fkind` about `subject`
+    from source `src` is held unknown for `cause`.  `sidk` is 1 when `sid` is known; when it is 0, `sid` is zero, so a
+    marker has one encoding. -/
+structure MarkRec where
+  src : Nat
+  fkind : Nat
+  subject : Bytes
+  receipt : Nat
+  roff : Nat
+  cause : Nat
+  sidk : Nat
+  sid : Bytes
+  deriving DecidableEq, Repr
+
+/-- The cause of a marker written for a payment whose origin is already recorded with other cash (a conflict). -/
+def originConflict : Nat := 1
+
+def markC : RecCodec MarkRec where
+  L := [.lit 1 0x50, .num 2, .num 1, .blk 32, .num 5, .num 5, .num 1, .num 1, .blk 32, z 165]
+  toC x := [.n x.src, .n x.fkind, .b x.subject, .n x.receipt, .n x.roff, .n x.cause, .n x.sidk, .b x.sid]
+  build cs := ⟨nAt cs 0, nAt cs 1, bAt cs 2, nAt cs 3, nAt cs 4, nAt cs 5, nAt cs 6, bAt cs 7⟩
+  chk x := decide (x.cause ≠ 0 ∧ x.sidk ≤ 1) && (x.sidk == 1 || allZero x.sid)
+
+theorem markC_ok : markC.Lawful ∧ width markC.L = bodyBytes :=
+  ⟨fun y _ => by cases y; rfl, rfl⟩
+
 /-- CLAIM, kind 22: an offset claim. -/
 structure ClaimF where
   h : FactHdr
@@ -422,7 +492,7 @@ structure ClaimF where
   deriving DecidableEq, Repr
 
 def claimC : RecCodec ClaimF where
-  L := hdrL 22 ++ [.num 8, .num 8, .num 8, .num 1, .num 1, .blk 51, z 80]
+  L := hdrL 0x96 ++ [.num 8, .num 8, .num 8, .num 1, .num 1, .blk 51, z 80]
   toC x := x.h.cells ++ [.n x.amount, .n x.deadlineMs, .n x.eventMs, .n x.role, .n x.ecls, .b x.claim]
   build cs := ⟨hdrOf cs, nAt cs 8, nAt cs 9, nAt cs 10, nAt cs 11, nAt cs 12, bAt cs 13⟩
   chk x := x.h.ok && decide (x.ecls ≤ 4) && dispOk 51 x.claim
@@ -481,7 +551,7 @@ structure FundF where
   deriving DecidableEq, Repr
 
 def fundC : RecCodec FundF where
-  L := hdrL 25 ++ [.num 8, .num 8, .num 1, .num 1, .num 1, .blk 51, z 87]
+  L := hdrL 0x99 ++ [.num 8, .num 8, .num 1, .num 1, .num 1, .blk 51, z 87]
   toC x := x.h.cells ++ [.n x.amount, .n x.eventMs, .n x.cclass, .n x.estatus, .n x.ecls, .b x.ref]
   build cs := ⟨hdrOf cs, nAt cs 8, nAt cs 9, nAt cs 10, nAt cs 11, nAt cs 12, bAt cs 13⟩
   chk x := x.h.ok && decide (x.ecls ≤ 4) && dispOk 51 x.ref
@@ -500,13 +570,50 @@ structure AckF where
   deriving DecidableEq, Repr
 
 def ackC : RecCodec AckF where
-  L := hdrL 26 ++ [.blk 32, .blk 64, .num 8, .num 1, .blk 51, z 1]
+  L := hdrL 0x9A ++ [.blk 32, .blk 64, .num 8, .num 1, .blk 51, z 1]
   toC x := x.h.cells ++ [.b x.action, .b x.payload, .n x.eventMs, .n x.ecls, .b x.ackref]
   build cs := ⟨hdrOf cs, bAt cs 8, bAt cs 9, nAt cs 10, nAt cs 11, bAt cs 12⟩
   chk x := x.h.ok && decide (x.ecls ≤ 4) && dispOk 51 x.ackref
 
 theorem ackC_ok : ackC.Lawful ∧ width ackC.L = bodyBytes :=
   ⟨fun y _ => by cases y with | mk h => cases h; rfl, rfl⟩
+
+/-! ## The rows-file record: a body and its link
+
+    A record of the `facts` file is 256 bytes, the rows file's codec (`RowsFile.mkRecord`): the 245-byte body, then
+    its link: `prevCore`, the previous record of the same chain plus one (0 for none, 40 bits), the number of records
+    of the chain up to and including this one (16 bits, held at 65,535 once it gets there), and four zero bytes (the
+    flags, which only the line path's rows files use, and the padding).  The chains (§2.3-§2.6): an obligation's
+    state rows; the facts and quarantine markers of one subject; each case; the shard's command records; and a text
+    record's, which is the record it follows. -/
+
+def recBytes : Nat := 256
+
+structure Link where
+  prev : Nat
+  count : Nat
+  deriving DecidableEq, Repr
+
+def linkL : List Fld := [.num 5, .num 2, z 4]
+
+def Link.cells (l : Link) : List Cell := [.n l.prev, .n l.count]
+
+/-- The count of the record after one of count `c` in its chain (0: the chain starts). -/
+def nextCount (c : Nat) : Nat := min (c + 1) 65535
+
+/-- A whole record as its body and its link; `none` unless it is 256 bytes and the flags and padding are zero. -/
+def unwrap (r : Bytes) : Option (Bytes × Link) :=
+  if r.length = recBytes then
+    (decExact linkL (r.drop bodyBytes)).map fun cs => (r.take bodyBytes, ⟨nAt cs 0, nAt cs 1⟩)
+  else none
+
+/-- A whole record's body. -/
+def bodyOf (r : Bytes) : Option Bytes := (unwrap r).map (·.1)
+
+/-- The tag of a record or of its body: the first byte. -/
+def tagOf (r : Bytes) : Nat := (r.head?.map UInt8.toNat).getD 0
+
+theorem record_width : bodyBytes + width linkL = recBytes := rfl
 
 /-! ## Checks against the design's offset tables
 
@@ -565,6 +672,29 @@ def sampleCmd : CmdRec :=
 #guard joinFrom 0 (partsFrom 0 (pat 500 1)) == some (pat 500 1)
 #guard (partsFrom 0 (pat 500 1)).all fun t => textC.dec (textC.enc t) == some t
 #guard joinFrom 0 [⟨0, 241, pat 241 1 ++ [0]⟩, ⟨1, 1, [7] ++ zeros 241⟩] == none
+#guard ((partsFrom 255 (pat 500 1)).map (·.part)) == [255, 0, 1] && joinFrom 255 (partsFrom 255 (pat 500 1)) == some (pat 500 1)
+#guard repairC.dec (repairC.enc ⟨7, 300⟩) == some ⟨7, 300⟩ && repairC.dec (repairC.enc ⟨7, 0⟩) == none
+#guard endC.dec (endC.enc ⟨7, List.replicate 64 9⟩) == some ⟨7, List.replicate 64 9⟩ &&
+  slice (endC.enc ⟨7, List.replicate 64 9⟩) 0 7 == [0x77, 7, 0, 0, 0, 0, 9]
+
+/-- The tag of a layout: its first field, a one-byte literal. -/
+def tagOfL : List Fld → Nat
+  | .lit 1 v :: _ => v
+  | _ => 0
+
+/-- Every record tag of the log, read from the layouts themselves. -/
+def recordTags : List Nat :=
+  [tagOfL stateC.L, tagOfL caseC.L, tagOfL actionC.L, tagOfL cmdC.L, tagOfL textC.L, tagOfL repairC.L, tagOfL endC.L,
+    tagOfL markC.L, tagOfL obligC.L, tagOfL cashC.L, tagOfL claimC.L, tagOfL supportC.L, tagOfL reportC.L,
+    tagOfL fundC.L, tagOfL ackC.L]
+
+/-- The number of bits in which two bytes differ. -/
+def bitsApart (a b : Nat) : Nat := ((List.range 8).filter fun k => a.testBit k != b.testBit k).length
+
+-- Any two record tags differ in at least two bits: one changed bit never turns a record into one of another kind.
+#guard recordTags == [0x60, 0x72, 0xF3, 0x74, 0xF5, 0xF6, 0x77, 0x50, 0x8E, 0x0F, 0x96, 0x17, 0x18, 0x99, 0x9A]
+#guard (List.range recordTags.length).all fun i => (List.range recordTags.length).all fun j =>
+  i == j || 2 ≤ bitsApart recordTags[i]! recordTags[j]!
 
 def sampleCash : CashF :=
   ⟨⟨0, pat 32 1, pat 32 40, 20260101, 20260101, 99991231, 5, 7⟩, 30000, 1767225600000, zeros 32, pat 32 9, 0,
@@ -574,5 +704,14 @@ def sampleCash : CashF :=
 #guard slice (cashC.enc sampleCash) 88 8 == leBytes 8 30000 && slice (cashC.enc sampleCash) 169 51 == ident 51 "origin-1"
 #guard cashC.dec (cashC.enc { sampleCash with origin := 0xFF :: pat 32 3 ++ zeros 18 }) != none
 #guard cashC.dec (cashC.enc { sampleCash with origin := 0xFF :: pat 33 3 ++ zeros 17 }) == none
+
+def sampleMark : MarkRec := ⟨1, 15, pat 32 40, 0, 0, originConflict, 1, pat 32 9⟩
+
+#guard markC.dec (markC.enc sampleMark) == some sampleMark
+#guard slice (markC.enc sampleMark) 0 4 == [0x50, 1, 0, 15] && slice (markC.enc sampleMark) 46 3 == [1, 1, (pat 32 9).head!]
+#guard markC.dec (markC.enc { sampleMark with cause := 0 }) == none
+-- An unknown statement (`sidk = 0`) has a zero `sid`; any other `sid` with it is refused.
+#guard markC.dec (markC.enc { sampleMark with sidk := 0 }) == none
+#guard markC.dec (markC.enc { sampleMark with sidk := 0, sid := zeros 32 }) == some { sampleMark with sidk := 0, sid := zeros 32 }
 
 end BlindLedger.Gate.Obligations

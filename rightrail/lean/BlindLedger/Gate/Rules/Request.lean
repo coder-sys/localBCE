@@ -71,14 +71,15 @@ structure RequestBA where
   period : ByteArray
   lines : List ByteArray
   evidenceRefs : List ByteArray
+  contest : Bool
 
 @[inline] def RequestBA.toModel (r : RequestBA) : Request :=
   ⟨r.tenantId.toList, r.programId.toList, r.flow, r.commandKey.toList, r.paymentId.toList, r.memberKey.toList,
-    r.payeeRef.toList, r.amountCents, r.period.toList, r.lines.map (·.toList), r.evidenceRefs.map (·.toList)⟩
+    r.payeeRef.toList, r.amountCents, r.period.toList, r.lines.map (·.toList), r.evidenceRefs.map (·.toList), r.contest⟩
 
 def RequestBA.ofModel (r : Request) : RequestBA :=
   ⟨r.tenantId.toByteArray, r.programId.toByteArray, r.flow, r.commandKey.toByteArray, r.paymentId.toByteArray,
     r.memberKey.toByteArray, r.payeeRef.toByteArray, r.amountCents, r.period.toByteArray, r.lines.map (·.toByteArray),
-    r.evidenceRefs.map (·.toByteArray)⟩
+    r.evidenceRefs.map (·.toByteArray), r.contest⟩
 
 end BlindLedger.Gate.Rules

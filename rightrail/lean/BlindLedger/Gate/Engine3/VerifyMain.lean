@@ -7,7 +7,8 @@ import BlindLedger.Gate.Engine3.PipeIO
     not resume, or a fault of it, prints a `VSTORE_REFUSED` line with the cause, and the store is rebuilt from the log.
     `rows-offline` checks the whole log as it is; `rows-tail` follows it as the engine writes, and ends when no frame has come for `IDLE_MS` (default 3000).  `VDIR` (default `DIR.verify`) is the verifier's
     own store.  With `BATCHES` the log must hold exactly that many whole frames (a cut log is a mismatch); without it a
-    log with no whole frame verifies nothing and is refused.
+    log with no whole frame verifies nothing and is refused.  The store's `facts` file must then be the records its fact
+    frames derive, byte for byte.
     Exit 0 and a `VERIFIED` line with the cost; 3 and a `VERIFY_MISMATCH`, `VERIFY_COUNT` or `TORN_TAIL` (bytes after
     the last whole frame, with their offset and batch number) line; 64 usage; 4 no log or
     no whole frame.
@@ -41,7 +42,7 @@ def report (c : Ctx) (n l0 l wall : Nat) : IO Unit := do
     checked in all, and the time of the last frame; or the first mismatch. -/
 def follow {σ : Type} (c : Ctx) (vf : Option σ → Except String Pre → IO (Except Mismatch (σ × Task (Except Mismatch Nat))))
     (num : σ → Nat) (log : UInt32) (logP : String) (tail : Bool) (idle : Nat) (v0 : Option σ) (pos0 lines0 : Nat)
-    (save : σ → Nat → Nat → IO Unit) : IO (Except Mismatch (Option σ × Nat × Nat × Nat)) := do
+    (save : σ → Nat → Nat → IO σ) : IO (Except Mismatch (Option σ × Nat × Nat × Nat)) := do
   let prog := (← IO.getEnv "RR_V3_PROGRESS").isSome
   let mut v := v0
   let mut pos := pos0
@@ -55,9 +56,13 @@ def follow {σ : Type} (c : Ctx) (vf : Option σ → Except String Pre → IO (E
     | .error m => return .error m
     | .ok (v', pos', k) =>
       lines := lines + k
+      let mut v' := v'
       if pos' != pos then
         last ← IO.monoNanosNow
-        if let some x := v' then save x pos' lines
+        -- the saved state replaces the one saved, which is dropped first so no second reference keeps its facts' bytes shared
+        if let some x := v' then
+          v' := none
+          v' := some (← save x pos' lines)
         if prog then  -- bench only: the stage clocks after this pump, for the history bench (tests/gate_bench.py --e3)
           IO.println s!"PROGRESS {(v'.map num).getD 0} {lines} {(← c.prof.get).toList}"
           (← IO.getStdout).flush
@@ -67,14 +72,16 @@ def follow {σ : Type} (c : Ctx) (vf : Option σ → Except String Pre → IO (E
     IO.sleep 2
   return .ok (v, pos, lines, last)
 
-/-- The checker's history in `vdir`, rebuilt from nothing (`vlast` removed first): a new key, so every record of an
+/-- The checker's history in `vdir`, rebuilt from nothing (`vlast` and `vfacts` removed first): a new key, so every record of an
     earlier build is cut. -/
 def rebuild (c : Ctx) : IO (VC × ByteArray) := do
   let lp := s!"{c.vdir}/vlast"
   if ← System.FilePath.pathExists lp then IO.FS.removeFile lp
+  let fp := s!"{c.vdir}/vfacts"
+  if ← System.FilePath.pathExists fp then IO.FS.removeFile fp
   let k ← VStore.newKey s!"{c.vdir}/vkey"
   match ← VMirror.load c.vdir k c.shard with
-  | .ok m => return (⟨m, ⟨0, 0, 0⟩, ⟨0, 0, 0⟩, .empty, .empty, 0⟩, k)
+  | .ok m => return (⟨m, ⟨0, 0, 0⟩, ⟨0, 0, 0⟩, .empty, .empty, 0, {}, BlindLedger.Gate.FactFrame.Refs.none BlindLedger.Gate.FactFrame.sha, .empty, .empty, none⟩, k)
   | .error e => throw (IO.userError s!"checker store: {e}")
 
 /-- `follow` on the checker's history, resumed from `vlast` when it and the store agree (`resume`).  A store that
@@ -132,10 +139,12 @@ def main (args : List String) : IO UInt32 := do
   let prof ← IO.mkRef (Array.replicate 13 0)
   let c : Ctx := ⟨vdir, sec, shard, skip, prof⟩
   let tail := mode0 == "rows-tail"
-  -- the batches, the log position, the lines checked before this start and in all, and the time of the last frame
-  let r : Except Mismatch (Nat × Nat × Nat × Nat × Nat) ←
-    pure <| (← followC c log logP tail idle).map fun (v, pos, l0, l, last) => ((v.map (·.n)).getD 0, pos, l0, l, last)
-  let (n, pos, l0, l, last) ← match r with
+  -- the batches, the facts derived, the log position, the lines checked before this start and in all, and the time of the
+  -- last frame
+  let r : Except Mismatch (Nat × BlindLedger.Gate.FactFrame.Facts × Nat × Nat × Nat × Nat) ←
+    pure <| (← followC c log logP tail idle).map fun (v, pos, l0, l, last) =>
+      ((v.map (·.n)).getD 0, (v.map (·.fs)).getD {}, pos, l0, l, last)
+  let (n, fs, pos, l0, l, last) ← match r with
     | .error m => IO.println m.show; return 3
     | .ok x => pure x
   let now ← IO.monoNanosNow
@@ -146,6 +155,10 @@ def main (args : List String) : IO UInt32 := do
     return 3
   if expect.any (· != n) then IO.println s!"VERIFY_COUNT({shard}) expected {expect.getD 0} batches, log has {n}"; return 3
   if expect.isNone && n == 0 then IO.println s!"VERIFY_EMPTY({shard}): no whole frame in the log"; return 4
+  -- the store's `facts` file must be the records the log's fact frames derive, or a prefix of them, or them and bytes past
+  match ← factsDiff c dir fs with
+  | .error m => IO.println m.show; return 3
+  | .ok note => if let some s := note then IO.println s
   -- tail mode: the wall time ends at the last frame, not after the idle wait
   report c n l0 l (if tail then last - t0 else now - t0)
   return if skip.isEmpty then 0 else 2

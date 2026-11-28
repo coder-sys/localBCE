@@ -257,11 +257,14 @@ the checker re-checks the sum (see "Lean decides, the owner commits" above).
   proves the boundary; no second ledger, speculative orchestration layer or duplicate receipt format compensates for
   an unresolved contract. Corruption, omission, duplication, replay, stale revision, wrong scope, cross-owner,
   cross-period and wrong-mode cases are visible in the record, never silent, and reach staff once per cause
-  (Constitution XIV.4). A failed determination leaves durable bytes unchanged; a version-tag rejection test is not
+  (Constitution XII.10). A failed determination leaves durable bytes unchanged; a version-tag rejection test is not
   evidence of historical-schema compatibility. A receipt binds the exact scope, revision, rule identity, evidence
   references, authority, result fields and digest domains it claims; it is not source truth or payment confirmation.
   A pinned Lean artifact is linked to the runtime only after refinement, theorem, adapter, mutation, known-answer and
   resource evidence exists.
+- **Build order for a new boundary (Constitution XI.6).** Build in order: exact input and identity contract, then a
+  bounded producer artifact, then an independent verifier, then mutation and replay tests, then resource and cleanup
+  evidence, then composition with the next verified piece.
 - **Bounded resources.** Set finite record, payload, package, memory and process limits. Measure the complete path with
   separately attributable ingestion, owner transaction, independent check, restore and recovery. A component benchmark
   is not a system SLA; missing targets remain unknown. A later commercial or routing need never silently expands
@@ -293,14 +296,6 @@ The target (`docs/RIGHTRAIL_FULL_STACK_TARGET.md`) is an inline gate on every pa
 - On synthetic data the gate has a rules-worker host (`app/right_rail_gate_decide.py`), a checkpoint producer, one
   ML-DSA-87 signer and a reference payer (`app/right_rail_gate_*.py`; Lean decides every release). It has no network
   service, independent witness or fenced standby. A bypass is admitted by the rules worker alone (`STATUS.md`).
-- The gate rules (`lean/BlindLedger/Gate/Rules/Spec.lean`, contract `conformance/GATE_RULES_V2.md`) read pinned
-  reference snapshots of five kinds: deaths 1, provider deaths 2, exclusions 3, enrollment 4 and eligibility 7 (G2,
-  localBCE's aid code and benefit level; synthetic, not legally verified), beside the released and unresolved sets
-  (5, 6). An answer's reason bit is the reason's `Reason.idx` (29 reasons, bits 0-28), never its place in name order. A
-  missing or unusable snapshot gives a review reason, never a HOLD. The history engine in `Gate/Engine3` reads the
-  eligibility snapshot as its fifth feed; until the request frame carries that feed it reads it as absent, so every
-  engine line carries `STALE_ELIGIBILITY` (review). The signed payment-window path (`Gate/Scoped`, `Gate/Consume`)
-  reads no eligibility.
 
 ## Rejected directions
 

@@ -1,4 +1,5 @@
-import BlindLedger.Gate.Spec
+import BlindLedger.Gate.Payer
+import BlindLedger.Gate.Cosign.InstallTheorems
 
 namespace BlindLedger.Gate
 
@@ -38,30 +39,30 @@ theorem verifyToken_transfer {c : Crypto} {s : PayerState} {p : Payment} {bytes 
   simp only [allows, Bool.and_eq_true, beq_iff_eq] at ha
   exact ⟨t, hd, ha.1, ha.2⟩
 
-theorem raiseFence_ge {f : Bytes → Nat} {tenant : Bytes} {e : Nat} (x : Bytes) :
-    f x ≤ raiseFence f tenant e x := by
-  unfold raiseFence
-  split
-  · exact Nat.le_max_left _ _
-  · exact Nat.le_refl _
-
-theorem raiseFence_self (f : Bytes → Nat) (tenant : Bytes) (e : Nat) :
-    e ≤ raiseFence f tenant e tenant := by
-  unfold raiseFence
-  rw [if_pos rfl]
-  exact Nat.le_max_right _ _
-
-/-- Installing a certificate never lowers a fence, and a valid chain lifts its
-    tenant's to at least its epoch whether or not the certificate fits (the
+/-- Installing a certificate never lowers a fence, and a verified one (answered `installed`, `unfit` or
+    `equivocates`) lifts its tenant's to at least its epoch whether or not the certificate fits (the
     model's `PayerLearnFence`; a refused newer certificate fails closed). -/
-theorem installCert_raises_fence (c : Crypto) (s : PayerState) (e : EpochCert) :
-    (∀ x, s.fence x ≤ (installCert c s e).1.fence x) ∧
-      (c.certChainOk e = true → e.epoch ≤ (installCert c s e).1.fence e.tenantId) := by
-  unfold installCert
-  split
-  · exact ⟨fun x => raiseFence_ge x, fun _ => raiseFence_self _ _ _⟩
-  · rename_i hc
-    exact ⟨fun _ => Nat.le_refl _, fun h => absurd ((Bool.and_eq_true _ _).mp h).1 hc⟩
+theorem installCert_raises_fence (c : Crypto) (s : PayerState) (b : Bytes) :
+    (∀ x, s.fence x ≤ (installCert c s b).1.fence x) ∧
+      ∀ e, Cosign.decode b = some e →
+        (installCert c s b).2 = .installed ∨ (installCert c s b).2 = .unfit ∨
+          (installCert c s b).2 = .equivocates → e.epoch ≤ (installCert c s b).1.fence e.tenantId := by
+  refine ⟨(Cosign.installCert_keeps c s.toAuth b).2.2.2.2.2, fun e hd h => ?_⟩
+  obtain ⟨e', ch, hd', -, -, -, heq⟩ := Cosign.installCert_recorded h
+  obtain rfl : e' = e := Option.some.inj (hd'.symm.trans hd)
+  show e'.epoch ≤ (Cosign.installCert c s.toAuth b).1.fence e'.tenantId
+  rw [heq]
+  unfold Cosign.record
+  repeat' split
+  all_goals exact Cosign.raiseFence_self _ _ _
+
+/-- An authority link never lowers a fence, and one that enters the state (answered `genesis`, `extends` or
+    `conflicts`) lifts its tenant's to the first epoch of its generation. -/
+theorem installLink_raises_fence (c : Crypto) (pin : Bytes) (s : PayerState) (n : Cosign.SignedLink) :
+    (∀ x, s.fence x ≤ (installLink c pin s n).1.fence x) ∧
+      ((installLink c pin s n).2 = .genesis ∨ (installLink c pin s n).2 = .extends ∨
+        (installLink c pin s n).2 = .conflicts → n.gen * Cosign.genSpan ≤ (installLink c pin s n).1.fence n.tenantId) :=
+  ⟨(Cosign.installLink_keeps c pin s.toAuth n).2.2.2, fun h => Cosign.installLink_fence h⟩
 
 /-- The payer invariant: each tenant's fence is at or above every installed
     certificate's epoch, and every stored checkpoint was verified under an
@@ -75,24 +76,27 @@ theorem coherent_empty {s : PayerState} (hc : s.certs = []) (hk : s.checkpoints 
     Coherent s := by
   simp [Coherent, hc, hk]
 
-theorem installCert_coherent (c : Crypto) (e : EpochCert) {s : PayerState} (hs : Coherent s) :
-    Coherent (installCert c s e).1 := by
-  unfold installCert
-  split
-  · refine ⟨fun e' he' => ?_, fun x hx => ?_⟩
-    · dsimp only at he'
-      split at he'
-      · rcases List.mem_cons.1 he' with rfl | he'
-        · exact raiseFence_self _ _ _
-        · exact Nat.le_trans (hs.1 e' he') (raiseFence_ge _)
-      · exact Nat.le_trans (hs.1 e' he') (raiseFence_ge _)
-    · obtain ⟨e', he', h1, h2⟩ := hs.2 x hx
-      refine ⟨e', ?_, h1, h2⟩
-      dsimp only
-      split
-      · exact List.mem_cons_of_mem _ he'
-      · exact he'
-  · exact hs
+theorem installCert_coherent (c : Crypto) (b : Bytes) {s : PayerState} (hs : Coherent s) :
+    Coherent (installCert c s b).1 := by
+  refine ⟨fun x hx => ?_, fun y hy => ?_⟩
+  · rcases Cosign.installCert_adds c s.toAuth b with hc | ⟨e, hd, hc, -, -, ha⟩
+    · have hx' : x ∈ s.certs := by rw [← hc]; exact hx
+      exact Nat.le_trans (hs.1 x hx') ((installCert_raises_fence c s b).1 _)
+    · have hx' : x ∈ e :: s.certs := by rw [← hc]; exact hx
+      rcases List.mem_cons.1 hx' with rfl | hx'
+      · exact (installCert_raises_fence c s b).2 x hd (.inl ha)
+      · exact Nat.le_trans (hs.1 x hx') ((installCert_raises_fence c s b).1 _)
+  · obtain ⟨e, he, h1, h2⟩ := hs.2 y hy
+    exact ⟨e, (Cosign.installCert_keeps c s.toAuth b).2.2.2.1 e he, h1, h2⟩
+
+theorem installLink_coherent (c : Crypto) (pin : Bytes) (n : Cosign.SignedLink) {s : PayerState} (hs : Coherent s) :
+    Coherent (installLink c pin s n).1 := by
+  obtain ⟨hc, -, -, hf⟩ := Cosign.installLink_keeps c pin s.toAuth n
+  refine ⟨fun x hx => ?_, fun y hy => ?_⟩
+  · have hx' : x ∈ s.certs := by rw [← hc]; exact hx
+    exact Nat.le_trans (hs.1 x hx') (hf _)
+  · obtain ⟨e, he, h1, h2⟩ := hs.2 y hy
+    exact ⟨e, by rw [← hc] at he; exact he, h1, h2⟩
 
 theorem storeCheckpoint_coherent {c : Crypto} {s s' : PayerState} {bytes : Bytes}
     (hs : Coherent s) (h : storeCheckpoint c s bytes = some s') : Coherent s' := by
@@ -109,7 +113,9 @@ theorem storeCheckpoint_coherent {c : Crypto} {s s' : PayerState} {bytes : Bytes
         exact hs
       · split at h
         · simp at h
-        · obtain rfl := Option.some.inj h
+        · split at h
+          case isFalse => simp at h
+          obtain rfl := Option.some.inj h
           refine ⟨hs.1, fun y hy => ?_⟩
           rcases List.mem_cons.1 hy with rfl | hy
           · obtain ⟨e, he, hm⟩ := List.any_eq_true.1 hany
@@ -152,17 +158,17 @@ theorem verifyToken_pinned {c : Crypto} {s : PayerState} {p : Payment} {bytes : 
   simpa [keyPinned, payKey] using hk
 
 /-- Checks 6 and 7: an accepted token comes from the shard its own tenant and
-    member key route to, under the tenant's shard count. -/
+    member key route to, under the tenant's shard count for the token's epoch. -/
 theorem verifyToken_route {c : Crypto} {s : PayerState} {p : Payment} {bytes : Bytes} {t : Token}
     (h : verifyToken c s p bytes = true) (hd : decodeToken bytes = some t) :
-    ∃ n, shardCountOf s t.leaf.tenantId = some n ∧
+    ∃ n, countAt s t.leaf.tenantId t.leaf.epoch = some n ∧
       t.leaf.shardId = shardOf c.hash t.leaf.tenantId t.leaf.memberKey n := by
   obtain ⟨u, -, hu, -, -, -, -, hm, hr, -⟩ := (verifyToken_iff c s p bytes).1 h
   obtain rfl : u = t := Option.some.inj (hu.symm.trans hd)
   simp only [paymentMatches, Bool.and_eq_true, beq_iff_eq, and_assoc] at hm
   obtain ⟨ht, -, -, -, hk, -⟩ := hm
   unfold routed at hr
-  cases hn : shardCountOf s p.tenantId with
+  cases hn : countAt s p.tenantId u.leaf.epoch with
   | none => simp [hn] at hr
   | some n =>
     simp only [hn, Option.any_some, beq_iff_eq] at hr
@@ -193,10 +199,11 @@ theorem verifyToken_foreign_grant {c : Crypto} {s : PayerState} {p : Payment} {b
   · obtain ⟨g, hgs, hten, -, hid, -⟩ := verifyToken_grant_tenant h hd
     exact absurd hten (hg g hgs hid)
 
-/-- The payer's steps: install a certificate, store a checkpoint, send a
+/-- The payer's steps: install an authority link, install a certificate, store a checkpoint, send a
     command (the only step that pins), release, or move the clock and grants. -/
 inductive Step (c : Crypto) : PayerState → PayerState → Prop
-  | install (s : PayerState) (e : EpochCert) : Step c s (installCert c s e).1
+  | link (s : PayerState) (pin : Bytes) (n : Cosign.SignedLink) : Step c s (installLink c pin s n).1
+  | install (s : PayerState) (b : Bytes) : Step c s (installCert c s b).1
   | store {s s' : PayerState} {b : Bytes} : storeCheckpoint c s b = some s' → Step c s s'
   | send {s s' : PayerState} {p : Payment} : send s p = .ok s' → Step c s s'
   | pay {s s' : PayerState} {p : Payment} {b : Bytes} : release c s p b = some s' → Step c s s'
@@ -207,30 +214,32 @@ inductive Steps (c : Crypto) : PayerState → PayerState → Prop
   | refl (s : PayerState) : Steps c s s
   | tail {s s' s'' : PayerState} : Steps c s s' → Step c s' s'' → Steps c s s''
 
-theorem installCert_shardCount {c : Crypto} {s : PayerState} {e : EpochCert} {tenant : Bytes}
-    {n : Nat} (h : shardCountOf s tenant = some n) : shardCountOf (installCert c s e).1 tenant = some n := by
-  unfold shardCountOf at h ⊢
-  cases hx : s.certs.find? (·.tenantId == tenant) with
-  | none => rw [hx] at h; cases h
-  | some x =>
-    rw [hx] at h
-    cases h
-    unfold installCert
-    split
-    · dsimp only
-      split
-      · rename_i hfit
-        cases het : (e.tenantId == tenant) with
+/-- A certificate never changes the shard count its tenant already has for an epoch. -/
+theorem installCert_countAt {c : Crypto} {s : PayerState} {b : Bytes} {tenant : Bytes} {E n : Nat}
+    (h : countAt s tenant E = some n) : countAt (installCert c s b).1 tenant E = some n := by
+  rcases Cosign.installCert_adds c s.toAuth b with hc | ⟨e, -, hc, hn, -, -⟩
+  · unfold countAt at h ⊢
+    rw [show (installCert c s b).1.certs = s.certs from hc]
+    exact h
+  · unfold countAt at h ⊢
+    rw [show (installCert c s b).1.certs = e :: s.certs from hc]
+    cases hx : s.certs.find? (fun e => e.tenantId == tenant && e.epoch == E) with
+    | none => rw [hx] at h; cases h
+    | some x =>
+      have hm := List.mem_of_find?_eq_some hx
+      have hp := List.find?_some hx
+      simp only [Bool.and_eq_true, beq_iff_eq] at hp
+      have hne : (e.tenantId == tenant && e.epoch == E) = false := by
+        cases hq : (e.tenantId == tenant && e.epoch == E) with
+        | false => rfl
         | true =>
-          simp only [fits, Bool.and_eq_true, List.all_eq_true] at hfit
-          have hall := hfit.2 x (List.mem_of_find?_eq_some hx)
-          have hxt := List.find?_some hx
-          rw [beq_iff_eq.1 hxt, ← beq_iff_eq.1 het] at hall
-          simp only [bne_self_eq_false, Bool.false_or, Bool.and_eq_true, beq_iff_eq] at hall
-          simp only [List.find?, het, Option.map, hall.1]
-        | false => simp only [List.find?, het, hx, Option.map]
-      · simp only [hx, Option.map]
-    · simp only [hx, Option.map]
+          simp only [Bool.and_eq_true, beq_iff_eq] at hq
+          have hno := List.any_eq_false.1 hn x hm
+          exact absurd (by simp [hp.1, hp.2, hq.1, hq.2]) hno
+      simp only [List.find?_cons, hne]
+      rw [hx] at h
+      rw [hx]
+      exact h
 
 theorem storeCheckpoint_keeps {c : Crypto} {s s' : PayerState} {bytes : Bytes}
     (h : storeCheckpoint c s bytes = some s') : s'.certs = s.certs ∧ s'.pins = s.pins := by
@@ -246,7 +255,9 @@ theorem storeCheckpoint_keeps {c : Crypto} {s s' : PayerState} {bytes : Bytes}
         exact ⟨rfl, rfl⟩
       · split at h
         · simp at h
-        · obtain rfl := Option.some.inj h
+        · split at h
+          case isFalse => simp at h
+          obtain rfl := Option.some.inj h
           exact ⟨rfl, rfl⟩
     · simp at h
 
@@ -313,18 +324,22 @@ theorem send_new {s s' : PayerState} {p : Payment} {k : PayKey} {m : Bytes} (h :
     · cases h
 
 /-- A recorded fork blocks its shard in every epoch and both sides' epochs on every shard of its tenant; an
-    equivocation blocks its tenant and epoch: no token under them is accepted while it is on record (check 11). -/
+    equivocation blocks its tenant and epoch; a link conflict of the tenant's present chain blocks every epoch
+    from its generation on: no token under them is accepted while it is on record (check 11). -/
 theorem verifyToken_unforked {c : Crypto} {s : PayerState} {p : Payment} {bytes : Bytes}
     {t : Token} (h : verifyToken c s p bytes = true) (hd : decodeToken bytes = some t) :
     (∀ f ∈ s.forked, f.1.checkpoint.tenantId = t.leaf.tenantId → f.1.checkpoint.shardId ≠ t.leaf.shardId ∧
       f.1.checkpoint.epoch ≠ t.leaf.epoch ∧ f.2.checkpoint.epoch ≠ t.leaf.epoch) ∧
-      ∀ q ∈ s.equivocations, q.1.tenantId = t.leaf.tenantId → q.1.epoch ≠ t.leaf.epoch := by
+      (∀ q ∈ s.equivocations, q.1.tenantId = t.leaf.tenantId → q.1.epoch ≠ t.leaf.epoch) ∧
+      Cosign.linkBlocked s.toAuth t.leaf.tenantId t.leaf.epoch = false := by
   obtain ⟨u, -, hu, -, -, -, -, -, -, -, -, -, hf, -⟩ := (verifyToken_iff c s p bytes).1 h
   obtain rfl : u = t := Option.some.inj (hu.symm.trans hd)
-  simp only [unforked, blocked, Bool.not_eq_true', Bool.or_eq_false_iff, List.any_eq_false, Bool.and_eq_true, beq_iff_eq] at hf
-  obtain ⟨h1, h2⟩ := hf
+  simp only [unforked, blocked, Bool.not_eq_true', Bool.or_eq_false_iff] at hf
+  obtain ⟨⟨h1, h2⟩, h3⟩ := hf
+  simp only [List.any_eq_false, Bool.and_eq_true, beq_iff_eq] at h1
+  simp only [Cosign.certBlocked, List.any_eq_false, Bool.and_eq_true, beq_iff_eq] at h2
   exact ⟨fun f hm ht => ⟨fun he => h1 f hm ⟨ht, by simp [he]⟩, fun he => h1 f hm ⟨ht, by simp [he]⟩,
-    fun he => h1 f hm ⟨ht, by simp [he]⟩⟩, fun q hm ht he => h2 q hm ⟨ht, he⟩⟩
+    fun he => h1 f hm ⟨ht, by simp [he]⟩⟩, fun q hm ht he => h2 q hm ⟨ht, he⟩, h3⟩
 
 /-- `release` happens exactly on the bytes `verifyToken` accepts. -/
 theorem release_isSome (c : Crypto) (s : PayerState) (p : Payment) (bytes : Bytes) :
@@ -365,7 +380,9 @@ theorem storeCheckpoint_released {c : Crypto} {s s' : PayerState} {bytes : Bytes
         exact fun _ => id
       · split at h
         · simp at h
-        · obtain rfl := Option.some.inj h
+        · split at h
+          case isFalse => simp at h
+          obtain rfl := Option.some.inj h
           exact fun _ => id
     · simp at h
 
@@ -388,86 +405,101 @@ theorem release_released {c : Crypto} {s s' : PayerState} {p : Payment} {bytes :
       exact fun _ hk => List.mem_cons_of_mem _ hk
     · simp at h
 
-/-- M4: installing depends on the root signature only, never on whether the key is usable, so a root-signed
-    certificate of the root key itself raises its tenant's fence, is installed when it fits and equivocates
-    exactly as any other root-signed certificate. -/
-theorem installCert_fence (c : Crypto) (s : PayerState) (e : EpochCert) :
-    (installCert c s e).1.fence = if c.rootSigned e then raiseFence s.fence e.tenantId e.epoch else s.fence := by
-  unfold installCert; split <;> simp_all
+/-- A certificate moves the fence exactly when it is verified (answered `installed`, `unfit` or `equivocates`),
+    and then to its epoch, whether or not it is installed.  A certificate that is refused, one whose key is a
+    root or witness key among them (`KEY_REUSE`), moves nothing. -/
+theorem installCert_fence {c : Crypto} {s : PayerState} {b : Bytes} {e : Cosign.KeyCert}
+    (hd : Cosign.decode b = some e) :
+    (installCert c s b).1.fence =
+      if (installCert c s b).2 = .installed ∨ (installCert c s b).2 = .unfit ∨ (installCert c s b).2 = .equivocates
+      then raiseFence s.fence e.tenantId e.epoch else s.fence := by
+  split
+  · rename_i hr
+    obtain ⟨e', ch, hd', -, -, -, heq⟩ := Cosign.installCert_recorded hr
+    obtain rfl : e' = e := Option.some.inj (hd'.symm.trans hd)
+    show (Cosign.installCert c s.toAuth b).1.fence = _
+    rw [heq]
+    unfold Cosign.record
+    repeat' split
+    all_goals rfl
+  · rename_i hr
+    show (Cosign.installCert c s.toAuth b).1.fence = _
+    rw [Cosign.installCert_unrecorded (fun h1 => hr (.inl h1)) (fun h2 => hr (.inr (.inl h2)))
+      (fun h3 => hr (.inr (.inr h3)))]
 
-theorem installCert_equivocation_signed {c : Crypto} {s : PayerState} {e x : EpochCert}
-    (hc : c.rootSigned e = true) (hx : x ∈ s.certs) (ht : x.tenantId = e.tenantId)
-    (he : x.epoch = e.epoch) (hne : x.publicKey ≠ e.publicKey ∨ x.shardCount ≠ e.shardCount) :
-    (x, e) ∈ (installCert c s e).1.equivocations ∧ ∀ shard, blocked (installCert c s e).1 e.tenantId shard e.epoch = true := by
-  have hb : (x.tenantId == e.tenantId && x.epoch == e.epoch &&
-      (x.publicKey != e.publicKey || x.shardCount != e.shardCount)) = true := by
-    rw [Bool.and_eq_true, Bool.and_eq_true, beq_iff_eq, beq_iff_eq, Bool.or_eq_true, bne_iff_ne, bne_iff_ne]
-    exact ⟨⟨ht, he⟩, hne⟩
-  have hm : (x, e) ∈ (installCert c s e).1.equivocations := by
-    simp only [installCert, hc, if_true]
-    exact List.mem_append_left _ (List.mem_map.mpr ⟨x, List.mem_filter.mpr ⟨hx, hb⟩, rfl⟩)
-  refine ⟨hm, fun shard => ?_⟩
+/-- A verified certificate with another body than the installed certificate of its tenant and epoch (another
+    link, shard counts, epoch key or verifier key) is recorded with it and blocks that tenant and epoch on every
+    shard; a re-signature of an installed body is answered `same` (`Cosign.installCert_same`). -/
+theorem installCert_equivocation {c : Crypto} {s : PayerState} {b : Bytes}
+    (h : (installCert c s b).2 = .equivocates) :
+    ∃ e x, Cosign.decode b = some e ∧ x ∈ s.certs ∧ x.tenantId = e.tenantId ∧ x.epoch = e.epoch ∧
+      x.body ≠ e.body ∧ (x, e) ∈ (installCert c s b).1.equivocations ∧
+      ∀ shard, blocked (installCert c s b).1 e.tenantId shard e.epoch = true := by
+  obtain ⟨e, x, hd, hx, ht, he, hb, hm, hbl⟩ := Cosign.installCert_equivocation h
+  refine ⟨e, x, hd, hx, ht, he, hb, hm, fun shard => ?_⟩
   simp only [blocked, Bool.or_eq_true]
-  refine Or.inr (List.any_eq_true.mpr ⟨_, hm, ?_⟩)
-  rw [Bool.and_eq_true, beq_iff_eq, beq_iff_eq]
-  exact ⟨ht, he⟩
+  exact .inl (.inr hbl)
 
-/-- A second chain-valid certificate for an installed one's tenant and
-    epoch with another public key or shard count is recorded with it and
-    blocks that tenant and epoch; a re-signature of the same body is not one. -/
-theorem installCert_equivocation {c : Crypto} {s : PayerState} {e x : EpochCert}
-    (hc : c.certChainOk e = true) (hx : x ∈ s.certs) (ht : x.tenantId = e.tenantId)
-    (he : x.epoch = e.epoch) (hne : x.publicKey ≠ e.publicKey ∨ x.shardCount ≠ e.shardCount) :
-    (x, e) ∈ (installCert c s e).1.equivocations ∧ ∀ shard, blocked (installCert c s e).1 e.tenantId shard e.epoch = true :=
-  installCert_equivocation_signed ((Bool.and_eq_true _ _).mp hc).1 hx ht he hne
+/-- Every verified certificate that is not held, for a tenant and epoch with an installed certificate, is
+    answered `equivocates`. -/
+theorem installCert_equivocates {c : Crypto} {s : PayerState} {b : Bytes} {e x : Cosign.KeyCert} {ch : Cosign.Chain}
+    (hd : Cosign.decode b = some e) (hh : Cosign.held s.toAuth e = false) (hc : s.chainOf e.tenantId = some ch)
+    (hj : Cosign.judge c ch (Cosign.retiredLinks s.toAuth e.tenantId) e = .ok e) (hx : x ∈ s.certs)
+    (ht : x.tenantId = e.tenantId) (he : x.epoch = e.epoch) : (installCert c s b).2 = .equivocates := by
+  have ha : (s.certs.any fun y => y.tenantId == e.tenantId && y.epoch == e.epoch) = true :=
+    List.any_eq_true.2 ⟨x, hx, by simp [ht, he]⟩
+  show (Cosign.installCert c s.toAuth b).2 = .equivocates
+  simp [Cosign.installCert, Cosign.install, hd, hh, hc, hj, Cosign.late, Cosign.record, ha]
 
-/-- No payer step changes an existing pin or a tenant's shard count. -/
+/-- No payer step changes an existing pin or the shard count a tenant has for an epoch. -/
 theorem Step.keeps {c : Crypto} {s s' : PayerState} (h : Step c s s') :
     (∀ k m, s.pins.lookup k = some m → s'.pins.lookup k = some m) ∧
-      ∀ tenant n, shardCountOf s tenant = some n → shardCountOf s' tenant = some n := by
+      ∀ tenant E n, countAt s tenant E = some n → countAt s' tenant E = some n := by
   cases h with
-  | install e =>
-    refine ⟨fun _ _ hm => ?_, fun _ _ => installCert_shardCount⟩
-    unfold installCert
-    split <;> exact hm
+  | link pin n =>
+    refine ⟨fun _ _ hm => hm, fun _ _ _ hn => ?_⟩
+    unfold countAt at hn ⊢
+    rw [show (installLink c pin s n).1.certs = s.certs from (Cosign.installLink_keeps c pin s.toAuth n).1]
+    exact hn
+  | install b => exact ⟨fun _ _ hm => hm, fun _ _ _ => installCert_countAt⟩
   | store h =>
     obtain ⟨hc, hp⟩ := storeCheckpoint_keeps h
-    exact ⟨fun _ _ hm => hp ▸ hm, fun _ _ hn => by unfold shardCountOf; rw [hc]; exact hn⟩
+    exact ⟨fun _ _ hm => hp ▸ hm, fun _ _ _ hn => by unfold countAt; rw [hc]; exact hn⟩
   | send h =>
     obtain ⟨hc, hp⟩ := send_keeps h
-    exact ⟨hp, fun _ _ hn => by unfold shardCountOf; rw [hc]; exact hn⟩
+    exact ⟨hp, fun _ _ _ hn => by unfold countAt; rw [hc]; exact hn⟩
   | pay h =>
     obtain ⟨hc, hp⟩ := release_keeps h
-    exact ⟨fun _ _ hm => hp ▸ hm, fun _ _ hn => by unfold shardCountOf; rw [hc]; exact hn⟩
-  | context => exact ⟨fun _ _ => id, fun _ _ => id⟩
+    exact ⟨fun _ _ hm => hp ▸ hm, fun _ _ _ hn => by unfold countAt; rw [hc]; exact hn⟩
+  | context => exact ⟨fun _ _ => id, fun _ _ _ => id⟩
 
 theorem Steps.keeps {c : Crypto} {s s' : PayerState} (h : Steps c s s') :
     (∀ k m, s.pins.lookup k = some m → s'.pins.lookup k = some m) ∧
-      ∀ tenant n, shardCountOf s tenant = some n → shardCountOf s' tenant = some n := by
+      ∀ tenant E n, countAt s tenant E = some n → countAt s' tenant E = some n := by
   induction h with
-  | refl => exact ⟨fun _ _ => id, fun _ _ => id⟩
+  | refl => exact ⟨fun _ _ => id, fun _ _ _ => id⟩
   | tail _ step ih =>
-    exact ⟨fun k m hm => step.keeps.1 k m (ih.1 k m hm), fun a n hn => step.keeps.2 a n (ih.2 a n hn)⟩
+    exact ⟨fun k m hm => step.keeps.1 k m (ih.1 k m hm), fun a E n hn => step.keeps.2 a E n (ih.2 a E n hn)⟩
 
-/-- One member key and one shard per payment, across the payer's steps.  A
+/-- One member key per payment, and one shard per payment and epoch, across the payer's steps.  A
     token verifies only with its payment's pinned member key (check 12), and
-    no step changes a pin or a tenant's shard count, so two tokens that verify
-    for one payment, in a state and in any later one, carry one member key and
+    no step changes a pin or the shard count a tenant has for an epoch, so two tokens that verify
+    for one payment, in a state and in any later one, carry one member key and, when of one epoch,
     come from one shard.  A HOLD token never verifies, so the HOLD case is
     `verifyToken_after_send`. -/
 theorem verifyToken_one_route {c : Crypto} {s s' : PayerState} {p p' : Payment} {b b' : Bytes}
     {t t' : Token} (hs : Steps c s s') (h : verifyToken c s p b = true)
     (h' : verifyToken c s' p' b' = true) (hd : decodeToken b = some t)
     (hd' : decodeToken b' = some t') (hk : payKey t' = payKey t) :
-    t'.leaf.memberKey = t.leaf.memberKey ∧ t'.leaf.shardId = t.leaf.shardId := by
+    t'.leaf.memberKey = t.leaf.memberKey ∧ (t'.leaf.epoch = t.leaf.epoch → t'.leaf.shardId = t.leaf.shardId) := by
   have hm := hs.keeps.1 _ _ (verifyToken_pinned h hd)
   rw [← hk, verifyToken_pinned h' hd'] at hm
   obtain ⟨n, hn, hr⟩ := verifyToken_route h hd
   obtain ⟨n', hn', hr'⟩ := verifyToken_route h' hd'
   have ht : t'.leaf.tenantId = t.leaf.tenantId := congrArg Prod.fst hk
   have hkey := Option.some.inj hm
-  rw [ht, hs.keeps.2 _ _ hn] at hn'
-  refine ⟨hkey, ?_⟩
+  refine ⟨hkey, fun hE => ?_⟩
+  rw [ht, hE, hs.keeps.2 _ _ _ hn] at hn'
   rw [hr, hr', ht, hkey, Option.some.inj hn']
 
 /-- Only a send adds a pin: after a step, a pin was there before, or the
@@ -485,7 +517,8 @@ theorem Step.new_pin {c : Crypto} {s s' : PayerState} {k : PayKey} {m : Bytes} (
     refine .inr ⟨rfl, ?_⟩
     have hp : s'.pins = s.pins ∨ ∃ p, Gate.send s p = .ok s' := by
       cases h with
-      | install e => left; unfold installCert; split <;> rfl
+      | link pin n => exact .inl rfl
+      | install b => exact .inl rfl
       | store h => exact .inl (storeCheckpoint_keeps h).2
       | send h => exact .inr ⟨_, h⟩
       | pay h => exact .inl (release_keeps h).2
@@ -526,13 +559,13 @@ theorem verifyToken_first_send {c : Crypto} {s0 s' : PayerState} {p : Payment} {
 /-- A HOLD cannot be escaped by editing the payer's member key.  Every
     command sent for a payment, including one answered HOLD or whose answer
     was lost, carried the member key of any token later accepted for it, and
-    was routed (under the shard count when it was sent) to that token's
+    was routed (under the shard count the tenant had for the token's epoch when it was sent) to that token's
     shard, where the HOLD stands (`PAYMENT_ALREADY_DECIDED`). -/
 theorem verifyToken_after_send {c : Crypto} {s1 s2 s' : PayerState} {q p : Payment} {b : Bytes}
     {t : Token} (hq : send s1 q = .ok s2) (hs : Steps c s2 s') (h : verifyToken c s' p b = true)
     (hd : decodeToken b = some t) (hk : payKey t = q.key) :
     t.leaf.memberKey = q.memberKey ∧
-      ∀ n, shardCountOf s1 q.tenantId = some n →
+      ∀ n, countAt s1 q.tenantId t.leaf.epoch = some n →
         t.leaf.shardId = shardOf c.hash q.tenantId q.memberKey n := by
   have hm := hs.keeps.1 _ _ (send_pins hq)
   rw [← hk, verifyToken_pinned h hd] at hm
@@ -540,18 +573,19 @@ theorem verifyToken_after_send {c : Crypto} {s1 s2 s' : PayerState} {q p : Payme
   have ht : t.leaf.tenantId = q.tenantId := congrArg Prod.fst hk
   refine ⟨hkey, fun n hn => ?_⟩
   obtain ⟨n', hn', hr⟩ := verifyToken_route h hd
-  have hn2 : shardCountOf s2 q.tenantId = some n := by
-    unfold shardCountOf at hn ⊢
+  have hn2 : countAt s2 q.tenantId t.leaf.epoch = some n := by
+    unfold countAt at hn ⊢
     rw [(send_keeps hq).1]
     exact hn
-  rw [ht, hs.keeps.2 _ _ hn2] at hn'
+  rw [ht, hs.keeps.2 _ _ _ hn2] at hn'
   rw [hr, ht, hkey, Option.some.inj hn']
 
 /-- Frozen statement (LM1): no step removes a released payment. -/
 theorem Step.released_grows {c : Crypto} {s s' : PayerState} (h : Step c s s') :
     ∀ k ∈ s.released, k ∈ s'.released := by
   cases h with
-  | install e => unfold installCert; split <;> exact fun _ => id
+  | link pin n => exact fun _ => id
+  | install b => exact fun _ => id
   | store h => exact storeCheckpoint_released h
   | send h => exact send_released h
   | pay h => exact release_released h
@@ -589,7 +623,8 @@ theorem Steps.coherent {c : Crypto} {s s' : PayerState} (h : Steps c s s') (hs :
   | refl => exact hs
   | tail _ step ih =>
     cases step with
-    | install e => exact installCert_coherent c e ih
+    | link pin n => exact installLink_coherent c pin n ih
+    | install b => exact installCert_coherent c b ih
     | store h => exact storeCheckpoint_coherent ih h
     | send h =>
       unfold send at h

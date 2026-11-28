@@ -2,7 +2,6 @@ import BlindLedger.Financial.Theorems
 import BlindLedger.Gate.Rules.Theorems
 import BlindLedger.Gate.Rules.DecideLayer
 import BlindLedger.Gate.Rules.FastEq
-import BlindLedger.Gate.Rules.G2Mutants
 import BlindLedger.Sha3FastEq
 import BlindLedger.Gate.ParseLaws
 import BlindLedger.Gate.Keyset
@@ -16,7 +15,11 @@ import BlindLedger.Gate.Consume
 import BlindLedger.Gate.Flat.Signed
 import BlindLedger.Gate.Flat.PayTheorems
 import BlindLedger.Gate.Flat.DecideCut
-import BlindLedger.Gate.Flat.RowsBudget
-import BlindLedger.Gate.Flat.PayNumbering
 import BlindLedger.Gate.FactCodec
+import BlindLedger.Gate.FactFrame
+import BlindLedger.Gate.FactAdmit
+import BlindLedger.Gate.RefSet
 import BlindLedger.Gate.FactRegistry
+import BlindLedger.Gate.CauseRelease
+import BlindLedger.Gate.Rules.ExactDuplicate
+import BlindLedger.Gate.FactBelief

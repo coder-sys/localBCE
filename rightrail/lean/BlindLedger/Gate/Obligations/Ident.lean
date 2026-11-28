@@ -58,6 +58,19 @@ def obligSidOf (scope population item : Bytes) : Bytes := sidOf 14 [scope, popul
 /-- The `sid` of a FUND fact: the scope first, then the funding source reference. -/
 def fundSidOf (scope sourceRef : Bytes) : Bytes := sidOf 25 [scope, sourceRef]
 
+/-! Vectors, computed independently with Python's `hashlib.sha3_256` over the same bytes: scope `pat 64 1`,
+    population `pop-1`, item `item-1`, funding source `fund-1`.  A change to a domain, a field order or a length
+    prefix changes them. -/
+#guard popOf (pat 64 1) "pop-1".toUTF8.toList ==
+  hexBytes "ed5f4f668e09e80d56495c2d6558617c77fdd876779cf4af759b95af1e86c182"
+#guard fundSubjectOf (pat 64 1) == hexBytes "08e33d61bfb15b68e4671f2d50854614d1bf23ec89980a77610cbb981e3dfe97"
+#guard obligSidOf (pat 64 1) "pop-1".toUTF8.toList "item-1".toUTF8.toList ==
+  hexBytes "ab7b3e6622e26ebbd778bccea3f8b5407e06cba277b48e94c1ddf6fe2efccdbb"
+#guard fundSidOf (pat 64 1) "fund-1".toUTF8.toList ==
+  hexBytes "c8d329eb2572c6b920a8b7d87cc8b34af3f898f7c56457c03df5e19532e44d7a"
+#guard obOf (pat 64 1) "item-1".toUTF8.toList ==
+  hexBytes "f401d2cbfd9eccb33754e85c39dfadfc8e44102d4f64e7bbede14727c0597f5e"
+
 theorem lpCat_inj : ∀ (fs gs : List Bytes), (∀ f ∈ fs, f.length < 256 ^ 2) → (∀ g ∈ gs, g.length < 256 ^ 2) →
     lpCat fs = lpCat gs → fs = gs
   | [], [], _, _, _ => rfl
@@ -108,7 +121,7 @@ theorem in_force_other {β : Type} (rows : List (Bytes × β)) {s s' : Bytes} (v
 
 def identKey : Bytes → Option (Nat × Bytes)
   | t :: _ :: rest =>
-    if t.toNat = 0x72 ∨ t.toNat = 0x73 ∨ t.toNat = 0x74 then some (t.toNat, rest.take 32) else none
+    if t.toNat = 0x72 ∨ t.toNat = 0xF3 ∨ t.toNat = 0x74 then some (t.toNat, rest.take 32) else none
   | _ => none
 
 def identStep (m : Nat × Bytes → Option Nat) (i : Nat) (r : Bytes) : Nat × Bytes → Option Nat :=
@@ -191,7 +204,7 @@ theorem ident_spec (log : List Bytes) (k : Nat × Bytes) :
         · exact hr
 
 /-- The key a decoded case, action or command record holds is the key `ident` reads from its bytes. -/
-theorem identKey_rec {t : Nat} (ht : t = 0x72 ∨ t = 0x73 ∨ t = 0x74) (a : Nat) (k r : Bytes) (hk : k.length = 32) :
+theorem identKey_rec {t : Nat} (ht : t = 0x72 ∨ t = 0xF3 ∨ t = 0x74) (a : Nat) (k r : Bytes) (hk : k.length = 32) :
     identKey (leBytes 1 t ++ (leBytes 1 a ++ (k ++ r))) = some (t, k) := by
   rcases ht with rfl | rfl | rfl <;> simp [leBytes, identKey, List.take_left' hk]
 
@@ -200,7 +213,7 @@ theorem case_key {x : CaseRec} (h : caseC.WF x) : identKey (caseC.enc x) = some 
   simp only [caseC, fit] at hf
   exact identKey_rec (by decide) x.op x.ck _ hf.2.2.1
 
-theorem action_key {x : ActionRec} (h : actionC.WF x) : identKey (actionC.enc x) = some (0x73, x.ak) := by
+theorem action_key {x : ActionRec} (h : actionC.WF x) : identKey (actionC.enc x) = some (0xF3, x.ak) := by
   obtain ⟨hf, -⟩ := h
   simp only [actionC, fit] at hf
   exact identKey_rec (by decide) x.op x.ak _ hf.2.2.1

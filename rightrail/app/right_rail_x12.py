@@ -6,7 +6,8 @@ Anything else wrong is quarantined at the smallest unit that holds it (a segment
 interchange), with a cause code, and everything else is still read. A whole file is refused only when its first
 interchange header cannot be framed, because then no delimiter or control number can be trusted. Each envelope pair
 (ISA/IEA, GS/GE, ST/SE) must agree on its control number and its count, or the unit it closes is quarantined: a count
-or number that disagrees means some segment may be missing, added or spliced, and no value is guessed.
+or number that disagrees means some segment may be missing, added or spliced, and no value is guessed. A file cut short
+loses only the set it ends in: each set before the cut was closed by its own SE; the open group and interchange are still reported.
 
 Bytes are scanned as Latin-1 so every character is one byte and every offset is a byte offset into the original file;
 each element is then decoded as UTF-8, so a name is never rewritten. A segment holding bytes that are not valid UTF-8 keeps
@@ -103,10 +104,14 @@ class Collector(Sink):
     def add(self, ts, kind, item):
         self.kept.append((ts.offset, ts.group, ts.interchange, kind, item))
 
-    def get(self, kind):
+    def where(self, kind):
+        """(item, set, group, interchange, void) for each item of ``kind``, void when its set, group or interchange was retracted."""
         dead = self.dead
-        return tuple(item for s, g, i, k, item in self.kept
-                     if k == kind and not (dead and (("set", s) in dead or ("group", g) in dead or ("interchange", i) in dead)))
+        return tuple((item, s, g, i, bool(dead) and (("set", s) in dead or ("group", g) in dead or ("interchange", i) in dead))
+                     for s, g, i, k, item in self.kept if k == kind)
+
+    def get(self, kind):
+        return tuple(x[0] for x in self.where(kind) if not x[4])
 
     def duplicates(self):
         """(key, offsets) for each key the readers saw more than once, in the order first seen."""
@@ -359,7 +364,10 @@ def _end(sink, current, why=""):
 def _interchange(b, delims, sink, taken):
     """Read one interchange starting at its ISA; return how many sets it confirmed.
 
-    A framed ISA met before this interchange's IEA ends it as iea_missing; the caller starts the next one there.
+    A framed ISA met before this interchange's IEA ends it as iea_missing; the caller starts the next one there, and the whole
+    interchange is taken back.  When the file itself ends before the IEA (it was cut short), only the set it ends in is taken back:
+    each set before it was closed by its own SE, whose count and control checked it whole, and is kept and confirmed.  The open
+    group and the interchange are still reported, as group_unclosed and iea_missing.
     """
     sep, sub, term, control, rep, fields_ok = delims
     repeated = control in taken
@@ -374,12 +382,13 @@ def _interchange(b, delims, sink, taken):
     ok = groups_seen = 0  # sets confirmed by their group; groups opened
     group, current = None, None  # (control, count, bad cause or None, file_at, offset, set controls, sets read ok) and (ST, count, offset, live)
     group_controls = set()
-    closed = False
+    closed = cut = False
     pad = _SPACE.replace(term, "")  # padding never includes the terminator itself
     while True:
         start = b.at
         raw, found = b.take(term)
         if not found:
+            cut = True
             if raw is None or raw.strip(_SPACE):
                 sink.quarantine(Quarantine("segment", "unterminated_segment", start, "last segment has no terminator"))
             break
@@ -518,8 +527,13 @@ def _interchange(b, delims, sink, taken):
         yield from _end(sink, current, "file ends before SE")
     if group is not None:
         sink.quarantine(Quarantine("group", "group_unclosed", group[4], "file ends before GE"))
-        sink.retract("group", group[4])
+        if cut:
+            ok += group[6]
+        else:
+            sink.retract("group", group[4])
     sink.quarantine(Quarantine("interchange", "iea_missing", isa, control))
-    sink.retract("interchange", isa)
     b.iea_missing = True
+    if cut and not void:
+        return ok
+    sink.retract("interchange", isa)
     return 0

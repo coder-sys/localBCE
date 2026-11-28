@@ -3,9 +3,9 @@ import BlindLedger.Gate.Engine3.Sha3Range
 import BlindLedger.Gate.Engine3.Layout
 
 /-! The engine's request decoder: `Frame.Fast.decodeReqFast` with the payment requests read in place.  A request is checked
-    where it sits (`Fast.decodeRows`' checks), with no list, no big number and no row built for it, and the whole-request
-    FRAME digest is one hash over the frame's bytes, run on another core while the body is read.  It fails where
-    `decodeReqFast` fails, with the same word.
+    where it sits (`Fast.decodeRows`' checks), with no list, no big number and no row built for it.  It fails where
+    `decodeReqFast` fails, with the same word.  The digest in the header is carried, not recomputed; `frameDigestB` is the
+    checker's recomputation of it, one hash over the frame's bytes in place.
 
     What differs from `decodeReqFast`'s request: a payment request carries `q := 0` and `ls := []` (its payment number and
     its `Line`s are not built).  The payment key (`payKeyOf`) and whether every line fits the store widths (`reqFits`,
@@ -17,8 +17,11 @@ namespace BlindLedger.Gate.Frame.Fast
 
 open BlindLedger.Gate.Rules BlindLedger.Gate.Flat
 
-/-- The FRAME digest's domain, once. -/
-def frameDomain : ByteArray := (domain "FRAME").toByteArray
+/-- The frame digest's domain, once. -/
+def frameDomain : ByteArray := (domain "FRAME2").toByteArray
+
+/-- `Frame.frameDigest` of the body of frame `bs`, hashed in place (`frameDigestB_eq`). -/
+def frameDigestB (bs : ByteArray) : ByteArray := Engine3.sha3_512Into .empty frameDomain bs hdrBytes (bs.size - hdrBytes)
 
 /-- `decodeRows`' test of one line `b[p, e)` (flow tag, member at `mem`, payee identifier `b[ps, ps + pn)`): its cents, or all
     ones when `lineRow` would refuse it.  No cents reach 2^63. -/
@@ -97,10 +100,12 @@ def reqB (x : ByteArray) : Option ReqB := Id.run do
     if 0 < i && !lt64 x (q - 64) q 0 then return none
     evid := evid.push (x.extract q (q + 64))
     q := q + 64
-  if q != n then return none
+  if q + 1 != n then return none
+  let cf := x.get! q
+  if 1 < cf then return none
   return some ⟨⟨x.extract (dn + 2) te, x.extract (te + 2) ge, flows.getD (tag.toNat - 1) .FFS_CYCLE, x.extract (ge + 3) ce,
     x.extract (ce + 2) ye, x.extract ye (ye + 32), x.extract (ye + 34) ee, amount.toNat, x.extract (ee + 10) ke, lines.toList,
-    evid.toList⟩, payKey, x⟩
+    evid.toList, cf == 1⟩, payKey, x⟩
 
 /-- The payment key of a decoded request: `identField program ‖ identField payment`. -/
 def payKeyOf (ra : RequestBA) : ByteArray :=
@@ -133,17 +138,21 @@ def authB : P Auth := do
   let fv ← num 8
   unless fp ≤ 1 && (fp == 1 || fv == 0) do throw .RECORD
   let kfloor ← num 4
+  let rsv ← num 4
+  let rs ← cutB 64
+  unless rsv != 0 || rs == zeroDigest do throw .RECORD
   let grant ← blobP
   let keyset ← blobP
   let release ← blobP
   unless release.length == 0 || release.length == 64 do throw .RECORD
   let ksteps ← manyP (← num 4) (do pure ((← num 4), (← blobP)))
   let byps ← manyP (← num 4) blobP
+  let rsets ← manyP (← num 4) blobP
   let es ← reqsB (← num 4)
   if let some e0 := es[0]? then
     unless es.all (fun e => e.ra.tenantId == e0.ra.tenantId && e.ra.programId == e0.ra.programId) &&
         (es.foldl (fun s e => s.insert e.payKey) (∅ : Std.HashSet ByteArray)).size == es.size do throw .RECORD
-  pure { pin, floor := if fp == 1 then some fv else none, kfloor, grant, keyset, release, ksteps, byps,
+  pure { pin, floor := if fp == 1 then some fv else none, kfloor, rsv, rs, grant, keyset, release, ksteps, byps, rsets,
          reqs := es.toList.map fun e => ⟨0, e.ra, [], e.x⟩ }
 
 def bodyB (shard batch : Nat) : P Req := do
@@ -164,22 +173,18 @@ def bodyB (shard batch : Nat) : P Req := do
   let auth ← authB
   pure { shard, batch, today, asOf, prev, dmf, pdeath, excl, span, redo, auth }
 
-/-- `decodeReqFast`, with the digest hashed in place beside the body read (the digest's word comes first, as there). -/
+/-- `decodeReqFast`, the body read in place. -/
 def decodeB (bs : ByteArray) : Except Word (Req × ByteArray) := do
   if bs.size < hdrBytes then throw .LENGTH
   unless bs.get! 0 == 0x52 && bs.get! 1 == 0x52 && bs.get! 2 == 0x44 && bs.get! 3 == 0x51 &&
-      ((bs.get! 4).toNat + 256 * (bs.get! 5).toNat) == version do throw .MAGIC
-  let dg := bs.extract 18 hdrBytes
-  let t := Task.spawn fun _ => Engine3.sha3_512Into .empty frameDomain bs hdrBytes (bs.size - hdrBytes)
+      ((bs.get! 4).toNat + 256 * (bs.get! 5).toNat) == reqVersion do throw .MAGIC
   let rd (p w : Nat) : Nat := Id.run do
     let mut v := 0
     for i in [0:w] do v := v * 256 + (bs.get! (p + w - 1 - i)).toNat
     pure v
-  let r := (bodyB (rd 6 4) (rd 10 8)).run bs |>.run hdrBytes
-  unless t.get == dg do throw .DIGEST
-  let (q, pos) ← r
+  let (q, pos) ← (bodyB (rd 6 4) (rd 10 8)).run bs |>.run hdrBytes
   unless pos == bs.size do throw .LENGTH
-  pure (q, dg)
+  pure (q, bs.extract 18 hdrBytes)
 
 /-- Whether two decodings agree: the same word, or the same digest, shard, batch and body (`encodeBody` reads every field
     but the shard and batch, and a request only by its bytes). -/
@@ -405,9 +410,12 @@ private theorem reqB_eq (x : ByteArray) : reqB x = (decodeRows x).map (cv x) := 
     | some r => rfl
     | none =>
       dsimp only [Option.map]
-      by_cases c3 : (q2 != x.size) = true
+      by_cases c3 : (q2 + 1 != x.size) = true
       · simp only [c3, if_true]; try rfl
-      · simp only [c3, if_false]; try rfl
+      · simp only [c3, if_false]
+        by_cases c4 : 1 < x.get! q2
+        · simp only [c4, if_true, ↓reduceIte]; try rfl
+        · simp only [c4, if_false, ↓reduceIte]; try rfl
 
 private def ExR {α β : Type} (R : α → β → Prop) : Except Word (α × Nat) → Except Word (β × Nat) → Prop
   | .error w, .error w' => w = w'
@@ -730,17 +738,25 @@ private theorem magic_get (bs : ByteArray) (h : 6 ≤ bs.size) :
   rcases hL : bs.toList with _ | ⟨a, _ | ⟨b, _ | ⟨c, _ | ⟨d, t⟩⟩⟩⟩ <;> rw [hL] at hl <;> simp at hl ⊢ <;> try omega
   simp [Bool.and_assoc]
 
-private theorem dig_eq (bs : ByteArray) (h : hdrBytes ≤ bs.size) :
-    Engine3.sha3_512Into .empty frameDomain bs hdrBytes (bs.size - hdrBytes) =
-      Bin.HB (⟨(domain "FRAME").toArray⟩ ++ bs.extract hdrBytes bs.size) := by
-  have e : frameDomain = ⟨(domain "FRAME").toArray⟩ := by
+/-- The checker's digest of a logged frame's body is the specification's `frameDigest` of it. -/
+theorem frameDigestB_eq (bs : ByteArray) (h : hdrBytes ≤ bs.size) :
+    (frameDigestB bs).toList = frameDigest (fun b => (Bin.HB ⟨b.toArray⟩).toList) (bs.toList.drop hdrBytes) := by
+  have e : frameDomain = ⟨(domain "FRAME2").toArray⟩ := by
     apply ByteArray.ext
     apply Array.toList_inj.mp
     unfold frameDomain
     rw [List.toList_data_toByteArray]
-  rw [Engine3.sha3_512Into_eq _ _ _ _ _ (by omega), show hdrBytes + (bs.size - hdrBytes) = bs.size by omega, e,
-    ByteArray.empty_append]
-  simp only [Bin.HB, Engine3.sha3_512Into_all, ByteArray.empty_append]
+  have hA : (⟨(domain "FRAME2").toArray⟩ ++ bs.extract hdrBytes bs.size : ByteArray) =
+      ⟨(domain "FRAME2" ++ bs.toList.drop hdrBytes).toArray⟩ := by
+    rw [← ba_toList_inj, Bin.toList_append', body_list]
+    simp [Bin.toList_eq']
+  have hd : frameDigestB bs = Bin.HB (⟨(domain "FRAME2").toArray⟩ ++ bs.extract hdrBytes bs.size) := by
+    unfold frameDigestB
+    rw [Engine3.sha3_512Into_eq _ _ _ _ _ (by omega), show hdrBytes + (bs.size - hdrBytes) = bs.size by omega, e,
+      ByteArray.empty_append]
+    simp only [Bin.HB, Engine3.sha3_512Into_all, ByteArray.empty_append]
+  rw [hd, hA]
+  rfl
 
 private theorem core(H : Bytes → Bytes) (bs : ByteArray) (hs' : hdrBytes ≤ bs.size) (dg : ByteArray) (sh b : Nat) :
     (do let (q, pos) ← ((bodyB sh b).run bs).run hdrBytes
@@ -776,33 +792,24 @@ private theorem core(H : Bytes → Bytes) (bs : ByteArray) (hs' : hdrBytes ≤ b
       rfl
 
 /-- `decodeB` reads what `decodeReqFast` reads: the same request bytes and digest, the same word on a refusal. -/
-theorem decodeB_eq (H : Bytes → Bytes) (hH : ∀ b, H b = (Bin.HB ⟨b.toArray⟩).toList) (bs : ByteArray) :
+theorem decodeB_eq (H : Bytes → Bytes) (bs : ByteArray) :
     (decodeB bs).map (fun (q, d) => (encodeReq H q, d.toList)) =
-      (decodeReq H bs.toList).map (fun (q, d) => (encodeReq H q, d)) := by
-  rw [← decodeReqFast_eq H hH bs]
+      (decodeReq bs.toList).map (fun (q, d) => (encodeReq H q, d)) := by
+  rw [← decodeReqFast_eq H bs]
   by_cases hs : bs.size < hdrBytes
   · unfold decodeB decodeReqFast; rw [if_pos hs, if_pos hs]; rfl
   · have hs' : hdrBytes ≤ bs.size := by omega
     have hmg := magic_get bs (by have : hdrBytes = 82 := rfl; omega)
-    have hdg := dig_eq bs hs'
     unfold decodeB decodeReqFast
     rw [if_neg hs, if_neg hs]
     dsimp only
-    have ht : (Task.spawn fun _ => Engine3.sha3_512Into ByteArray.empty frameDomain bs hdrBytes (bs.size - hdrBytes)).get =
-        Engine3.sha3_512Into ByteArray.empty frameDomain bs hdrBytes (bs.size - hdrBytes) := rfl
-    rw [ht, hdg]
     by_cases hm : (bs.get! 0 == 0x52 && bs.get! 1 == 0x52 && bs.get! 2 == 0x44 && bs.get! 3 == 0x51 &&
-        (bs.get! 4).toNat + 256 * (bs.get! 5).toNat == version) = true
-    · have hm' : ((bs.extract 0 4).toList == magicReq && (bs.get! 4).toNat + 256 * (bs.get! 5).toNat == version) = true := by
+        (bs.get! 4).toNat + 256 * (bs.get! 5).toNat == reqVersion) = true
+    · have hm' : ((bs.extract 0 4).toList == magicReq && (bs.get! 4).toNat + 256 * (bs.get! 5).toNat == reqVersion) = true := by
         rw [hmg]; exact hm
       rw [if_pos hm, if_pos hm']
-      by_cases hd : (Bin.HB ({ data := List.toArray (domain "FRAME") } ++ bs.extract hdrBytes bs.size) ==
-          bs.extract 18 hdrBytes) = true
-      · rw [if_pos hd, if_pos hd]
-        exact core H bs hs' _ _ _
-      · rw [if_neg hd, if_neg hd]
-        dsimp only [bind, Except.bind, throw, throwThe, MonadExceptOf.throw, Except.map]
-    · have hm' : ¬ ((bs.extract 0 4).toList == magicReq && (bs.get! 4).toNat + 256 * (bs.get! 5).toNat == version) = true := by
+      exact core H bs hs' _ _ _
+    · have hm' : ¬ ((bs.extract 0 4).toList == magicReq && (bs.get! 4).toNat + 256 * (bs.get! 5).toNat == reqVersion) = true := by
         rw [hmg]; exact hm
       rw [if_neg hm, if_neg hm']
       dsimp only [bind, Except.bind, throw, throwThe, MonadExceptOf.throw, Except.map]

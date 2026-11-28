@@ -53,6 +53,7 @@ class ServicePayment(NamedTuple):
     file_sha3_512: str
     set_control: str
     offsets: tuple
+    line_control: str = ""  # REF*6R under the service line: the line control number the claim was sent with, "" when not sent or repeated
 
 
 class ProviderAdjustment(NamedTuple):
@@ -145,7 +146,7 @@ def _read_set(sha, ts, emit):
                                        item["amounts"][2], item["control"], tuple(item["adj"]), ts.file_at, sha, ts.control, tuple(item["offsets"])))
         elif kind == "s":
             emit("service", ServicePayment(item["claim"], item["pq"], item["proc"], item["mods"], item["rev"], item["amounts"][0], item["amounts"][1],
-                                           item["units"], item["date"], tuple(item["adj"]), sha, ts.control, tuple(item["offsets"])))
+                                           item["units"], item["date"], tuple(item["adj"]), sha, ts.control, tuple(item["offsets"]), item.get("ctl", "")))
         else:
             adjusted += item[3]
             emit("plb", ProviderAdjustment(trace(), item[0], item[1], item[2], item[5], item[3], sha, ts.control, item[4]))
@@ -242,6 +243,13 @@ def _read_set(sha, ts, emit):
             service = {"claim": claim["id"], "pq": first[0], "proc": first[1] if len(first) > 1 else "", "mods": tuple(m for m in first[2:6] if m),
                        "rev": x12.element(seg, 4), "amounts": (charge, paid), "units": units, "date": "", "adj": [], "offsets": [seg.offset]}
             target = service
+        elif sid == "REF" and service is not None and x12.element(seg, 1) == "6R":
+            if "ctl" in service:  # a repeated control number says nothing: it is quarantined and the line has none
+                bad("segment", "repeated_segment", seg.offset, "REF*6R")
+                service["ctl"] = ""
+            else:
+                service["ctl"] = x12.element(seg, 2)
+                service["offsets"].append(seg.offset)
         elif sid == "DTM" and service is not None and x12.element(seg, 1) == "472":
             day = x12.x12_date(x12.element(seg, 2))
             if day is None or service["date"]:

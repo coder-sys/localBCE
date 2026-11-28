@@ -365,9 +365,9 @@ def place (r : Rules) (sources : List (String × Nat)) : Nat → String → List
   | fuel + 1, purpose, taken, tried => scan (holds r purpose) purpose (place r sources fuel) sources taken tried
 
 /-- Each required purpose (42 CFR 433.318) has its own document, from a source that holds that purpose. -/
-def covered (r : Rules) (requires sources : List String) : Bool :=
+def covered (r : Rules) (needs sources : List String) : Bool :=
   let numbered := sources.zipIdx
-  (requires.foldl (fun (acc : Bool × List (Nat × String)) p =>
+  (needs.foldl (fun (acc : Bool × List (Nat × String)) p =>
       if acc.1 then
         let (ok, taken, _) := place r numbered (sources.length + 1) p acc.2 []
         (ok, taken)

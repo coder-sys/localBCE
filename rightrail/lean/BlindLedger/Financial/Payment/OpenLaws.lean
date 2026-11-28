@@ -11,6 +11,7 @@ open BlindLedger.Financial BlindLedger.Financial.CorrectionTransition
 
 private theorem servedBefore_irrefl (a : ActionRecord) : servedBefore a a = false := by
   simp [servedBefore]
+  exact Std.lt_irrefl
 
 private theorem servedBefore_trans {a b c : ActionRecord} (h1 : servedBefore a b = true)
     (h2 : servedBefore b c = true) : servedBefore a c = true := by

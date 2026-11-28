@@ -25,6 +25,7 @@ from tests import _gate_authority as au
 from tests import _gate_shards as g
 from tests import test_gate_authority_frames as af
 from tests import test_right_rail_gate_formats as fx
+from tests._test_only_counter import TestOnlyCounter
 from tests.test_right_rail_gate_shards import restore, snapshot
 
 SHARDS, STEPS, SEEDS, POOL = 3, 30, (1, 2), range(10, 22)  # a small id pool: every shard meets repeats
@@ -198,7 +199,7 @@ class GateChaosTests(fx.Scratch):
 
         def foreign(doc):  # the owner's file, its frame on the right head, carrying another tenant's request
             body = gate.encode_decide_request(replace(g.request(2, 0, [11]), tenant_id=fx.OTHER))
-            frame = decider.request_frame(g.HEAD, 0, 2, g.ASOF, prod.flat_head()[0], g.PIN, (0, 0), g.KEYS, g.GRANT, bytes.fromhex(doc["release"]), (), [body])
+            frame = decider.request_frame(g.HEAD, 0, 2, g.ASOF, prod.flat_head()[0], g.PIN, (0, 0, 0, bytes(64)), g.KEYS, g.GRANT, bytes.fromhex(doc["release"]), (), [body])
             resign({**doc, "frame": frame.hex(), "bodies_at": len(frame) - 8 - len(body)})
         edits = {  # name -> (rewrite of the stored file, the refusal), each against batch 2 stored by decide
             "garbled": (lambda doc: pend.write_bytes(pend.read_bytes()[:-9] + b"\xff"), "pending_bad"),
@@ -242,6 +243,29 @@ class GateChaosTests(fx.Scratch):
             finally:
                 prod.close()
 
+    def test_another_requests_stored_frame_the_owner_did_not_sign_is_refused_without_a_seal_too(self) -> None:
+        """The floors in a stored file count only once the owner's signature on it checks: another request's stored frame
+        that was edited, or signed by no one, is refused ``pending_bad`` and left as it was, never held as a sealable
+        frame (``flat_conflict``) that hides the edit."""
+        edits = {"edited without the owner's key": lambda doc: {**doc, "created_at": fx.NOW + 1},
+                 "signed by no one": lambda doc: {**doc, "vouch": "00" * (len(doc["vouch"]) // 2)}}
+        for name, edit in edits.items():
+            with self.subTest(name), self.scratch() as tmp:
+                c = g.Cluster(tmp, fx.custody(tmp), 1)
+                prod, flat = c.producer(0), c.dir / "idx0"
+                pend = decider._pend(flat, 2)
+                try:
+                    self.seal_one_decide_one(c, prod, flat)
+                    pend.write_text(json.dumps(edit(json.loads(pend.read_bytes()))))
+                    before = pend.read_bytes()
+                    with self.assertRaises(decider.GateDecideError) as caught:  # the next request, without a seal
+                        g.decide_batch(c, prod, 0, {3: [12]}, flat=flat)
+                    self.assertEqual(str(caught.exception), f"pending_bad:{pend}")
+                    self.assertEqual(pend.read_bytes(), before)
+                    self.assertEqual(prod.flat_head()[1], 1)
+                finally:
+                    prod.close()
+
     def test_different_request_with_seal_time_seals_the_stored_batch_first(self) -> None:
         with self.scratch() as tmp:
             c = g.Cluster(tmp, fx.custody(tmp), 1)
@@ -263,7 +287,7 @@ class GateChaosTests(fx.Scratch):
         """Why a stored frame of another tenant's request needs the host's own refusal: the engine admits the grant for the
         first request's tenant, so the shard's grant is out of scope and the whole frame is a grant HOLD, deciding nothing."""
         body = gate.encode_decide_request(replace(g.request(1, 0, [10]), tenant_id=fx.OTHER))
-        frame = decider.request_frame(g.HEAD, 0, 1, g.ASOF, chain.genesis(0, g.ASOF, g.PIN), g.PIN, (0, 0), g.KEYS, g.GRANT, gate.sha3_512(g.ENGINE.read_bytes()), (), [body])
+        frame = decider.request_frame(g.HEAD, 0, 1, g.ASOF, chain.genesis(0, g.ASOF, g.PIN), g.PIN, (0, 0, 0, bytes(64)), g.KEYS, g.GRANT, gate.sha3_512(g.ENGINE.read_bytes()), (), [body])
         with self.scratch() as tmp:
             worker = decider.RulesWorker(g.ENGINE)
             try:
@@ -299,6 +323,51 @@ class GateChaosTests(fx.Scratch):
                     with self.assertRaisesRegex(producer.GateProducerError, "store_tampered"):
                         g.decide_batch(c, prod, 0, {2: [11]}, flat=flat)
                     self.assertEqual(prod._db.execute("SELECT count(*) FROM retries").fetchone()[0], len(ids))  # kept as evidence
+                finally:
+                    prod.close()
+
+    def test_a_deleted_retries_row_is_refused_never_decided_again(self) -> None:
+        """A sealed batch filed under its requester's retry key (batch 2, ALLOW, sealed by recovery; or a near duplicate
+        released by its own bypass) loses its retries row to an editor of the store file.  Its exact retry is
+        ``store_tampered``: nothing is decided or sealed again, and the counter does not move (decided again, the ALLOW
+        would turn into a HOLD and the first answer's tokens would never be served again)."""
+        for name in ("allow", "bypass"):
+            with self.subTest(name), self.scratch() as tmp:
+                c = g.Cluster(tmp, fx.custody(tmp), 1)
+                prod, flat, counter = c.producer(0), c.dir / "idx0", TestOnlyCounter(c.dir / "s0.counter")
+                try:
+                    if name == "allow":
+                        self.seal_one_decide_one(c, prod, flat)
+                        decider.commit(prod, fx.PROGRAM, g.decide_batch(c, prod, 0, {3: [12]}, flat=flat, seal=(fx.PROGRAM, fx.NOW))[0], fx.NOW, c.tenant)
+                        req, bypasses = g.request(2, 0, [11]), ()
+                    else:
+                        decider.commit(prod, fx.PROGRAM, g.decide_batch(c, prod, 0, {1: [10]}, flat=flat)[0], fx.NOW, c.tenant)
+                        req = g.request(2, 0, [24])  # line 10's claim date, other cents: a near duplicate of it, held
+                        held = g.decide_batch(c, prod, 0, {2: [24]}, flat=flat)[0]
+                        self.assertEqual([y.outcome for y in held.pays], ["HUMAN_REVIEW"], held.pays)
+                        decider.commit(prod, fx.PROGRAM, held, fx.NOW, c.tenant)
+                        bypasses = (au.bypass(fx.PROGRAM, req.payment_id, au.digest(gate.encode_decide_request(req)),  # its own reasons, overridden
+                                              sum(1 << decider.REASON_IDX[r] for r in held.pays[0].reasons if r in decider.REASON_IDX)),)
+                    send = lambda: decider.decide(g.HEAD, g.ASOF, prod, [req], flat, worker, g.GRANT, g.KEYS, c.tenant,  # noqa: E731
+                                                  bypasses=bypasses, seal=(fx.PROGRAM, fx.NOW))
+                    worker = decider.RulesWorker(g.ENGINE)
+                    try:
+                        if name == "bypass":
+                            released = send()
+                            self.assertEqual([y.outcome for y in released.pays], ["ALLOW"], (held.pays[0].reasons, released.pays))
+                            decider.commit(prod, fx.PROGRAM, released, fx.NOW, c.tenant)
+                        first = send().sealed
+                        self.assertEqual([gate.read_token(t)[1] for t in first[1]], ["ALLOW"])  # as written: served
+                        prod._db.execute("DROP TRIGGER retries_void")
+                        gone = prod._db.execute("DELETE FROM retries WHERE key=?", (decider._retry_key([gate.encode_decide_request(req)], g.GRANT, bypasses),))
+                        self.assertEqual(gone.rowcount, 1)
+                        before = (prod._db.execute("SELECT count(*) FROM batches").fetchone()[0], counter.read())
+                        for _ in range(2):
+                            with self.assertRaisesRegex(producer.GateProducerError, "^store_tampered$"):
+                                send()
+                    finally:
+                        worker.close()
+                    self.assertEqual((prod._db.execute("SELECT count(*) FROM batches").fetchone()[0], counter.read()), before)
                 finally:
                     prod.close()
 

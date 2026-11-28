@@ -1,12 +1,13 @@
-"""The one ML-DSA-87 signer: the gate's ``RR/GATE/CHECKPOINT/v3`` headers and ``KEY-CERT/v1`` bodies, and the
+"""The one ML-DSA-87 signer: the gate's ``RR/GATE/CHECKPOINT/v3`` headers, and the
 financial owner's custody records and packs (``app/right_rail_financial_custody.py``), each under its own key.
 
 ML-DSA-87 (FIPS 204 algorithm) from a non-validated AWS-LC build (aws-lc-rs),
 built from ``rust/gate_mldsa87``.  A key is a *handle*, today a key-file path;
 the worker unseals the seed itself, so no seed or secret key reaches Python.
 Signing is pure ML-DSA with an empty context and hedged; the epoch key signs
-checkpoint headers, the gate producer's row pledges and its stored decide frames, the root key only
-KEY-CERT bodies, each message starting with its own domain.  Each pinned executable (this worker and the Lean
+checkpoint headers, the gate producer's row pledges and its stored decide frames, each message starting with its own domain
+(the tenant's root and witness keys sign certificates and the verifier key its cosignatures; the state's custodian and the verifier
+make those, not this module).  Each pinned executable (this worker and the Lean
 ``gate_verify``) is copied once per process into a private temporary directory,
 held open so it cannot be written or deleted, and hashed; the hash is compared
 with its SHA-256 pin before every run, so the file that runs is the file that
@@ -26,7 +27,7 @@ import shutil
 import subprocess
 import tempfile
 import threading
-from typing import Final, Sequence
+from typing import Callable, Final, Sequence
 
 from app import minimal_clearance_verifier_process as process
 from app.right_rail_gate_codec import ML_DSA_87_PUBLIC_KEY, ML_DSA_87_SIGNATURE, attach_signature
@@ -123,7 +124,11 @@ def _close_server(*slots: list) -> None:
 
 
 def _resident(slot: list, binary: Path, pin: Path, args: tuple[str, ...], request: bytes, cap: int, memory: int) -> bytes:
-    """One framed exchange with the resident worker in ``slot``: pin checked per call; any failure closes it, no retry."""
+    """One framed exchange with the resident worker in ``slot``: pin checked per call; any failure closes it, no retry.
+    A worker holding more than half its ``memory`` cap after an answer is closed, so the next call starts a fresh one: unless
+    the exe reserves its allocator's address space at start (gate_verify does), the Windows Lean runtime's allocator never
+    reuses or returns memory that a large request freed, and a worker that keeps no state between requests gives a fresh
+    worker's answers."""
     name = binary.stem
     try:
         copy, digest = _private_copy(binary)
@@ -139,7 +144,10 @@ def _resident(slot: list, binary: Path, pin: Path, args: tuple[str, ...], reques
             slot[0] = process.launch_contained_worker(
                 copy, workspace=slot[1], job_memory_cap_bytes=memory, arguments=args,
                 expected_executable_size_bytes=copy.stat().st_size, expected_executable_sha256=bytes.fromhex(digest.decode()))
-        return slot[0].exchange(request, response_cap_bytes=cap, timeout_seconds=30.0)
+        out = slot[0].exchange(request, response_cap_bytes=cap, timeout_seconds=30.0)
+        if slot[0].commit_bytes() > memory // 2:
+            _close_server(slot)
+        return out
     except Exception as error:
         _close_server(slot)
         raise GateSignerError(f"{name}_failed") from error
@@ -192,26 +200,34 @@ def gate_verify(mode: int, frame: bytes) -> str:
             raise GateSignerError("gate_verify_failed") from None
 
 
-def custody(tpm: int | None, root_pk: bytes, cert: bytes, signed: bytes) -> str:
+def custody(tpm: int | None, link: bytes, cert: bytes, signed: bytes) -> str:
     """Lean ``custodyOf`` for the shard's counter (None: defined but never written) and the store's newest sealed
-    checkpoint ``signed`` with its epoch certificate ``cert`` (both empty when nothing is sealed).  Lean reads the store's
-    counter from ``signed`` itself, and its signature under ``root_pk`` alone lets an unwritten counter under the shard's first
-    checkpoint catch up: ``create``, ``ready`` or ``catch_up``, or a refusal reason (``no_store``, ``counter_reset``,
-    ``store_rewound``, ``store_ahead``)."""
-    frame = bytes([tpm is not None]) + (tpm or 0).to_bytes(8, "big") + root_pk + framed(cert) + framed(signed)
+    checkpoint ``signed`` (with its cosign record) with its epoch certificate ``cert`` (both empty when nothing is sealed).
+    Lean reads the store's counter from ``signed`` itself, and its signature under the certificate, which counts only under
+    the held authority ``link`` of the tenant, lets an unwritten counter under the shard's first checkpoint catch up:
+    ``create``, ``ready`` or ``catch_up``, or a refusal reason (``no_store``, ``counter_reset``, ``store_rewound``,
+    ``store_ahead``)."""
+    frame = bytes([tpm is not None]) + (tpm or 0).to_bytes(8, "big") + framed(link) + framed(cert) + framed(signed)
     step = gate_verify(7, frame).removeprefix("GATE_VERIFY=CUSTODY ")
     if step not in ("create", "ready", "catch_up", "no_store", "counter_reset", "store_rewound", "store_ahead"):
         raise GateSignerError("gate_verify_failed")
     return step
 
 
-def seal(handle: str, root_pk: bytes, cert: bytes, last: bytes | None, header: bytes, tokens: Sequence[bytes], tpm: int) -> bytes:
-    """Sign ``header`` through custody and release the signature only if Lean ``publishOk`` accepts the signed
-    checkpoint as the successor of ``last`` (None: the shard's first) with exactly ``tokens``, taking the counter value
-    ``tpm`` + 1 where ``tpm`` is the shard's counter before this checkpoint: a faulty or unpublishable signature never leaves."""
+def seal(handle: str, link: bytes, cert: bytes, last: bytes | None, header: bytes, tokens: Sequence[bytes], tpm: int,
+         cosign: Callable[[bytes], bytes]) -> tuple[bytes, bytes]:
+    """Sign ``header`` through custody, have the verifier cosign the signed checkpoint (``cosign``: the signed checkpoint, header
+    and signature, to its cosign record), and release the signature and the record only if Lean ``publishOk`` accepts the
+    cosigned checkpoint as the successor of ``last`` (None: the shard's first; else its signed bytes with its record) with
+    exactly ``tokens``, taking the counter value ``tpm`` + 1 where ``tpm`` is the shard's counter before this checkpoint, under
+    the held authority ``link``: a faulty, uncosigned or unpublishable signature never leaves."""
     signature = sign(handle, header)
-    frame = (root_pk + framed(cert) + framed(last or b"") + framed(attach_signature(header, signature))
+    signed = attach_signature(header, signature)
+    record = cosign(signed)
+    if type(record) is not bytes:
+        raise GateSignerError("gate_verify_refused")
+    frame = (framed(link) + framed(cert) + framed(last or b"") + framed(signed + record)
              + len(tokens).to_bytes(2, "big") + b"".join(map(framed, tokens)) + tpm.to_bytes(8, "big"))
     if gate_verify(1, frame) != ACCEPT:
         raise GateSignerError("gate_verify_refused")
-    return signature
+    return signature, record

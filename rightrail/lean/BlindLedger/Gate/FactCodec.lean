@@ -48,26 +48,41 @@ theorem fromLE_leBytes (w n : Nat) (h : n < 256 ^ w) : fromLE (leBytes w n) = n 
     simp only [leBytes, fromLE, ih _ h2, h3]
     omega
 
-/-- Read a `w`-byte number, returning the rest; none when too short. -/
+/-- Read a `w`-byte number, returning the rest; none when too short (`rdLE_def`).  The length tested is the taken
+    block's, so a decoder that reads a long input field by field walks each byte a fixed number of times, not the whole
+    rest at every field. -/
 def rdLE (w : Nat) (b : Bytes) : Option (Nat × Bytes) :=
-  if b.length < w then none else some (fromLE (b.take w), b.drop w)
+  let x := b.take w
+  if x.length < w then none else some (fromLE x, b.drop w)
 
-/-- Read a `w`-byte block, returning the rest; none when too short. -/
+/-- Read a `w`-byte block, returning the rest; none when too short (`rdBlk_def`; the length tested as in `rdLE`). -/
 def rdBlk (w : Nat) (b : Bytes) : Option (Bytes × Bytes) :=
-  if b.length < w then none else some (b.take w, b.drop w)
+  let x := b.take w
+  if x.length < w then none else some (x, b.drop w)
+
+theorem take_length_lt (w : Nat) (b : Bytes) : ((b.take w).length < w) = (b.length < w) :=
+  propext (by rw [List.length_take]; constructor <;> intro _ <;> omega)
+
+theorem rdLE_def (w : Nat) (b : Bytes) :
+    rdLE w b = if b.length < w then none else some (fromLE (b.take w), b.drop w) := by
+  simp only [rdLE, take_length_lt]
+
+theorem rdBlk_def (w : Nat) (b : Bytes) :
+    rdBlk w b = if b.length < w then none else some (b.take w, b.drop w) := by
+  simp only [rdBlk, take_length_lt]
 
 def allZero (b : Bytes) : Bool := b.all (· == 0)
 
 theorem rdLE_enc {w n : Nat} (r : Bytes) (h : n < 256 ^ w) :
     rdLE w (leBytes w n ++ r) = some (n, r) := by
   have hl := leBytes_length w n
-  unfold rdLE
+  rw [rdLE_def]
   rw [if_neg (by rw [List.length_append, hl]; omega), List.take_left' hl, List.drop_left' hl,
     fromLE_leBytes w n h]
 
 theorem rdBlk_enc {w : Nat} {x : Bytes} (r : Bytes) (h : x.length = w) :
     rdBlk w (x ++ r) = some (x, r) := by
-  unfold rdBlk
+  rw [rdBlk_def]
   rw [if_neg (by rw [List.length_append, h]; omega), List.take_left' h, List.drop_left' h]
 
 theorem allZero_replicate (m : Nat) : allZero (List.replicate m 0) = true := by
@@ -87,7 +102,7 @@ theorem leBytes_fromLE (b : Bytes) : leBytes b.length (fromLE b) = b := by
 
 /-- What a successful read took off the front: reading puts the bytes back. -/
 theorem rdLE_dec {w : Nat} {b r : Bytes} {n : Nat} (h : rdLE w b = some (n, r)) : leBytes w n ++ r = b := by
-  unfold rdLE at h
+  rw [rdLE_def] at h
   split at h
   · cases h
   · simp only [Option.some.injEq, Prod.mk.injEq] at h
@@ -98,7 +113,7 @@ theorem rdLE_dec {w : Nat} {b r : Bytes} {n : Nat} (h : rdLE w b = some (n, r)) 
     rw [this, List.take_append_drop]
 
 theorem rdBlk_dec {w : Nat} {b r x : Bytes} (h : rdBlk w b = some (x, r)) : x ++ r = b := by
-  unfold rdBlk at h
+  rw [rdBlk_def] at h
   split at h
   · cases h
   · simp only [Option.some.injEq, Prod.mk.injEq] at h
@@ -139,7 +154,7 @@ theorem rdId_dec {w : Nat} {b r x : Bytes} (h : rdId w b = some (x, r)) : x ++ r
   · cases h
 
 theorem rdBlk_length {w : Nat} {b r x : Bytes} (h : rdBlk w b = some (x, r)) : x.length = w := by
-  unfold rdBlk at h
+  rw [rdBlk_def] at h
   split at h
   · cases h
   · simp only [Option.some.injEq, Prod.mk.injEq] at h
@@ -178,7 +193,7 @@ theorem fromLE_lt (l : Bytes) : fromLE l < 256 ^ l.length := by
 
 /-- A number that was read fits its width. -/
 theorem rdLE_lt {w : Nat} {b r : Bytes} {n : Nat} (h : rdLE w b = some (n, r)) : n < 256 ^ w := by
-  unfold rdLE at h
+  rw [rdLE_def] at h
   split at h
   · cases h
   · simp only [Option.some.injEq, Prod.mk.injEq] at h
@@ -657,7 +672,7 @@ theorem subjOk_length {k : Nat} {s : Bytes} (h : subjOk k s = true) : s.length =
   simp only [Bool.and_eq_true, beq_iff_eq] at h
   exact h.1
 
-/-- Width, operation 0 to 2 (set, end, restore), a span that does not run backwards unless the row is an end row
+/-- Width, operation 0 to 2 (0 assert, 1 void, 2 end), a span that does not run backwards unless the row is an end row
     (its stop is the day before the full file that ended the statement), a canonical subject. -/
 def Fact.WF (f : Fact) : Prop :=
   f.op < 3 ∧ subjOk f.value.kind f.subject = true ∧ f.sid.length = 32 ∧ f.vstart < 4294967296 ∧
@@ -806,6 +821,8 @@ structure Receipt where
   quar : Nat
   scope : Bytes
   frows : Nat
+  /-- The hash of the frame's reference rows (`RefSet.rdOf`) in a stored receipt; zero on the wire and without any. -/
+  rd : Bytes := List.replicate 64 0
   deriving BEq, Repr
 
 def Receipt.WF (r : Receipt) : Prop :=
@@ -814,14 +831,14 @@ def Receipt.WF (r : Receipt) : Prop :=
     idOk 21 r.sender = true ∧ r.channel < 256 ∧ r.key < 65536 ∧ r.reader < 65536 ∧
     r.reread < 1099511627776 ∧ r.rows < 4294967296 ∧ r.admitted < 4294967296 ∧
     r.same < 4294967296 ∧ r.quar < 4294967296 ∧ idOk 21 r.scope = true ∧
-    r.frows < 18446744073709551616
+    r.frows < 18446744073709551616 ∧ r.rd.length = 64
 
 def Receipt.enc (r : Receipt) : Bytes :=
   leBytes 1 receiptTag ++ leBytes 2 r.src ++ leBytes 1 r.cover ++ leBytes 5 r.kb ++
     leBytes 4 r.asof ++ leBytes 4 r.cfrom ++ leBytes 8 r.fseq ++ r.file ++ r.sender ++
     leBytes 1 r.channel ++ leBytes 2 r.key ++ leBytes 2 r.reader ++ leBytes 5 r.reread ++
     leBytes 4 r.rows ++ leBytes 4 r.admitted ++ leBytes 4 r.same ++ leBytes 4 r.quar ++
-    r.scope ++ leBytes 8 r.frows ++ List.replicate 80 0
+    r.scope ++ leBytes 8 r.frows ++ r.rd ++ List.replicate 16 0
 
 def Receipt.decBody (b : Bytes) : Option Receipt := do
   let (tag, b) ← rdLE 1 b
@@ -843,10 +860,11 @@ def Receipt.decBody (b : Bytes) : Option Receipt := do
     let (same, b) ← rdLE 4 b
     let (quar, b) ← rdLE 4 b
     let (scope, b) ← rdId 21 b
-    let (frows, pad) ← rdLE 8 b
+    let (frows, b) ← rdLE 8 b
+    let (rd, pad) ← rdBlk 64 b
     if allZero pad then
       pure ⟨src, cover, kb, asof, cfrom, fseq, file, sender, channel, key, reader, reread, rows,
-        admitted, same, quar, scope, frows⟩
+        admitted, same, quar, scope, frows, rd⟩
     else none
   else none
 
@@ -855,21 +873,21 @@ def Receipt.dec (b : Bytes) : Option Receipt :=
   if b.length = bodyBytes then Receipt.decBody b else none
 
 theorem Receipt.enc_length (r : Receipt) (h : r.WF) : r.enc.length = bodyBytes := by
-  obtain ⟨_, _, _, _, _, _, h7, h8, _, _, _, _, _, _, _, _, h17, _⟩ := h
+  obtain ⟨_, _, _, _, _, _, h7, h8, _, _, _, _, _, _, _, _, h17, _, h19⟩ := h
   simp only [Receipt.enc, List.length_append, leBytes_length, List.length_replicate, h7,
-    idOk_length h8, idOk_length h17, bodyBytes]
+    idOk_length h8, idOk_length h17, h19, bodyBytes]
 
 theorem Receipt.dec_enc (r : Receipt) (h : r.WF) : Receipt.dec r.enc = some r := by
   have hl := Receipt.enc_length r h
   unfold Receipt.dec
   rw [if_pos hl]
   obtain ⟨src, cover, kb, asof, cfrom, fseq, file, sender, channel, key, reader, reread, rows,
-    admitted, same, quar, scope, frows⟩ := r
-  obtain ⟨h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18⟩ := h
-  simp only at h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
+    admitted, same, quar, scope, frows, rd⟩ := r
+  obtain ⟨h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18, h19⟩ := h
+  simp only at h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18 h19
   simp [Receipt.enc, Receipt.decBody, receiptTag, List.append_assoc, rdLE_enc, rdBlk_enc, rdId_enc, h1,
-    h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18]
-  exact allZero_replicate 80
+    h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18, h19]
+  exact allZero_replicate 16
 
 theorem Receipt.enc_dec {b : Bytes} {r : Receipt} (h : Receipt.dec b = some r) : r.enc = b := by
   unfold Receipt.dec at h
@@ -895,7 +913,8 @@ theorem Receipt.enc_dec {b : Bytes} {r : Receipt} (h : Receipt.dec b = some r) :
     rcases h15 : rdLE 4 b14 with _ | ⟨same, b15⟩ <;> simp [h15] at h
     rcases h16 : rdLE 4 b15 with _ | ⟨quar, b16⟩ <;> simp [h16] at h
     rcases h17 : rdId 21 b16 with _ | ⟨scope, b17⟩ <;> simp [h17] at h
-    rcases h18 : rdLE 8 b17 with _ | ⟨frows, pad⟩ <;> simp [h18] at h
+    rcases h18 : rdLE 8 b17 with _ | ⟨frows, b18⟩ <;> simp [h18] at h
+    rcases h19 : rdBlk 64 b18 with _ | ⟨rd, pad⟩ <;> simp [h19] at h
     have hz : allZero pad = true := by simp_all
     have hpad := allZero_eq pad hz
     have l0 := congrArg List.length (rdLE_dec h0)
@@ -917,15 +936,17 @@ theorem Receipt.enc_dec {b : Bytes} {r : Receipt} (h : Receipt.dec b = some r) :
     have l16 := congrArg List.length (rdLE_dec h16)
     have l17 := congrArg List.length (rdId_dec h17)
     have l18 := congrArg List.length (rdLE_dec h18)
+    have l19 := congrArg List.length (rdBlk_dec h19)
     have s7 := rdBlk_length h7
     have s8 := rdId_length h8
     have s17 := rdId_length h17
-    simp only [List.length_append, leBytes_length] at l0 l1 l2 l3 l4 l5 l6 l7 l8 l9 l10 l11 l12 l13 l14 l15 l16 l17 l18
-    have hlen : pad.length = 80 := by simp [bodyBytes] at hb; omega
+    have s19 := rdBlk_length h19
+    simp only [List.length_append, leBytes_length] at l0 l1 l2 l3 l4 l5 l6 l7 l8 l9 l10 l11 l12 l13 l14 l15 l16 l17 l18 l19
+    have hlen : pad.length = 16 := by simp [bodyBytes] at hb; omega
     rw [hlen] at hpad
     obtain ⟨_, rfl⟩ := h
     simp only [Receipt.enc, List.append_assoc]
-    rw [← hpad, ← ht, rdLE_dec h18, rdId_dec h17, rdLE_dec h16, rdLE_dec h15, rdLE_dec h14, rdLE_dec h13,
+    rw [← hpad, ← ht, rdBlk_dec h19, rdLE_dec h18, rdId_dec h17, rdLE_dec h16, rdLE_dec h15, rdLE_dec h14, rdLE_dec h13,
       rdLE_dec h12, rdLE_dec h11, rdLE_dec h10, rdLE_dec h9, rdId_dec h8, rdBlk_dec h7, rdLE_dec h6,
       rdLE_dec h5, rdLE_dec h4, rdLE_dec h3, rdLE_dec h2, rdLE_dec h1]
     exact rdLE_dec h0
@@ -954,13 +975,15 @@ theorem Receipt.dec_wf {b : Bytes} {r : Receipt} (h : Receipt.dec b = some r) : 
     rcases h15 : rdLE 4 b14 with _ | ⟨same, b15⟩ <;> simp [h15] at h
     rcases h16 : rdLE 4 b15 with _ | ⟨quar, b16⟩ <;> simp [h16] at h
     rcases h17 : rdId 21 b16 with _ | ⟨scope, b17⟩ <;> simp [h17] at h
-    rcases h18 : rdLE 8 b17 with _ | ⟨frows, pad⟩ <;> simp [h18] at h
+    rcases h18 : rdLE 8 b17 with _ | ⟨frows, b18⟩ <;> simp [h18] at h
+    rcases h19 : rdBlk 64 b18 with _ | ⟨rd, pad⟩ <;> simp [h19] at h
     obtain ⟨_, rfl⟩ := h
     exact ⟨by simpa using rdLE_lt h1, by simpa using rdLE_lt h2, by simpa using rdLE_lt h3,
       by simpa using rdLE_lt h4, by simpa using rdLE_lt h5, by simpa using rdLE_lt h6, rdBlk_length h7,
       rdId_ok h8, by simpa using rdLE_lt h9, by simpa using rdLE_lt h10, by simpa using rdLE_lt h11,
       by simpa using rdLE_lt h12, by simpa using rdLE_lt h13, by simpa using rdLE_lt h14,
-      by simpa using rdLE_lt h15, by simpa using rdLE_lt h16, rdId_ok h17, by simpa using rdLE_lt h18⟩
+      by simpa using rdLE_lt h15, by simpa using rdLE_lt h16, rdId_ok h17, by simpa using rdLE_lt h18,
+      rdBlk_length h19⟩
   · cases h
 
 end Receipt
@@ -1064,6 +1087,8 @@ def golden : List (String × String) :=
     "400300010c0000000006253501f5fd34015976c2780000000028292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f60616263646566670953544154454d4d4953000000000000000000000001010002000000000000e8030000de0300000500000005000000084d45444943414944000000000000000000000000a00f0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000")
   , ("receipt_edge",
     "40ffff04ffffffffff0000000000000000ffffffffffffffff00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000030000ffffffffffffffffffffffffffffffffffffffffffffff145050505050505050505050505050505050505050ffffffffffffffff0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000")
+  , ("receipt_rd",
+    "400300010c0000000006253501f5fd34015976c2780000000028292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f60616263646566670953544154454d4d4953000000000000000000000001010002000000000000e8030000de0300000500000005000000084d45444943414944000000000000000000000000a00f0000000000004d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c00000000000000000000000000000000")
   ]
 
 def goldenFacts : List (String × Fact) :=
@@ -1094,9 +1119,11 @@ def goldenFacts : List (String × Fact) :=
 
 def goldenReceipts : List (String × Receipt) :=
   [ ("receipt_full", ⟨3, 1, 12, 20260102, 20250101, 2026010201, pat 64 40, ident 21 "STATEMMIS", 1,
-      1, 2, 0, 1000, 990, 5, 5, ident 21 "MEDICAID", 4000⟩)
+      1, 2, 0, 1000, 990, 5, 5, ident 21 "MEDICAID", 4000, zeros 64⟩)
   , ("receipt_edge", ⟨65535, 4, m40, 0, 0, m64, zeros 64, ident 21 "", 3, 0, 65535, m40, m32, m32,
-      m32, m32, ident 21 "PPPPPPPPPPPPPPPPPPPP", m64⟩) ]
+      m32, m32, ident 21 "PPPPPPPPPPPPPPPPPPPP", m64, zeros 64⟩)
+  , ("receipt_rd", ⟨3, 1, 12, 20260102, 20250101, 2026010201, pat 64 40, ident 21 "STATEMMIS", 1,
+      1, 2, 0, 1000, 990, 5, 5, ident 21 "MEDICAID", 4000, pat 64 77⟩) ]
 
 def goldenOk : Bool :=
   goldenFacts.all (fun (n, f) => (golden.lookup n).map hexBytes == some f.enc &&

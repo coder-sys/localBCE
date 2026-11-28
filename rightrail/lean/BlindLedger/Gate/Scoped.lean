@@ -63,16 +63,15 @@ def present {α : Type} (today : Nat) (ksd : Bytes) (k : Kind) : Option (Fact α
   | none => none
   | some f => some (if counts today ksd k f then f.snap else { f.snap with asOf := 0 })
 
-/-- The v1 read set K3 decides on, from fact views: `base` (its five reference fields ignored) with each of
-    the four signed slots `present` for the kind that slot's rule reads; eligibility is always none (decision 15). -/
+/-- The v1 read set K3 decides on, from fact views: `base` (its four reference fields ignored) with each slot
+    `present` for the kind that slot's rule reads. -/
 def kRules (base : Rules.Ctx) (ksd : Bytes) (dmf pd : Option (Fact Death)) (ex : Option (Fact Exclusion))
     (en : Option (Fact Span)) : Rules.Ctx :=
   { base with
     dmf := present base.today ksd .DMF dmf
     providerDeaths := present base.today ksd .PROVIDER_DEATH pd
     exclusions := present base.today ksd .EXCLUSION ex
-    enrollment := present base.today ksd .ENROLLMENT en
-    eligibility := none }
+    enrollment := present base.today ksd .ENROLLMENT en }
 
 /-- The K3 read set (review F2): v1's, the head-keyset digest the batch decides under, and the four facts as
     `Signed` (only `attachChain` builds one), `none` if refused. -/
@@ -95,8 +94,7 @@ def Ctx.plain (c : Ctx) : Rules.Ctx :=
     dmf := c.dmf.map (·.toSnapshot)
     providerDeaths := c.providerDeaths.map (·.toSnapshot)
     exclusions := c.exclusions.map (·.toSnapshot)
-    enrollment := c.enrollment.map (·.toSnapshot)
-    eligibility := none }
+    enrollment := c.enrollment.map (·.toSnapshot) }
 
 /-- Kind k's fact is present and counts, stated plainly (both window bounds separately). -/
 def Live {α : Type} (today : Nat) (ksd : Bytes) (k : Kind) (o : Option (Fact α)) : Prop :=
@@ -478,7 +476,7 @@ def vE6 : Snapshot Span := ⟨20261020, 1, [⟨6, 5, 20260101, 20261231⟩]⟩
 def vSet : Snapshot Line := ⟨20261001, 0, []⟩
 def vBase : Rules.Ctx :=
   { today := 20261022, dmf := none, providerDeaths := none, exclusions := none, enrollment := none,
-    eligibility := none, released := some vSet, unresolved := some vSet, releasedPrior := ⟨0, 0, []⟩, unresolvedPrior := ⟨0, 0, []⟩,
+    released := some vSet, unresolved := some vSet, releasedPrior := ⟨0, 0, []⟩, unresolvedPrior := ⟨0, 0, []⟩,
     anchor := 0, redo := [] }
 def vL : Line :=
   { id := 1, pay := 1, flow := .FFS_CLAIM, member := 7, payee := 8, rendering := 8, date := 20261015, proc := 99213,
@@ -518,39 +516,34 @@ def vV1 (c : Rules.Ctx × Rules.Ctx) : Rules.Decision := Rules.decideLine c.2 []
 #guard counts 20261022 vK .PROVIDER_DEATH (vF .PROVIDER_DEATH vD .IDV) && !counts 20261022 vK .DMF (vF .PROVIDER_DEATH vD .IDV)
 example : (vF .PROVIDER_DEATH vD .IDV).kind ≠ .DMF ∧ counts 20261022 vK .DMF (vF .PROVIDER_DEATH vD .IDV) = false := by
   decide
--- Neither read carries eligibility (`vBase`, `kRules`; decision 15), so every decision below carries
--- STALE_ELIGIBILITY: where v1 or K3 ALLOWed, the decision is now [STALE_ELIGIBILITY] alone (every other rule silent).
--- review F1: v1 is silent on a provider-death list in the DMF slot; K3 reviews it (STALE_DMF), never ALLOW
-#guard (vV1 (vC (dm := vF .PROVIDER_DEATH vD .IDV))).reasons == [Reason.STALE_ELIGIBILITY]
-#guard (vDec (vC (dm := vF .PROVIDER_DEATH vD .IDV))).reasons == [Reason.STALE_DMF, Reason.STALE_ELIGIBILITY]
+-- review F1: v1 allows a provider-death list in the DMF slot; K3 reviews it (STALE_DMF), never ALLOW
+#guard (vV1 (vC (dm := vF .PROVIDER_DEATH vD .IDV))).outcome == Outcome.ALLOW
+#guard (vDec (vC (dm := vF .PROVIDER_DEATH vD .IDV))).reasons == [Reason.STALE_DMF]
 -- the window crosses a month end in calendar days: asOf 20261028 + 7 is 20261104
 #guard counts 20261104 vK .ENROLLMENT (vF .ENROLLMENT { vE with asOf := 20261028 } .ELIG 20261130 20261104)
 #guard !counts 20261105 vK .ENROLLMENT (vF .ENROLLMENT { vE with asOf := 20261028 } .ELIG 20261130 20261105)
 -- bounded outage: a DMF fact 82 days old (signed through 20261231) still counts, 99 days old does not
-#guard (vDec (vC (dm := vF .DMF { vD with asOf := 20260801 } .IDV 20261231))).reasons == [Reason.STALE_ELIGIBILITY]
+#guard (vDec (vC (dm := vF .DMF { vD with asOf := 20260801 } .IDV 20261231))).outcome == Outcome.ALLOW
 #guard (vDec (vC (dm := vF .DMF { vD with asOf := 20260715 } .IDV 20261231))).reasons.contains .STALE_DMF
 -- counts_lengthen: a validUntil before today does not count, a longer one does
 #guard !counts 20261022 vK .ENROLLMENT (vF .ENROLLMENT vE .ELIG 20261021) &&
   counts 20261022 vK .ENROLLMENT (vF .ENROLLMENT vE .ELIG 20261031)
--- allow_live, allow_tightens: all four count, every rule but G2's stale silent, same decision as v1
-#guard (vDec vC).reasons == [Reason.STALE_ELIGIBILITY] && vDec vC == vV1 vC
--- usable_tightens is one-way, allow_live needs scope (kills `scope ∈ need` dropped): v1 is silent on an ENR
--- enrollment fact, K3 reviews it (STALE_ENROLLMENT); the same for a DMF fact past its signed window, and for a fact of
--- another epoch
-#guard (vV1 (vC (en := vF .ENROLLMENT vE .ENR))).reasons == [Reason.STALE_ELIGIBILITY]
-#guard (vDec (vC (en := vF .ENROLLMENT vE .ENR))).outcome == Outcome.HUMAN_REVIEW &&
-  (vDec (vC (en := vF .ENROLLMENT vE .ENR))).reasons == [Reason.STALE_ELIGIBILITY, Reason.STALE_ENROLLMENT]
-#guard (vV1 (vC (dm := vF .DMF vD .IDV 20261021))).reasons == [Reason.STALE_ELIGIBILITY]
-#guard (vDec (vC (dm := vF .DMF vD .IDV 20261021))).reasons == [Reason.STALE_DMF, Reason.STALE_ELIGIBILITY]
-#guard (vDec (vC (ex := vF .EXCLUSION vX .ENR (ks := vK2)))).reasons ==
-  [Reason.STALE_ELIGIBILITY, Reason.STALE_EXCLUSION]
+-- allow_live, allow_tightens: all four count, ALLOW, same decision as v1
+#guard (vDec vC).outcome == Outcome.ALLOW && vDec vC == vV1 vC
+-- usable_tightens is one-way, allow_live needs scope (kills `scope ∈ need` dropped): v1 allows an ENR enrollment
+-- fact, K3 reviews it; the same for a DMF fact past its signed window, and for a fact of another epoch
+#guard (vV1 (vC (en := vF .ENROLLMENT vE .ENR))).outcome == Outcome.ALLOW
+#guard (vDec (vC (en := vF .ENROLLMENT vE .ENR))).outcome == Outcome.HUMAN_REVIEW
+#guard (vV1 (vC (dm := vF .DMF vD .IDV 20261021))).outcome == Outcome.ALLOW
+#guard (vDec (vC (dm := vF .DMF vD .IDV 20261021))).reasons == [Reason.STALE_DMF]
+#guard (vDec (vC (ex := vF .EXCLUSION vX .ENR (ks := vK2)))).reasons == [Reason.STALE_EXCLUSION]
 -- uncounted_reviews, self_reviews_not_holds: SELF enrollment reviews; with no span it shows UNVERIFIED, while the same
 -- rows at ELIG are the certain HOLD
-#guard (vDec (vC (en := vF .ENROLLMENT vE .SELF))).reasons == [Reason.STALE_ELIGIBILITY, Reason.STALE_ENROLLMENT]
+#guard (vDec (vC (en := vF .ENROLLMENT vE .SELF))).reasons == [Reason.STALE_ENROLLMENT]
 #guard (vDec (vC (en := vF .ENROLLMENT vE6 .SELF))).reasons ==
-  [Reason.MEMBER_NOT_ENROLLED_UNVERIFIED, Reason.STALE_ELIGIBILITY, Reason.STALE_ENROLLMENT]
+  [Reason.MEMBER_NOT_ENROLLED_UNVERIFIED, Reason.STALE_ENROLLMENT]
 #guard (vDec (vC (en := vF .ENROLLMENT vE6 .SELF))).outcome == Outcome.HUMAN_REVIEW
-#guard (vDec (vC (en := vF .ENROLLMENT vE6 .ELIG))).reasons == [Reason.MEMBER_NOT_ENROLLED, Reason.STALE_ELIGIBILITY]
+#guard (vDec (vC (en := vF .ENROLLMENT vE6 .ELIG))).reasons == [Reason.MEMBER_NOT_ENROLLED]
 #guard (vDec (vC (en := vF .ENROLLMENT vE6 .ELIG))).outcome == Outcome.HOLD
 -- uncounted_not_certain (review F6): member 7 dead, provider 8 dead and excluded; counted, the certain HOLD reasons;
 -- SELF-scoped, only their UNVERIFIED twins and STALE
@@ -558,10 +551,10 @@ def vDd : Snapshot Death := ⟨20261020, 1, [⟨7, 20200101⟩]⟩
 def vPd : Snapshot Death := ⟨20261020, 1, [⟨8, 20200101⟩]⟩
 def vXx : Snapshot Exclusion := ⟨20261020, 1, [⟨8, 20200101, 99991231⟩]⟩
 #guard (vDec (vC (dm := vF .DMF vDd .IDV) (pd := vF .PROVIDER_DEATH vPd .IDV) (ex := vF .EXCLUSION vXx .ENR))).reasons ==
-  [Reason.MEMBER_DECEASED, Reason.PROVIDER_DECEASED, Reason.PROVIDER_EXCLUDED, Reason.STALE_ELIGIBILITY]
+  [Reason.MEMBER_DECEASED, Reason.PROVIDER_DECEASED, Reason.PROVIDER_EXCLUDED]
 #guard (vDec (vC (dm := vF .DMF vDd .SELF) (pd := vF .PROVIDER_DEATH vPd .SELF) (ex := vF .EXCLUSION vXx .SELF))).reasons ==
   [Reason.MEMBER_DECEASED_UNVERIFIED, Reason.PROVIDER_DECEASED_UNVERIFIED, Reason.PROVIDER_EXCLUDED_UNVERIFIED,
-    Reason.STALE_DMF, Reason.STALE_ELIGIBILITY, Reason.STALE_EXCLUSION, Reason.STALE_PROVIDER_DEATH]
+    Reason.STALE_DMF, Reason.STALE_EXCLUSION, Reason.STALE_PROVIDER_DEATH]
 -- Uncounted is satisfiable by an empty slot (and by an attached fact on another day: vSig below, `some false`)
 example : Uncounted 20261022 vK .DMF (none : Option (Signed Death)) := fun _ h => nomatch h
 -- Attached is satisfiable by an empty slot (and by every `some` vSig result below)
@@ -637,13 +630,10 @@ example : Attached vVer vPin "RR/GATE/READ-DMF/v2" Death.fields vCtx.dmf ∧
     Attached vVer vPin "RR/GATE/READ-EXCLUSION/v2" Exclusion.fields vCtx.exclusions ∧
     Attached vVer vPin "RR/GATE/READ-ENROLLMENT/v2" Span.fields vCtx.enrollment :=
   ⟨attached_run _ _ _ _ _, attached_run _ _ _ _ _, attached_run _ _ _ _ _, attached_run _ _ _ _ _⟩
--- (the signed path reads no eligibility, decision 15: [STALE_ELIGIBILITY] alone, HUMAN_REVIEW, where it was ALLOW)
 #guard vCtx.dmf.isSome && vCtx.providerDeaths.isSome && vCtx.exclusions.isSome && vCtx.enrollment.isSome &&
-  (Rules.decideLine vCtx.rules [] vL).reasons == [Reason.STALE_ELIGIBILITY]
+  (Rules.decideLine vCtx.rules [] vL).outcome == Outcome.ALLOW
 -- the same attaches under another batch keyset digest: none counts, review
-#guard (Rules.decideLine { vCtx with keyset := vK }.rules [] vL).outcome == Outcome.HUMAN_REVIEW &&
-  [Reason.STALE_DMF, .STALE_PROVIDER_DEATH, .STALE_EXCLUSION, .STALE_ENROLLMENT].all
-    ((Rules.decideLine { vCtx with keyset := vK }.rules [] vL).reasons.contains ·)
+#guard (Rules.decideLine { vCtx with keyset := vK }.rules [] vL).outcome == Outcome.HUMAN_REVIEW
 -- Python cross-vector (tests/test_right_rail_gate_snapshot.py LEAN_MAN4): the manifest pinning all four headers, so the
 -- four READ-<kind>/v2 literals and field encodings, byte for byte
 #guard Keyset.vecHex (sha3 (SnapshotV2.encodeMan vMan4)) ==

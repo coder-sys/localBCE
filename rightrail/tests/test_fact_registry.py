@@ -264,6 +264,13 @@ class RegistryTests(unittest.TestCase):
             self.assertEqual(g.late_until(order, 300), 20260331)
             self.assertEqual(g.late_until(order, 400), g.OPEN)
 
+    def test_late_until_takes_the_least_cfrom_above(self):
+        # cfrom need not rise with fseq: the newer file stating from an earlier date cuts the late row there.
+        fulls = [rcpt(1, 1, 20260301, 20260301, 20, 1, 1, 1), rcpt(1, 1, 20260215, 20260215, 30, 2, 1, 1)]
+        for order in (fulls, fulls[::-1]):
+            self.assertEqual(g.late_until(order, 10), 20260214)
+            self.assertEqual(g.late_until(order, 20), 20260214)
+
 
 if __name__ == "__main__":
     unittest.main()

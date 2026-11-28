@@ -303,9 +303,9 @@ def day_before(d: int) -> int:
 
 
 def late_until(rs, f) -> int:
-    """The `until` of a row of fseq f: the day before the cfrom of the lowest-fseq full receipt above f."""
-    cand = pick_min([a for a in rs if a["cover"] == 1 and f < a["fseq"]])
-    return OPEN if cand is None else day_before(cand["cfrom"])
+    """The `until` of a row of fseq f: the day before the least cfrom of the full receipts above f."""
+    cfroms = [a["cfrom"] for a in rs if a["cover"] == 1 and f < a["fseq"]]
+    return day_before(min(cfroms)) if cfroms else OPEN
 
 
 def ends_allowed(st, n, r, subjectless) -> bool:

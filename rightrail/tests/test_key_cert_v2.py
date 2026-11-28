@@ -214,7 +214,10 @@ def build_vectors() -> str:
                     ("short-key", replace(base, verifier_key=key("v", cut=1))),
                     ("long-key", replace(base, key=key("e", pad=1)))):
         case("MALFORMED", name, c)
-    raw("MALFORMED", "v1-certificate", fx.key_cert("e7"))
+    epoch, tenant, shards = fx.CERTS["e7"]  # the retired v1 form: one root signature, no link, one shard count
+    v1 = (b"RR/GATE/KEY-CERT/v1\x00\x01" + len(tenant).to_bytes(2, "big") + tenant.encode() + epoch.to_bytes(8, "big")
+          + shards.to_bytes(4, "big") + fx.keypair("e7")[0])
+    raw("MALFORMED", "v1-certificate", v1 + (4627).to_bytes(2, "big") + fx.det_sign(f"root-{tenant}", v1))
     raw("MALFORMED", "tag-only", TAG)
     raw("MALFORMED", "cut-short", typical[0][:-1])
     raw("MALFORMED", "trailing-byte", typical[0] + b"\x00")

@@ -475,7 +475,7 @@ def dup : Nat := 2 ^ Rules.Reason.idx .ALREADY_DECIDED
 #guard Rules.Reason.idx .MEMBER_DECEASED == 7 && Rules.Reason.idx .STALE_UNRESOLVED == 23
 -- a mask has one bit per reason: a new reason's number widens the masks with it
 #guard reasonMask == 2 ^ Rules.reasons.length
-#guard (Rules.reasons.filter Rules.bypassable).length == 18
+#guard (Rules.reasons.filter Rules.bypassable).length == 20
 -- two approvers of distinct employees and distinct subjects
 #guard bv (bx deceased [a1, a2])
 #guard bv (bx deceased [a2, a3])
@@ -484,11 +484,12 @@ def dup : Nat := 2 ^ Rules.Reason.idx .ALREADY_DECIDED
 #guard !bv (bx deceased [a1, a3])
 #guard !bv (bx deceased [a1, a5])
 #guard !bv (bx deceased [r1, r2])
--- overrides: a bit outside the bypassable set, a mix, nothing, the first bit beyond the reasons
+-- overrides: a bit outside the bypassable set, a mix, nothing, a bit beyond the 29 reasons
 #guard !bv (bx dup [a1, a2])
 #guard !bv (bx (deceased + dup) [a1, a2])
 #guard !bv (bx 0 [a1, a2])
-#guard !bv (bx (2 ^ Rules.reasons.length) [a1, a2])
+#guard bv (bx (2 ^ Rules.Reason.idx .STALE_ELIGIBILITY) [a1, a2])
+#guard !bv (bx (2 ^ 29) [a1, a2])
 #guard !bv (g0)
 
 /-- Mutant: `<` for `<=` on the window. -/

@@ -222,7 +222,8 @@
         ["Allowlisted support", support.status + " · " + support.failure_stage + " / " + support.error_class + (artifact ? " · artifact v" + artifact.version + " " + artifact.sha256.slice(0, 16) + "…" : "")],
       ];
     }
-    return correctionFollowup && correctionFollowup.status === "UNAVAILABLE" ? [["Report to the State", "Follow-up read unavailable: " + correctionFollowup.reason]] : [];
+    if (correctionFollowup && correctionFollowup.status === "UNAVAILABLE") return [["Report to the State", "The State report could not be read at that time: " + correctionFollowup.reason]];
+    return !correctionFollowup && !ownerAvailable ? [["Report to the State", "The State report could not be read at that time."]] : []; // never a record that silently lacks the section
   }
 
   // The whole record as data: the screen and the plain-text view are both drawn from this.
@@ -298,7 +299,9 @@
           + (event.after_revision === null || event.after_revision === undefined ? "" : ", revision " + event.before_revision + " → " + event.after_revision)]);
       }
       if (snapshot.h.timeline_truncated) R.activity.push(["", "Timeline cut short: showing " + events.length + " recent events of " + snapshot.h.timeline_total_count + "; older history is omitted.", ""]);
-      R.followup = followupRows();
+      const lead = item.item_id === leadId; // the State report is the lead obligation's only: an item opened in the detail slot never carries it
+      R.followup = lead ? followupRows() : [];
+      R.followupPending = lead && !correctionFollowup && ownerAvailable; // its read has not landed: the download waits for it
     }
     R.facts.push(["Obligation", item.obligation_id], ["Read", "sequence " + env.sequence + " · snapshot " + env.snapshot_id.slice(0, 16)]);
     if (isH) R.facts.push(["Continuity", snapshot.continuity ? snapshot.continuity.mode : "Unknown"]);
@@ -400,8 +403,10 @@
     // A read can remove the form or step a confirm belonged to (another actor decided, cash arrived); a command in flight settles it itself. A row whose own read has not landed yet keeps it.
     if (v && !commandPending && ((confirming === "decision" && !R.decide) || (confirming === "record-cash" && !(cash && cash.enabled)))) confirming = null;
     const foot = el("div", { class: "foot" }, el("a", { id: "plain-text", href: "#" + R.id + (textMode ? "" : ".txt"), text: textMode ? "Back to the full view" : "View as plain text" }),
-      el("a", { id: "download-record", href: "data:text/plain;charset=utf-8," + encodeURIComponent(textOf(R)), download: "record-" + R.id + ".txt", text: "Download record" }),
-      el("span", { text: "The same record an auditor or an agent reads." }));
+      R.followupPending
+        ? el("a", { id: "download-record", role: "link", "aria-disabled": "true", text: "Download record" })
+        : el("a", { id: "download-record", href: "data:text/plain;charset=utf-8," + encodeURIComponent(textOf(R)), download: "record-" + R.id + ".txt", text: "Download record" }),
+      el("span", { text: R.followupPending ? "Loading the State report. The download is ready when it has loaded." : "The same record an auditor or an agent reads." }));
     const facts = el("dl", { class: "facts", "aria-label": "Facts" }, R.facts.map(([term, value]) => [el("dt", { text: term }), el("dd", { class: term === "Obligation" || term === "Read" ? "mono" : false, text: fill(value, true) })]));
     let main;
     if (textMode) {

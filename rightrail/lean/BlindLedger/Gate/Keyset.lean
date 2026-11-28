@@ -59,6 +59,12 @@ def sigTag : Bytes := "RR/KEYSET/v2/SIG".toUTF8.toList ++ [0]
 def source : Nat := 1
 def approver : Nat := 2
 def roster : Nat := 5
+/-- A POLICY key signs the state's rule sets (`RuleSet.admit`) and nothing else; roster keys admit POLICY keys into a key
+    set but never sign a rule set, so the single state agency's own officials keep policy authority (42 CFR 431.10(e)). -/
+def policy : Nat := 6
+/-- POLICY threshold bounds: at least two distinct people sign a rule set; the state sets 2 to 8 in its key set. -/
+def minPolicy : Nat := 2
+def maxPolicy : Nat := 8
 def maxKeys : Nat := 1024
 def maxSigs : Nat := 16
 /-- Two-person key: a snapshot needs SOURCE keys of at least two distinct
@@ -102,6 +108,8 @@ structure Keyset where
   kRoster : Nat
   kSource : Nat
   entries : List Entry
+  /-- POLICY threshold; 0 and not encoded when no entry is a POLICY key. -/
+  kPolicy : Nat
 
 structure Frame where
   ks : Keyset
@@ -109,22 +117,29 @@ structure Frame where
 
 def headW : List Nat := [13, 64, 4, 64, 4, 4, 1, 1, 4]
 
+/-- Whether some entry, revoked or not, is a POLICY key: then, and only then, the body carries `kPolicy`. -/
+def hasPolicy (es : List Entry) : Bool := es.any (·.role == policy)
+
+/-- `u8 kPolicy` after the entries when some entry is a POLICY key, else nothing, so a key set without POLICY keys keeps
+    the bytes and digest it had before the role existed. -/
+def policyByte (k : Keyset) : Bytes := if hasPolicy k.entries then natBE 1 k.kPolicy else []
+
 def body (k : Keyset) : Bytes :=
   [tag, k.state, natBE 4 k.epoch, k.prev, natBE 4 k.notBefore, natBE 4 k.notAfter, natBE 1 k.kRoster,
-    natBE 1 k.kSource, natBE 4 k.entries.length].flatten ++ (k.entries.map (·.parts.flatten)).flatten
+    natBE 1 k.kSource, natBE 4 k.entries.length].flatten ++ (k.entries.map (·.parts.flatten)).flatten ++ policyByte k
 
 def encodeSigs (ss : List SigRec) : Bytes := natBE 1 ss.length ++ (ss.map fun r => r.keyId ++ r.sig).flatten
 def encode (f : Frame) : Bytes := body f.ks ++ encodeSigs f.sigs
 def digestOf (k : Keyset) : Bytes := sha3 (body k)
 def msgOf (k : Keyset) : Bytes := sha3 (sigTag ++ body k)
 
-/-- K2's guard plus: role 1..5 (ROSTER = 5 now decodes; review LOW), window ordered, scopes/kinds only on SOURCE, caps
-    only on APPROVER. -/
+/-- K2's guard plus: role 1..6 (ROSTER = 5, POLICY = 6), window ordered, scopes/kinds only on SOURCE, caps only on
+    APPROVER. -/
 def decodeEntry (x : Bytes) : Option (Entry × Bytes) := do
   let (ps, r) ← chop entryW x
   match ps with
   | [id, emp, idp, ro, sc, ki, vf, vu, rv, cc, cents, pl, pk] =>
-    guard (beNat pl = mlDsa87Key ∧ id = sha3 (keyTag ++ pk) ∧ 1 ≤ beNat ro ∧ beNat ro ≤ roster ∧ beNat vf ≤ beNat vu ∧
+    guard (beNat pl = mlDsa87Key ∧ id = sha3 (keyTag ++ pk) ∧ 1 ≤ beNat ro ∧ beNat ro ≤ policy ∧ beNat vf ≤ beNat vu ∧
       (beNat ro = source ∨ beNat sc = 0 ∧ beNat ki = 0) ∧ (beNat ro = approver ∨ beNat cc = 0 ∧ beNat cents = 0))
     pure (⟨id, emp, idp, beNat ro, beNat sc, beNat ki, beNat vf, beNat vu, beNat rv, beNat cc, beNat cents, pk⟩, r)
   | _ => none
@@ -171,15 +186,32 @@ def liveRoster (k : Keyset) : Nat :=
 def coverRoster (k : Keyset) : Nat :=
   nDistinct (·.employee) (k.entries.filter fun e => e.role == roster && liveAt e k.notBefore && liveAt e k.notAfter)
 
+/-- An unrevoked key of role `r`. -/
+def holds (r : Nat) (e : Entry) : Bool := e.role == r && e.revokedFrom == live
+
+/-- Who holds POLICY keys: an employee or identity-provider subject holding an unrevoked POLICY key holds no unrevoked
+    key of any other role (whoever signs the rules never releases or bypasses around them, attaches the facts they
+    read, or manages the keys that admit their signers), and among unrevoked POLICY keys the employee and the subject
+    name each other one to one, so distinct employees are distinct subjects. -/
+def rolesOk (es : List Entry) : Bool :=
+  es.all fun e => !holds policy e || es.all fun f =>
+    (f.role == policy || f.revokedFrom != live || e.employee != f.employee && e.idp != f.idp) &&
+      (!holds policy f || (e.employee == f.employee) == (e.idp == f.idp))
+
+/-- The `kPolicy` byte after the entries, read only when some entry is a POLICY key. -/
+def cutPolicy (es : List Entry) (r : Bytes) : Option (Bytes × Bytes) := if hasPolicy es then cut 1 r else some ([], r)
+
 def decode (x : Bytes) : Option Frame := do
   let (ps, r) ← chop headW x
   match ps with
   | [t, st, ep, pv, nb, na, kr, kso, n] =>
     guard (t = tag ∧ (beNat ep = 0 → pv = zeroDigest) ∧ beNat nb ≤ beNat na ∧ lifeOk (beNat nb) (beNat na) = true ∧
       beNat n ≤ maxKeys ∧ minSource ≤ beNat kso ∧ beNat kso ≤ maxSigs)
-    let (es, sb) ← decodeEntries (beNat n) r
-    let k : Keyset := ⟨st, beNat ep, pv, beNat nb, beNat na, beNat kr, beNat kso, es⟩
-    guard (Sorted es ∧ minRoster ≤ k.kRoster ∧ k.kRoster ≤ maxRoster ∧ k.kRoster ≤ coverRoster k)
+    let (es, r) ← decodeEntries (beNat n) r
+    let (kp, sb) ← cutPolicy es r
+    let k : Keyset := ⟨st, beNat ep, pv, beNat nb, beNat na, beNat kr, beNat kso, es, beNat kp⟩
+    guard (Sorted es ∧ minRoster ≤ k.kRoster ∧ k.kRoster ≤ maxRoster ∧ k.kRoster ≤ coverRoster k ∧
+      (hasPolicy es = true → minPolicy ≤ k.kPolicy ∧ k.kPolicy ≤ maxPolicy) ∧ rolesOk es = true)
     let ss ← decodeSigBlock sb
     pure ⟨k, ss⟩
   | _ => none
@@ -187,6 +219,8 @@ def decode (x : Bytes) : Option Frame := do
 /-! ### Counting -/
 
 def rosterOk (t : Nat) (e : Entry) : Bool := e.role == roster && liveAt e t
+/-- A POLICY key live on day `t`: what a rule set's signers must hold (`RuleSet.admit`, kPolicy distinct employees). -/
+def policyOk (t : Nat) (e : Entry) : Bool := e.role == policy && liveAt e t
 /-- SOURCE key for scope byte s (bit s-1) and kind kd (bit kd-1), live at the snapshot's asOf `a`, its window covering
     the snapshot's validUntil `vu` (MED-B: an expired, unrevoked key cannot sign a backdated asOf, nor a validUntil past
     its own).  Round 5: no today test; attach checks asOf ≤ now ≤ vu, so the key is live on the verifier's day too
@@ -341,7 +375,7 @@ def reinit (verify : Bytes → Bytes → Bytes → Bool) (pin node : Bytes) (now
 
 def EntryWf (e : Entry) : Prop :=
   e.keyId.length = 64 ∧ e.employee.length = 64 ∧ e.idp.length = 64 ∧ e.pk.length = mlDsa87Key ∧
-    e.keyId = sha3 (keyTag ++ e.pk) ∧ 1 ≤ e.role ∧ e.role ≤ roster ∧ e.scopes < 256 ∧ e.kinds < 256 ∧
+    e.keyId = sha3 (keyTag ++ e.pk) ∧ 1 ≤ e.role ∧ e.role ≤ policy ∧ e.scopes < 256 ∧ e.kinds < 256 ∧
     e.validFrom ≤ e.validUntil ∧ e.validUntil < 2 ^ 32 ∧ e.revokedFrom < 2 ^ 32 ∧ e.capCount < 2 ^ 16 ∧
     e.capCents < 2 ^ 64 ∧ (e.role = source ∨ e.scopes = 0 ∧ e.kinds = 0) ∧
     (e.role = approver ∨ e.capCount = 0 ∧ e.capCents = 0)
@@ -350,7 +384,9 @@ def Wf (k : Keyset) : Prop :=
   k.state.length = 64 ∧ k.prev.length = 64 ∧ k.epoch < 2 ^ 32 ∧ (k.epoch = 0 → k.prev = zeroDigest) ∧
     k.notBefore ≤ k.notAfter ∧ lifeOk k.notBefore k.notAfter = true ∧ k.notAfter < 2 ^ 32 ∧
     minRoster ≤ k.kRoster ∧ k.kRoster ≤ maxRoster ∧ k.kRoster ≤ coverRoster k ∧ minSource ≤ k.kSource ∧ k.kSource ≤ maxSigs ∧
-    k.entries.length ≤ maxKeys ∧ Sorted k.entries ∧ ∀ e ∈ k.entries, EntryWf e
+    k.entries.length ≤ maxKeys ∧ Sorted k.entries ∧ (∀ e ∈ k.entries, EntryWf e) ∧
+    (hasPolicy k.entries = true → minPolicy ≤ k.kPolicy ∧ k.kPolicy ≤ maxPolicy) ∧
+    (hasPolicy k.entries = false → k.kPolicy = 0) ∧ rolesOk k.entries = true
 
 def SigsWf (ss : List SigRec) : Prop :=
   1 ≤ ss.length ∧ ss.length ≤ maxSigs ∧ SigsSorted ss ∧ ∀ r ∈ ss, r.keyId.length = 64 ∧ r.sig.length = mlDsa87Signature
@@ -548,6 +584,38 @@ theorem decodeSigBlock_spec {x : Bytes} {ss : List SigRec} (h : decodeSigBlock x
         · exact absurd h (fail_bind _ _)
       · exact absurd h (fail_bind _ _)
 
+theorem cutPolicy_spec {es : List Entry} {r kp sb : Bytes} (h : cutPolicy es r = some (kp, sb)) :
+    r = kp ++ sb ∧ (hasPolicy es = true → kp.length = 1) ∧ (hasPolicy es = false → kp = []) := by
+  unfold cutPolicy at h
+  by_cases hp : hasPolicy es = true
+  · rw [if_pos hp] at h
+    obtain ⟨h1, h2⟩ := cut_spec h
+    exact ⟨h2, fun _ => h1, fun h' => by simp [hp] at h'⟩
+  · rw [if_neg hp] at h
+    simp only [Option.some.injEq, Prod.mk.injEq] at h
+    obtain ⟨rfl, rfl⟩ := h
+    exact ⟨by simp, fun h' => absurd h' hp, fun _ => rfl⟩
+
+theorem policyByte_of {k : Keyset} {kp : Bytes} (hk : k.kPolicy = beNat kp) (h1 : hasPolicy k.entries = true → kp.length = 1)
+    (h0 : hasPolicy k.entries = false → kp = []) : policyByte k = kp := by
+  unfold policyByte
+  by_cases hp : hasPolicy k.entries = true
+  · rw [if_pos hp, hk]; exact natBE_beNat' (h1 hp)
+  · rw [if_neg hp]; exact (h0 (by simpa using hp)).symm
+
+theorem cutPolicy_enc (k : Keyset) (y : Bytes) : cutPolicy k.entries (policyByte k ++ y) = some (policyByte k, y) := by
+  unfold cutPolicy policyByte
+  by_cases hp : hasPolicy k.entries = true
+  · rw [if_pos hp, if_pos hp]; exact cut_app (natBE_length 1 _)
+  · rw [if_neg hp, if_neg hp]; rfl
+
+theorem beNat_policyByte {k : Keyset} (hp1 : hasPolicy k.entries = true → minPolicy ≤ k.kPolicy ∧ k.kPolicy ≤ maxPolicy)
+    (hp0 : hasPolicy k.entries = false → k.kPolicy = 0) : beNat (policyByte k) = k.kPolicy := by
+  unfold policyByte
+  by_cases hp : hasPolicy k.entries = true
+  · rw [if_pos hp]; exact beNat_natBE 1 _ (by have := (hp1 hp).2; unfold maxPolicy at this; omega)
+  · rw [if_neg hp]; exact (hp0 (by simpa using hp)).symm
+
 theorem decode_spec {x : Bytes} {f : Frame} (h : decode x = some f) :
     x = encode f ∧ Wf f.ks ∧ SigsWf f.sigs := by
   unfold decode at h
@@ -565,30 +633,38 @@ theorem decode_spec {x : Bytes} {f : Frame} (h : decode x = some f) :
       obtain ⟨hT, hEp, hNb, hNa, hN, hS1, hS2⟩ := hg1
       subst hT
       simp only [Option.bind_some] at h
-      rcases h2 : decodeEntries (beNat n) r with _ | ⟨es, sb⟩
+      rcases h2 : decodeEntries (beNat n) r with _ | ⟨es, r1⟩
       · simp [h2] at h
       · simp only [h2, Option.bind_some] at h
-        split at h
-        · rename_i hg2
-          rcases h3 : decodeSigBlock sb with _ | ss
-          · simp [h3] at h
-          · simp only [h3, Option.bind_some, Option.some.injEq] at h
-            subst h
-            obtain ⟨j1, j2, j3⟩ := decodeEntries_spec _ _ _ _ h2
-            obtain ⟨k1, k2⟩ := decodeSigBlock_spec h3
-            have e3 : natBE 4 (beNat ep) = ep := natBE_beNat' l3
-            have e5 : natBE 4 (beNat nb) = nb := natBE_beNat' l5
-            have e6 : natBE 4 (beNat na) = na := natBE_beNat' l6
-            have e7 : natBE 1 (beNat kr) = kr := natBE_beNat' l7
-            have e8 : natBE 1 (beNat kso) = kso := natBE_beNat' l8
-            have e9 : natBE 4 (beNat n) = n := natBE_beNat' l9
-            refine ⟨?_, ?_, k2⟩
-            · rw [hx, j1, k1]
-              simp [encode, body, e3, e5, e6, e7, e8, j2, e9, List.append_assoc]
-            · unfold Wf
-              exact ⟨l2, l4, beNat_lt4 l3, hEp, hNb, hNa, beNat_lt4 l6, hg2.2.1, hg2.2.2.1, hg2.2.2.2, hS1, hS2,
-                by rw [j2]; exact hN, hg2.1, j3⟩
-        · exact absurd h (fail_bind _ _)
+        rcases hc : cutPolicy es r1 with _ | ⟨kp, sb⟩
+        · simp [hc] at h
+        · simp only [hc, Option.bind_some] at h
+          split at h
+          · rename_i hg2
+            rcases h3 : decodeSigBlock sb with _ | ss
+            · simp [h3] at h
+            · simp only [h3, Option.bind_some, Option.some.injEq] at h
+              subst h
+              obtain ⟨j1, j2, j3⟩ := decodeEntries_spec _ _ _ _ h2
+              obtain ⟨c1, c2, c3⟩ := cutPolicy_spec hc
+              obtain ⟨k1, k2⟩ := decodeSigBlock_spec h3
+              have epb : policyByte ⟨st, beNat ep, pv, beNat nb, beNat na, beNat kr, beNat kso, es, beNat kp⟩ = kp :=
+                policyByte_of rfl c2 c3
+              have e3 : natBE 4 (beNat ep) = ep := natBE_beNat' l3
+              have e5 : natBE 4 (beNat nb) = nb := natBE_beNat' l5
+              have e6 : natBE 4 (beNat na) = na := natBE_beNat' l6
+              have e7 : natBE 1 (beNat kr) = kr := natBE_beNat' l7
+              have e8 : natBE 1 (beNat kso) = kso := natBE_beNat' l8
+              have e9 : natBE 4 (beNat n) = n := natBE_beNat' l9
+              refine ⟨?_, ?_, k2⟩
+              · rw [hx, j1, c1, k1]
+                simp only [encode, body, epb]
+                simp [e3, e5, e6, e7, e8, j2, e9, List.append_assoc]
+              · unfold Wf
+                obtain ⟨g1, g2, g3, g4, g5, g6⟩ := hg2
+                exact ⟨l2, l4, beNat_lt4 l3, hEp, hNb, hNa, beNat_lt4 l6, g2, g3, g4, hS1, hS2,
+                  by rw [j2]; exact hN, g1, j3, g5, fun h0 => by rw [c3 h0]; rfl, g6⟩
+          · exact absurd h (fail_bind _ _)
     · exact absurd h (fail_bind _ _)
 
 /-- Entries round-trip under the v2 EntryWf, ROSTER (role 5) included (round-1 LOW). -/
@@ -601,7 +677,7 @@ theorem decodeEntry_enc {e : Entry} (h : EntryWf e) (y : Bytes) : decodeEntry (e
     rwa [hm] at this
   have f1 : beNat (natBE 2 e.pk.length) = mlDsa87Key := by
     rw [beNat_natBE 2 _ (by rw [h4]; unfold mlDsa87Key; decide)]; exact h4
-  have f2 : beNat (natBE 1 e.role) = e.role := beNat_natBE 1 _ (by unfold roster at h7; omega)
+  have f2 : beNat (natBE 1 e.role) = e.role := beNat_natBE 1 _ (by unfold policy at h7; omega)
   have f3 : beNat (natBE 1 e.scopes) = e.scopes := beNat_natBE 1 _ (by omega)
   have f4 : beNat (natBE 1 e.kinds) = e.kinds := beNat_natBE 1 _ (by omega)
   have f5 : beNat (natBE 4 e.validFrom) = e.validFrom := beNat_natBE 4 _ (by omega)
@@ -658,17 +734,19 @@ theorem hdr_len {k : Keyset} (hst : k.state.length = 64) (hpv : k.prev.length = 
 /-- Well-formed frames round-trip. -/
 theorem decode_encode {f : Frame} (hk : Wf f.ks) (hs : SigsWf f.sigs) : decode (encode f) = some f := by
   obtain ⟨k, ss⟩ := f
-  obtain ⟨hst, hpv, hep, hep0, hnb, hna, hna2, hr1, hr2, hr3, hs1, hs2, hn, hsort, hent⟩ := hk
-  simp only at hst hpv hep hep0 hnb hna hna2 hr1 hr2 hr3 hs1 hs2 hn hsort hent hs
+  obtain ⟨hst, hpv, hep, hep0, hnb, hna, hna2, hr1, hr2, hr3, hs1, hs2, hn, hsort, hent, hp1, hp0, hroles⟩ := hk
+  simp only at hst hpv hep hep0 hnb hna hna2 hr1 hr2 hr3 hs1 hs2 hn hsort hent hp1 hp0 hroles hs
   have hc := chop_flatten [tag, k.state, natBE 4 k.epoch, k.prev, natBE 4 k.notBefore, natBE 4 k.notAfter,
     natBE 1 k.kRoster, natBE 1 k.kSource, natBE 4 k.entries.length]
-    ((k.entries.map (·.parts.flatten)).flatten ++ encodeSigs ss)
+    ((k.entries.map (·.parts.flatten)).flatten ++ (policyByte k ++ encodeSigs ss))
   rw [hdr_len hst hpv] at hc
-  have he := decodeEntries_enc k.entries hent (encodeSigs ss)
+  have he := decodeEntries_enc k.entries hent (policyByte k ++ encodeSigs ss)
+  have hcp := cutPolicy_enc k (encodeSigs ss)
+  have hkp := beNat_policyByte hp1 hp0
   have hsb := decodeSigBlock_encode hs
   have hbody : encode ⟨k, ss⟩ = [tag, k.state, natBE 4 k.epoch, k.prev, natBE 4 k.notBefore, natBE 4 k.notAfter,
     natBE 1 k.kRoster, natBE 1 k.kSource, natBE 4 k.entries.length].flatten ++
-      ((k.entries.map (·.parts.flatten)).flatten ++ encodeSigs ss) := by
+      ((k.entries.map (·.parts.flatten)).flatten ++ (policyByte k ++ encodeSigs ss)) := by
     simp [encode, body, List.append_assoc]
   have g1 : beNat (natBE 4 k.epoch) = k.epoch := beNat_natBE 4 _ hep
   have g2 : beNat (natBE 4 k.notBefore) = k.notBefore := beNat_natBE 4 _ (by omega)
@@ -676,11 +754,13 @@ theorem decode_encode {f : Frame} (hk : Wf f.ks) (hs : SigsWf f.sigs) : decode (
   have g4 : beNat (natBE 1 k.kRoster) = k.kRoster := beNat_natBE 1 _ (by unfold maxRoster at hr2; omega)
   have g5 : beNat (natBE 1 k.kSource) = k.kSource := beNat_natBE 1 _ (by unfold maxSigs at hs2; omega)
   have g6 : beNat (natBE 4 k.entries.length) = k.entries.length := beNat_natBE 4 _ (by unfold maxKeys at hn; omega)
-  have hk' : (⟨k.state, k.epoch, k.prev, k.notBefore, k.notAfter, k.kRoster, k.kSource, k.entries⟩ : Keyset) = k := rfl
+  have hk' : (⟨k.state, k.epoch, k.prev, k.notBefore, k.notAfter, k.kRoster, k.kSource, k.entries, k.kPolicy⟩ : Keyset)
+    = k := rfl
   unfold decode
   rw [hbody, hc]
   simp only [Option.bind_some]
-  simp [guard, g1, g2, g3, g4, g5, g6, he, hsb, hk', eq_true hep0, hnb, hna, hn, hs1, hs2, hsort, hr1, hr2, hr3]
+  simp [guard, g1, g2, g3, g4, g5, g6, he, hcp, hkp, hsb, hk', eq_true hep0, hnb, hna, hn, hs1, hs2, hsort, hr1, hr2, hr3,
+    hroles, eq_true hp1]
 
 /-- Review stmts5 L5, tombstone cap: a keyset of more than maxKeys = 1024 entries (revoked ones included; they are
     never pruned) is refused, whatever else holds; at 1024 a well-formed keyset round-trips (`decode_encode`). -/
@@ -690,11 +770,11 @@ theorem decode_over_cap {f : Frame} (hs : f.ks.state.length = 64) (hp : f.ks.pre
   simp only at hs hp hn hl
   have hc := chop_flatten [tag, k.state, natBE 4 k.epoch, k.prev, natBE 4 k.notBefore, natBE 4 k.notAfter,
     natBE 1 k.kRoster, natBE 1 k.kSource, natBE 4 k.entries.length]
-    ((k.entries.map (·.parts.flatten)).flatten ++ encodeSigs ss)
+    ((k.entries.map (·.parts.flatten)).flatten ++ (policyByte k ++ encodeSigs ss))
   rw [hdr_len hs hp] at hc
   have hbody : encode ⟨k, ss⟩ = [tag, k.state, natBE 4 k.epoch, k.prev, natBE 4 k.notBefore, natBE 4 k.notAfter,
     natBE 1 k.kRoster, natBE 1 k.kSource, natBE 4 k.entries.length].flatten ++
-      ((k.entries.map (·.parts.flatten)).flatten ++ encodeSigs ss) := by
+      ((k.entries.map (·.parts.flatten)).flatten ++ (policyByte k ++ encodeSigs ss)) := by
     simp [encode, body, List.append_assoc]
   have g6 : beNat (natBE 4 k.entries.length) = k.entries.length := beNat_natBE 4 _ (by omega)
   have hn' : ¬ k.entries.length ≤ maxKeys := by omega
@@ -998,6 +1078,74 @@ theorem roster_available (hw : Wf k) (hl : ksLive k t = true) :
   · simp only [List.length_take]; omega
   · exact List.Nodup.sublist (htk.map _) hn
 
+/-! ### POLICY keys -/
+
+theorem rolesOk_spec {es : List Entry} (h : rolesOk es = true) {e f : Entry} (he : e ∈ es) (hf : f ∈ es)
+    (hp : holds policy e = true) :
+    (f.role ≠ policy → f.revokedFrom = live → e.employee ≠ f.employee ∧ e.idp ≠ f.idp) ∧
+      (holds policy f = true → (e.employee = f.employee ↔ e.idp = f.idp)) := by
+  unfold rolesOk at h
+  rw [List.all_eq_true] at h
+  have h1 := h e he
+  rw [hp, Bool.not_true, Bool.false_or, List.all_eq_true] at h1
+  have h2 := h1 f hf
+  rw [Bool.and_eq_true] at h2
+  obtain ⟨h3, h4⟩ := h2
+  refine ⟨fun ho hl => ?_, fun hp' => ?_⟩
+  · simpa [ho, hl] using h3
+  · rw [hp', Bool.not_true, Bool.false_or] at h4
+    by_cases hx : e.employee = f.employee <;> by_cases hy : e.idp = f.idp <;> simp_all
+
+/-- No dual role: in a well-formed key set an employee or identity-provider subject holding an unrevoked POLICY key
+    holds no unrevoked key of any other role (ROSTER, SOURCE, APPROVER or any), so whoever signs the rules never also
+    manages keys, attaches facts, or releases or bypasses around them. -/
+theorem no_dual_role (hw : Wf k) {e f : Entry} (he : e ∈ k.entries) (hf : f ∈ k.entries)
+    (hp : holds policy e = true) (ho : f.role ≠ policy) (hl : f.revokedFrom = live) :
+    e.employee ≠ f.employee ∧ e.idp ≠ f.idp := by
+  obtain ⟨-, -, -, -, -, -, -, -, -, -, -, -, -, -, -, -, -, hr⟩ := hw
+  exact (rolesOk_spec hr he hf hp).1 ho hl
+
+/-- A POLICY quorum of a well-formed key set is at least kPolicy ≥ 2 signers with live POLICY keys of this key set, each
+    with a verifying record, pairwise distinct in employee AND in identity-provider subject. -/
+theorem policy_signers (hw : Wf k) (h : quorum verify (policyOk t) (·.employee) k k.kPolicy msg ss = true) :
+    minPolicy ≤ k.kPolicy ∧ ∃ es : List Entry, es.Sublist k.entries ∧ k.kPolicy ≤ es.length ∧
+      (es.map (·.employee)).Nodup ∧ (es.map (·.idp)).Nodup ∧
+      ∀ e ∈ es, policyOk t e = true ∧ ∃ r ∈ ss, r.keyId = e.keyId ∧ verify e.pk msg r.sig = true := by
+  obtain ⟨-, -, -, -, -, -, -, -, -, -, -, -, -, hsort, -, hp1, hp0, hr⟩ := hw
+  obtain ⟨es, hsub, h1, h2, hn, -, hall⟩ := quorum_sound hsort h
+  have hpos : hasPolicy k.entries = true := by
+    cases hb : hasPolicy k.entries
+    · have := hp0 hb; omega
+    · rfl
+  refine ⟨(hp1 hpos).1, es, hsub, h2, hn, ?_, hall⟩
+  have hheld : ∀ e ∈ es, holds policy e = true := by
+    intro e he
+    have := (hall e he).1
+    simp only [policyOk, liveAt, holds, Bool.and_eq_true] at this ⊢
+    exact ⟨this.1, this.2.1.1⟩
+  have hpe : es.Pairwise (fun a b => a.employee ≠ b.employee) := List.pairwise_map.1 hn
+  show (es.map (·.idp)).Pairwise (· ≠ ·)
+  rw [List.pairwise_map]
+  exact hpe.imp_of_mem (fun ha hb hne hid =>
+    hne (((rolesOk_spec hr (hsub.subset ha) (hsub.subset hb) (hheld _ ha)).2 (hheld _ hb)).2 hid))
+
+/-- Roster keys never count toward a POLICY quorum: when every key with a verifying record is a ROSTER key, the quorum
+    fails whatever the threshold. -/
+theorem policy_not_roster (hr : ∀ e ∈ k.entries, signedBy verify msg ss e = true → e.role = roster) :
+    quorum verify (policyOk t) key k thr msg ss = false := by
+  have hnil : signers verify (policyOk t) k msg ss = [] := by
+    unfold signers
+    rw [List.filter_eq_nil_iff]
+    intro e he hpe
+    simp only [Bool.and_eq_true, policyOk, beq_iff_eq] at hpe
+    have h1 := hr e he hpe.2
+    have h2 := hpe.1.1
+    rw [h1] at h2
+    exact absurd h2 (by decide)
+  unfold quorum nDistinct
+  rw [hnil]
+  cases thr <;> simp
+
 /-- A revoked, out-of-window or non-ROSTER key never counts toward a roster quorum. -/
 theorem rosterOk_dead (e : Entry) (t : Nat)
     (h : e.revokedFrom ≠ live ∨ t < e.validFrom ∨ e.validUntil < t ∨ e.role ≠ roster) : rosterOk t e = false := by
@@ -1158,8 +1306,8 @@ theorem admitSucc_fits {new : Keyset} {es es' : List Entry} {sg : Bytes → Byte
     ∃ ss, SigsWf ss ∧ admitSucc verify t cur (encode ⟨new, ss⟩) = some new := by
   have hw0 := hw
   have hw0' := hw'
-  obtain ⟨_, _, _, _, _, _, _, hrc1, hrc2, _, _, _, _, _, hent⟩ := hw
-  obtain ⟨_, _, _, _, _, _, _, hrn1, hrn2, _, _, _, _, _, hent'⟩ := hw'
+  obtain ⟨_, _, _, _, _, _, _, hrc1, hrc2, _, _, _, _, _, hent, _⟩ := hw
+  obtain ⟨_, _, _, _, _, _, _, hrn1, hrn2, _, _, _, _, _, hent', _⟩ := hw'
   let L : List Bytes := ((es ++ es').map (·.keyId)).eraseDups
   let M : List Bytes := L.mergeSort (fun a b => decide (beNat a ≤ beNat b))
   have hLn : L.Nodup := dedup_nodup _
@@ -1939,10 +2087,10 @@ def vecSort (es : List Entry) : List Entry := es.mergeSort fun a b => decide (be
 def vecRecs (sg : List Entry) : List SigRec := (vecSort sg).map fun e => ⟨e.keyId, List.replicate mlDsa87Signature 83⟩
 /-- Genesis over roster `es` (kRoster 2, kSource 2, life 20261021..20261121), with stub records from `sg`. -/
 def vecGen (es sg : List Entry) : Frame :=
-  ⟨⟨List.replicate 64 7, 0, zeroDigest, 20261021, 20261121, 2, 2, vecSort es⟩, vecRecs sg⟩
+  ⟨⟨List.replicate 64 7, 0, zeroDigest, 20261021, 20261121, 2, 2, vecSort es, 0⟩, vecRecs sg⟩
 /-- Epoch e+1 after `c`, live from `nb` to the same day next month, kRoster 2, kSource 2, roster `es`, records from `sg`. -/
 def vecNext (c : Keyset) (nb : Nat) (es sg : List Entry) : Frame :=
-  ⟨⟨c.state, c.epoch + 1, digestOf c, nb, nb + 100, 2, 2, vecSort es⟩, vecRecs sg⟩
+  ⟨⟨c.state, c.epoch + 1, digestOf c, nb, nb + 100, 2, 2, vecSort es, 0⟩, vecRecs sg⟩
 /-- `admitChain` with a stub verify (every record verifies, so only counting, liveness and linkage decide), reported
     as the head's digest. -/
 def vecWalk (g : Frame) (steps : List (Nat × Frame)) : Option Bytes :=
@@ -2144,5 +2292,29 @@ def vecRb : Ratchet := ⟨1, digestOf vecC.ks, 20261110, zeroDigest⟩
   20261103 vecRb (encode vecTwo) [(20261110, encode vecC)]
   (reinitBody (List.replicate 64 14) vecRb 1 (digestOf vecC.ks) 20261103 ++ encodeSigs (vecRecs sg)) true).isSome) ==
   [false, true]
+
+/-! POLICY role (stub verify).  `vecPol es kp` is vecTwo's roster plus the keys `es`, POLICY threshold `kp`.  A key set
+    without POLICY keys carries no threshold byte; two POLICY holders (employees and subjects 50 and 51) decode at
+    threshold 2 and 8 and both must sign; roster keys alone, one holder, or two keys of one holder do not sign.  The
+    decoder refuses threshold 0, 1 or 9, a person or subject holding POLICY and an unrevoked key of any role 1 to 5,
+    and POLICY keys whose employee and subject are not one to one. -/
+def vecKey (b : UInt8) (role : Nat) (p s : UInt8) : Entry :=
+  ⟨sha3 (keyTag ++ vecPk b), List.replicate 64 p, List.replicate 64 s, role, 0, 0, 20260101, 20271231, live, 0, 0,
+    vecPk b⟩
+def vecP1 : Entry := vecKey 50 policy 50 50
+def vecP2 : Entry := vecKey 51 policy 51 51
+def vecPol (es : List Entry) (kp : Nat) : Frame := ⟨{ (vecGen (vecR0 ++ es) vecR0).ks with kPolicy := kp }, vecRecs vecR0⟩
+def vecDec (es : List Entry) (kp : Nat) : Bool := (decode (encode (vecPol es kp))).isSome
+def vecPq (es sg : List Entry) : Bool :=
+  quorum (fun _ _ _ => true) (policyOk 20261101) (·.employee) (vecPol es 2).ks 2 [] (vecRecs sg)
+#guard policyByte vecTwo.ks == [] && (body (vecPol [vecP1, vecP2] 2).ks).getLast? == some 2
+#guard [2, 8].all (vecDec [vecP1, vecP2]) && ![0, 1, 9].any (vecDec [vecP1, vecP2])
+#guard vecPq [vecP1, vecP2] [vecP1, vecP2] && !vecPq [vecP1, vecP2] [vecP1] && !vecPq [vecP1, vecP2] vecR0 &&
+  !vecPq [vecP1, vecP2, vecKey 52 policy 50 50] [vecP1, vecKey 52 policy 50 50]
+#guard [1, 2, 3, 4, 5].all fun r =>
+  !vecDec [vecP1, vecP2, vecKey 52 r 50 60] 2 && !vecDec [vecP1, vecP2, vecKey 52 r 60 50] 2 &&
+    vecDec [vecP1, vecP2, { vecKey 52 r 50 50 with revokedFrom := 20261101 }] 2 && vecDec [vecP1, vecP2, vecKey 52 r 60 60] 2
+#guard vecDec [vecP1, vecP2, vecKey 52 policy 50 50] 2 && !vecDec [vecP1, vecP2, vecKey 52 policy 50 52] 2 &&
+  !vecDec [vecP1, vecP2, vecKey 52 policy 52 50] 2
 
 end BlindLedger.Gate.Keyset

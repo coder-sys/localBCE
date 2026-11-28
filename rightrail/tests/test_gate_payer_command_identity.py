@@ -16,7 +16,7 @@ REQUEST = gate.DecideRequest("tenant", "program", "SDP", "command", "payment", b
 
 class CommandIdentityTests(unittest.TestCase):
     def store(self, path):
-        result = payer.PayerStore(path, root_keys={}, grants=())
+        result = payer.PayerStore(path, links={}, grants=())
         self.addCleanup(result.close)
         return result
 

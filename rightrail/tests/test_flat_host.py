@@ -30,7 +30,7 @@ CRASH = Path(rules.LEAN) / ".lake" / "build" / "bin" / "gate_rules_crashtest.exe
 ASOF = 20270315
 LEB = {0: "00", 127: "7f", 128: "8001", 300: "ac02"}
 PIN = bytes(range(64))
-AUTH = PIN + bytes(chain.AUTH - 64)  # an authority record: the pin, a zero ratchet and floor
+AUTH = PIN + bytes(chain.AUTH - 64)  # an authority record: the pin, a zero ratchet and floor, no rule set
 ROOT = bytes(range(64, 128))  # a state root after a batch
 GENESIS = ("f42585e614512837a44bf16f0ccf138ca1bbd6d72c932b8c2e60ea84efadfe6dd9b80eb2144830367a197458860f420214c5ca2a2cf608e58b1eabb363607db2")
 FLAT_HOLDS = ({"HOLD flat_head"}, {"HOLD flat_not_next"}, {"HOLD flat_init"})  # a signed head or batch count the index does not hold (batch 1 on a held store is an init)
@@ -74,17 +74,23 @@ class ChainCodecTests(unittest.TestCase):
 
     def test_the_authority_record_changes_the_step(self):
         g0, rows = bytes.fromhex(GENESIS), ROOT + adds_row(1, ROW)
-        for at in (0, 64, 200, chain.AUTH - 1):  # pin, ratchet, floor
+        for at in (0, 64, 200, 208, chain.AUTH - 1):  # pin, ratchet, floor, rule-set digest, rule-set version
             with self.subTest(at):
                 moved = AUTH[:at] + bytes([AUTH[at] ^ 1]) + AUTH[at + 1:]
                 self.assertNotEqual(chain.step_adds(g0, moved + rows), chain.step_adds(g0, AUTH + rows))
 
-    def test_a_replay_refuses_another_pin_and_a_lowered_epoch_or_floor(self):
+    def test_a_replay_refuses_another_pin_and_a_lowered_epoch_floor_or_rule_set(self):
         g0, rows = bytes.fromhex(GENESIS), ROOT + adds_row(1, ROW)
-        rec = lambda epoch, floor, pin=PIN: pin + epoch.to_bytes(4, "big") + bytes(chain.AUTH - 76) + floor.to_bytes(8, "big")  # noqa: E731
-        self.assertIsNotNone(chain.head_after(g0, PIN, [rec(0, 0) + rows, rec(0, 0) + rows, rec(1, 5) + rows, rec(1, 5) + rows]))
+        rec = lambda epoch, floor, pin=PIN, rsv=0, rs=chain.ZERO: (pin + epoch.to_bytes(4, "big") + bytes(132) + floor.to_bytes(8, "big")  # noqa: E731
+                                                                   + rs + rsv.to_bytes(4, "big"))
+        a, b = bytes([1]) * 64, bytes([2]) * 64
+        self.assertIsNotNone(chain.head_after(g0, PIN, [rec(0, 0) + rows, rec(0, 0) + rows, rec(1, 5) + rows, rec(1, 5) + rows,
+                                                        rec(1, 5, rsv=1, rs=a) + rows, rec(1, 5, rsv=1, rs=a) + rows, rec(1, 5, rsv=2, rs=b) + rows]))
         for name, batches in {"another pin": [rec(0, 0) + rows, rec(0, 0, bytes(64)) + rows], "epoch lowered": [rec(2, 0) + rows, rec(1, 0) + rows],
-                              "floor lowered": [rec(0, 7) + rows, rec(0, 6) + rows]}.items():
+                              "floor lowered": [rec(0, 7) + rows, rec(0, 6) + rows],
+                              "rule-set version lowered": [rec(0, 0, rsv=2, rs=b) + rows, rec(0, 0, rsv=1, rs=a) + rows],
+                              "rule-set fork": [rec(0, 0, rsv=1, rs=a) + rows, rec(0, 0, rsv=1, rs=b) + rows],
+                              "rule-set version without a digest": [rec(0, 0, rsv=1) + rows]}.items():
             with self.subTest(name):
                 self.assertIsNone(chain.head_after(g0, PIN, batches))
 
@@ -268,7 +274,7 @@ class FlatHostTests(fx.Scratch):
                 calls.append(data)
                 if len(calls) > 1:
                     return real(self, directory, shard, data)
-                return b"RRDA" + struct.pack("<HBIQI", 3, decider.WORDS.index("IO"), shard, int.from_bytes(data[10:18], "little"), 0) + data[18:82]
+                return b"RRDA" + struct.pack("<HBIQI", decider.ANSWER_VERSION, decider.WORDS.index("IO"), shard, int.from_bytes(data[10:18], "little"), 0) + data[18:82]
             with mock.patch.object(decider.RulesWorker, "run_frame", flaky):
                 a, l, s = self.batch(c, prod, 2, worker=w, flat=flat)
             self.assertEqual((a.digest, l, set(s.values()), len(calls)), (b"", [], {"HOLD flat_io"}, 1))
@@ -498,7 +504,7 @@ class FlatHostTests(fx.Scratch):
             five, three = (au.grant([(fx.PROGRAM, 1 << 1 | 1 << 3, 3, 0)], serial=s) for s in (5, 3))
             a = decider.decide(g.HEAD, g.ASOF, prod0, [g.request(1, 0, [10])], c.dir / "idx0", self.worker(), five, g.KEYS, c.tenant)
             self.assertTrue(a.digest and a.pays)
-            self.assertEqual((c.tenant.raise_floors(0, 0)[0], int.from_bytes(a.adds[chain.AUTH - 8:chain.AUTH], "big")), (5, 5))
+            self.assertEqual((c.tenant.raise_floors(0, 0)[0], int.from_bytes(a.adds[200:208], "big")), (5, 5))
             w1 = self.worker()
             b = decider.decide(g.HEAD, g.ASOF, prod1, [g.request(2, 1, [20])], c.dir / "idx1", w1, three, g.KEYS, c.tenant)
             self.assertEqual((b.digest, b.pays, list(b.lines)), (b"", (), [f"{g.request(2, 1, [20]).payment_id} HOLD grant_superseded"]))
@@ -521,6 +527,30 @@ class FlatHostTests(fx.Scratch):
             self.assertEqual((b.digest, b.pays, list(b.lines)), (b"", (), [f"{g.request(2, 1, [20]).payment_id} HOLD grant_stale_keyset"]))
             b = decider.decide(g.HEAD, g.ASOF, prod1, [g.request(2, 1, [20])], c.dir / "idx1", w1, g.GRANT, rotated, c.tenant)
             self.assertTrue(b.digest and b.pays)
+
+    def test_a_shard_behind_the_tenants_rule_set_holds_and_cannot_commit(self):
+        """No frame presents a rule set yet, so the tenant's rule-set floor is raised directly (version 1, digest R), as if
+        another shard had admitted it.  An answer shard 0 decided before is ``grant_floor_risen`` at its commit and nothing
+        is sealed; the next decide reaches the engine, whose store is at version 0, and every line HOLDs
+        ``grant_ruleset_stale`` with nothing stored.  Two digests at the tenant's highest version (a fork) refuse the commit
+        (``ruleset_fork``)."""
+        r = bytes([7]) * 64
+        with self.scratch() as tmp:
+            c, prod0 = self.cluster(tmp, "v")
+            w, req = self.worker(), g.request(1, 0, [10])
+            x = decider.decide(g.HEAD, g.ASOF, prod0, [req], c.dir / "idx0", w, g.GRANT, g.KEYS, c.tenant)
+            self.assertTrue(x.digest and x.pays)
+            with mock.patch.object(c.tenant, "_raise", return_value=(0, 0, 1, None)):
+                self.assertRaisesRegex(decider.GateDecideError, "ruleset_fork", decider.commit, prod0, fx.PROGRAM, x, fx.NOW, c.tenant)
+            self.assertEqual((prod0.prepared, prod0.tip()), (None, None))
+            x = decider.decide(g.HEAD, g.ASOF, prod0, [req], c.dir / "idx0", w, g.GRANT, g.KEYS, c.tenant)
+            self.assertEqual(c.tenant.raise_floors(0, 0, 1, r)[2:], (1, r))
+            self.assertRaisesRegex(decider.GateDecideError, "grant_floor_risen", decider.commit, prod0, fx.PROGRAM, x, fx.NOW, c.tenant)
+            self.assertEqual((prod0.prepared, prod0.tip()), (None, None))
+            held = decider.decide(g.HEAD, g.ASOF, prod0, [req], c.dir / "idx0", w, g.GRANT, g.KEYS, c.tenant)
+            self.assertEqual((held.digest, held.pays, list(held.lines)), (b"", (), [f"{req.payment_id} HOLD grant_ruleset_stale"]))
+            self.assertEqual((prod0.prepared, prod0.tip()), (None, None))
+            self.assertEqual(decider.TenantAuthority.floors_in(c.dir / "tenant.floor", fx.TENANT)[2:], (1, r))
 
     def test_a_floor_file_rolled_back_is_raised_from_every_shards_seal_and_a_deleted_one_is_refused(self):
         """Serial 7 is sealed on shard 0, then the tenant's floor file is put back to its provisioned copy.  Opening the
@@ -597,7 +627,7 @@ class FlatHostTests(fx.Scratch):
             decider.commit(prod1, fx.PROGRAM, y, fx.NOW, tenant)
             path.write_bytes(zero)
             self.assertRaisesRegex(decider.GateDecideError, "grant_floor_risen", decider.commit, prod0, fx.PROGRAM, x, fx.NOW, tenant)
-            self.assertEqual((prod0.prepared, prod0.tip(), tenant.raise_floors(0, 0)), (None, None, (6, 0)))
+            self.assertEqual((prod0.prepared, prod0.tip(), tenant.raise_floors(0, 0)), (None, None, (6, 0, 0, chain.ZERO)))
 
     def test_a_shard_begun_under_another_key_set_pin_cannot_continue_under_the_tenant_pin(self):
         """A shard is begun, and a batch sealed, under a pin other than the tenant's deployment pin (a key set the host made).
@@ -632,7 +662,7 @@ class FlatHostTests(fx.Scratch):
                 with self.assertRaisesRegex(decider.GateDecideError, "rules_refused"):  # its leaves commit to the frame it decided, not the one sent
                     decider.decide(g.HEAD, g.ASOF, prod, [g.request(2, 0, [20])], flat, w, g.GRANT, keys, c.tenant)
             count = int.from_bytes(told[0][19:23], "little")
-            self.assertEqual(told[0][87 + 20 * count + 208:][:64], au.H(body))  # the cause: its authority record names the other pin
+            self.assertEqual(told[0][87 + 20 * count + 128 + 16 + 64:][:64], au.H(body))  # the cause: its authority record names the other pin
             self.assertEqual(prod.tip(), tip)
         with self.scratch() as tmp:
             c, prod = self.cluster(tmp, "q")
@@ -653,7 +683,7 @@ class FlatHostTests(fx.Scratch):
         return decider.decide(g.HEAD, g.ASOF, prod, requests, flat, w, g.GRANT, g.KEYS, c.tenant)
 
     def test_the_input_commits_to_grant_release_today_and_facts_and_the_record_is_the_frame(self):
-        """Lean computes INPUT/v6 over the frame: a changed grant, release, today or facts byte changes it, it equals the format
+        """Lean computes INPUT/v7 over the frame: a changed grant, release, today or facts byte changes it, it equals the format
         written out again in Python, and the sealed batch's record is the exact frame bytes."""
         with self.scratch() as tmp:
             c, prod = self.cluster(tmp, "v")
@@ -691,7 +721,7 @@ class FlatHostTests(fx.Scratch):
             # (a new index directory each: the frame's own already holds a batch)
             for n, (grant, release, said) in enumerate(((b"", ans.release, "grant_missing"), (g.GRANT, b"", "flat_record"))):
                 with self.subTest(said):
-                    data = decider.request_frame(g.HEAD, 0, 1, g.ASOF, chain.genesis(0, g.ASOF, g.PIN), g.PIN, (0, 0), g.KEYS, grant, release, (), [body])
+                    data = decider.request_frame(g.HEAD, 0, 1, g.ASOF, chain.genesis(0, g.ASOF, g.PIN), g.PIN, (0, 0, 0, bytes(64)), g.KEYS, grant, release, (), [body])
                     fresh = str(Path(tmp) / "v" / f"cut{n}").replace("\\", "/")
                     self.assertEqual(decider._answer(w.run_frame(fresh, 0, data), data)[0], said)
             prod.prepared = None
@@ -976,7 +1006,7 @@ class FlatHostTests(fx.Scratch):
                 self.assertEqual((a3.recs, a3.adds, a3.digest), want)
                 self.commit(prod, a3, l3)
                 again, _, status = self.batch(c[0], prod, 2, worker=w, flat=flat)  # the sealed requests, sent again
-                self.assertEqual((again.digest, again.sealed, status), (b"", (signed2, tuple(map(gate.encode_token, tokens2))), {}))
+                self.assertEqual((again.digest, again.sealed, status), (b"", (signed2, tuple(map(gate.encode_token, tokens2)), ((),) * len(tokens2)), {}))
                 head = prod.flat_head()
                 self.close(prod)
                 self.assertEqual((head, self.sealed_twice(c[0])), ((a3.digest, 3), []))

@@ -1,5 +1,6 @@
 import BlindLedger.Gate.Flat.Theorems
 import BlindLedger.Gate.Flat.Worker
+import BlindLedger.Gate.Rules.AnswerEq
 
 /-! What each `RULES_PAY` line of a flat commit says (`Worker.commitFlat`).  The worker prints, for payment `p`,
     `Run.leafOutcome (x.payOutcome ds) unfit p` and `Run.leafReasons ds unfit p`, with `ds` the decisions of
@@ -30,8 +31,7 @@ theorem feedsOf_inv (c : Ctx) : FCtxInv ⟨c.today, c.redo, Worker.feedsOf c, c.
   ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, group_getD (fun x : Death => x.id) (entries c.dmf),
     group_getD (fun x : Death => x.id) (entries c.providerDeaths),
     group_getD (fun x : Exclusion => x.id) (entries c.exclusions),
-    group_getD (fun x : Span => x.member) (entries c.enrollment), rfl, rfl, rfl, rfl,
-    group_getD (fun x : Elig => x.member) (entries c.eligibility)⟩
+    group_getD (fun x : Span => x.member) (entries c.enrollment), rfl, rfl⟩
 
 private theorem fetched_lines (hr hu : Head) (fe : Fetched) (fc : FCtx) (f : List Nat) (b : List Line) :
     ∀ d ∈ (decideFetched hr hu fe fc f b).1, d.line ∈ b := by
@@ -91,43 +91,6 @@ theorem leafReasons_codes (ds : List Decision) (u : Nat → Bool) (p : Nat) :
     · rintro ⟨d, hd, hp, y, hy, rfl⟩; exact ⟨d, ⟨hd, hp⟩, y, hy, rfl⟩
   · exact ⟨["UNENCODABLE_PAYMENT"], by simp [Run.leafReasons, hu], by simp, fun _ => rfl, fun h => by simp at h⟩
 
-/-- `Rules.budget`'s literal 32 is TOKEN/v1's `maxReasonCodes` (Gate/Spec.lean:32), which Rules.Theorems does not
-    import. -/
-private theorem budget_cap : 32 = BlindLedger.Gate.maxReasonCodes := rfl
-
-/-- Codes as `leafReasons_codes` describes them, each the name of a reason allowed by one `Bits`, are at most
-    `maxReasonCodes`: they are distinct, so no more than the allowed names (`Rules.budget`).  No name injectivity is
-    needed. -/
-private theorem codes_le (b : Bits) (ds : List Decision) (u : Nat → Bool) (p : Nat) (rs : List String)
-    (hpw : rs.Pairwise (· < ·)) (h3 : u p = true → rs = ["UNENCODABLE_PAYMENT"])
-    (h4 : u p = false → ∀ r, r ∈ rs ↔ ∃ d ∈ ds, d.line.pay = p ∧ ∃ y ∈ d.reasons, Run.name y = r)
-    (h : ∀ d ∈ ds, ∀ r ∈ d.reasons, may b r = true) : rs.length ≤ BlindLedger.Gate.maxReasonCodes := by
-  cases hu : u p
-  · have hnd : rs.Nodup := List.nodup_iff_pairwise_ne.mpr
-      (hpw.imp fun {x _} hxy e => by subst e; exact String.lt_irrefl x hxy)
-    have hsub : rs ⊆ (reasons.filter (may b)).map Run.name := by
-      intro x hx
-      obtain ⟨d, hd, -, y, hy, rfl⟩ := (h4 hu x).mp hx
-      exact List.mem_map.mpr ⟨y, List.mem_filter.mpr ⟨by cases y <;> decide, h d hd y hy⟩, rfl⟩
-    calc rs.length ≤ ((reasons.filter (may b)).map Run.name).length := hnd.length_le_of_subset hsub
-      _ = (reasons.filter (may b)).length := List.length_map ..
-      _ ≤ 32 := budget b
-      _ = BlindLedger.Gate.maxReasonCodes := budget_cap
-  · rw [h3 hu, ← budget_cap]; decide
-
-/-- The reason codes a token carries for payment `p` are at most `maxReasonCodes` (TOKEN/v1's limit) whenever every
-    reason of every decision is allowed by one `Bits` (`Rules.decideAll_may` gives that for a batch's decisions).  The
-    code list `rs` is `leafReasons_codes`' own (strictly increasing, with its members fixed), so it is the list printed,
-    not just some list whose joining gives the printed text. -/
-theorem leafReasons_le (b : Bits) (ds : List Decision) (u : Nat → Bool) (p : Nat)
-    (h : ∀ d ∈ ds, ∀ r ∈ d.reasons, may b r = true) :
-    ∃ rs : List String, Run.leafReasons ds u p = (if rs.isEmpty then "-" else ",".intercalate rs) ∧
-      rs.Pairwise (· < ·) ∧ (u p = true → rs = ["UNENCODABLE_PAYMENT"]) ∧
-      (u p = false → ∀ r, r ∈ rs ↔ ∃ d ∈ ds, d.line.pay = p ∧ ∃ y ∈ d.reasons, Run.name y = r) ∧
-      rs.length ≤ BlindLedger.Gate.maxReasonCodes := by
-  obtain ⟨rs, h1, h2, h3, h4⟩ := leafReasons_codes ds u p
-  exact ⟨rs, h1, h2, h3, h4, codes_le b ds u p rs h2 h3 h4 h⟩
-
 /-- On a batch no cap touches, over an index faithful to `rel` and `unr`, the worker's decisions are the Spec's and its
     payment outcome is the Spec's `payOutcome`. -/
 private theorem pay_eq (H : Bytes → Bytes) (s : St) (c : Ctx) (rel unr : Snapshot Line) (f : List Nat) (b : List Line)
@@ -165,27 +128,6 @@ theorem pay_line (H : Bytes → Bytes) (s : St) (c : Ctx) (rel unr : Snapshot Li
   obtain ⟨hds, hx⟩ : ds = spec ∧ x.payOutcome ds = payOutcome (carried c rel unr) spec := pay_eq H s c rel unr f b hr hu hb
   exact ⟨by rw [hx], hds ▸ leafReasons_codes spec u p⟩
 
-/-- Each `RULES_PAY` line fits one token: in `pay_line`'s setting (a batch no cap touches, an index faithful to `rel`
-    and `unr`), the reason codes the worker prints for payment `p` (the list `pay_line` describes) are at most
-    `maxReasonCodes`. -/
-theorem pay_codes_le (H : Bytes → Bytes) (s : St) (c : Ctx) (rel unr : Snapshot Line) (f : List Nat) (b : List Line)
-    (hr : IdxInv H s.rel rel) (hu : IdxInv H s.unr unr) (hb : Uncapped (fetch s c.redo b) (Worker.feedsOf c) b)
-    (u : Nat → Bool) (p : Nat) :
-    let fc : FCtx := ⟨c.today, c.redo, Worker.feedsOf c, c.byp, c.lim⟩
-    let fe := fetch s fc.redo b
-    let ds := (decideFetched s.rel.head s.unr.head fe fc f b).1
-    let spec := (decideBatchIn (carried c rel unr) f b).decisions
-    ∃ rs : List String, Run.leafReasons ds u p = (if rs.isEmpty then "-" else ",".intercalate rs) ∧
-      rs.Pairwise (· < ·) ∧ (u p = true → rs = ["UNENCODABLE_PAYMENT"]) ∧
-      (u p = false → ∀ r, r ∈ rs ↔ ∃ d ∈ spec, d.line.pay = p ∧ ∃ y ∈ d.reasons, Run.name y = r) ∧
-      rs.length ≤ BlindLedger.Gate.maxReasonCodes := by
-  intro fc fe ds spec
-  obtain ⟨hds, -⟩ := pay_eq H s c rel unr f b hr hu hb
-  have hm : ∀ d ∈ spec, ∀ r ∈ d.reasons, may (bitsOf (carried c rel unr)) r = true :=
-    decideAll_may (carried c rel unr) (idSeen f ++ seen0 (carried c rel unr) b) (order (carried c rel unr) b)
-  rw [show ds = spec from hds]
-  exact leafReasons_le _ _ u p hm
-
 /-- A payment with a capped line is HOLD, in any batch (`cap_hold`). -/
 theorem pay_capped (hr hu : Head) (fe : Fetched) (fc : FCtx) (f : List Nat) (b : List Line) (u : Nat → Bool)
     {d : Decision} (hd : d ∈ (decideFetched hr hu fe fc f b).1)
@@ -199,6 +141,121 @@ theorem pay_capped (hr hu : Head) (fe : Fetched) (fc : FCtx) (f : List Nat) (b :
   · have : ((decideFetched hr hu fe fc f b).1.filter (·.line.pay == d.line.pay)).any (·.outcome == .HOLD) = true :=
       List.any_eq_true.mpr ⟨d, List.mem_filter.mpr ⟨hd, by simp⟩, by simp [hh]⟩
     simp [this]
+
+/-! ## The exact-duplicate answer over the fetched rows
+
+    The worker reads the released rows under a decided line's exact key from the entry it fetched for the key: the
+    head's rows, in row order, while the key has at most `capN` postings, else none (`Worker.relRows`, which
+    `Worker.commitBin` passes to `Run.answering`).  `answer_eq`: on a batch no cap touches the reading is the Spec's, so the answered set is
+    `Run.answering_eq`'s.  `answer_cap`: a line held for an exact repeat under a key past `capN` postings is held with
+    `POSTING_CAP`, and its payment is decided contested, never answered, and HOLD. -/
+
+private theorem relM_getD (g : Key → Entry) (ks : List Key) (key : Key) :
+    (HashMap.ofList (ks.map fun k => (k, g k))).getD key Entry.empty = if key ∈ ks then g key else Entry.empty := by
+  simp only [Std.HashMap.getD_eq_getD_getElem?, Std.HashMap.ofList_eq_insertMany_empty,
+    Std.HashMap.getElem?_insertMany_list, Std.HashMap.getElem?_empty, Option.or_none,
+    List.findSomeRev?_eq_findSome?_reverse, ← List.map_reverse, List.findSome?_map]
+  simp only [← List.mem_reverse (as := ks)]
+  generalize ks.reverse = L
+  induction L with
+  | nil => simp
+  | cons a L ih =>
+    by_cases h : a = key
+    · subst h; simp
+    · simpa [List.findSome?_cons, h, Ne.symm h] using ih
+
+/-- Only a line's own exact key among its keys is an exact key. -/
+private theorem keys_exact (x l : Line) : (keys x).contains (exactKey l) = (exactKey x == exactKey l) := by
+  have hn : exactKey l ≠ nearKey x := by
+    intro h
+    have := congrArg List.head? h
+    by_cases hl : isCap l <;> by_cases hx : isCap x <;> simp [exactKey, nearKey, hl, hx] at this
+  have hi : exactKey l ≠ idKey x := by
+    intro h
+    have := congrArg List.head? h
+    by_cases hl : isCap l <;> simp [exactKey, idKey, hl] at this
+  apply Bool.eq_iff_iff.mpr
+  simp only [keys, List.contains_iff_mem, List.mem_cons, List.not_mem_nil, or_false, beq_iff_eq]
+  exact ⟨fun h => h.elim Eq.symm fun h => h.elim (absurd · hn) (absurd · hi), fun h => Or.inl h.symm⟩
+
+private theorem postings_exact (l : Line) : ∀ (rows : List Line) (i : Nat),
+    (postingsFrom (exactKey l) i rows).map (·.row) = rows.filter (exactKey · == exactKey l)
+  | [], _ => rfl
+  | x :: rows, i => by
+    rw [postingsFrom, keys_exact, List.filter_cons]
+    cases exactKey x == exactKey l <;> simp [postings_exact l rows]
+
+/-- On a batch no cap touches, the worker's reading under a batch line's exact key is the released set's rows under
+    that key, in set order. -/
+private theorem rows_read {H : Bytes → Bytes} {s : St} {rel : Snapshot Line} {redo : List Nat} {fd : Feeds}
+    {b : List Line} (hr : IdxInv H s.rel rel) (hb : Uncapped (fetch s redo b) fd b) {l : Line} (hl : l ∈ b) :
+    Worker.relRows (HashMap.ofList (fetch s redo b).rel) (exactKey l) =
+      some (rel.entries.filter (exactKey · == exactKey l)) := by
+  have hk : exactKey l ∈ ksR s redo b := mem_ksR_of_probe (mem_probeKeys.mpr ⟨l, hl, by simp [keys]⟩)
+  have hc := cnt_rel hb hl _ hk
+  show (if capN < ((HashMap.ofList (fetch s redo b).rel).getD (exactKey l) Entry.empty).count then none else
+    some ((heads ((HashMap.ofList (fetch s redo b).rel).getD (exactKey l) Entry.empty)).map (·.row))) = _
+  rw [fetch_rel', relM_getD, if_pos hk, if_neg (Nat.not_lt.mpr hc), heads_eq hr hc, postings_exact]
+
+/-- The worker's answered set (`Worker.commitBin`): on a batch no cap touches, over an index faithful to `rel` and
+    `unr`, it answers a payment exactly when `ExactDuplicate.answered` does on the Spec's decisions at the contested
+    payments `k`, unless a line of it is already decided or its earlier list cannot be written (`Run.answering_eq`). -/
+theorem answer_eq (H : Bytes → Bytes) (s : St) (c : Ctx) (rel unr : Snapshot Line) (b : List Line)
+    (hr : IdxInv H s.rel rel) (hu : IdxInv H s.unr unr) (hb : Uncapped (fetch s c.redo b) (Worker.feedsOf c) b)
+    (k : List Nat) (p : Nat) :
+    let fc : FCtx := ⟨c.today, c.redo, Worker.feedsOf c, c.byp, c.lim⟩
+    let fe := fetch s fc.redo b
+    let ds := (decideFetched s.rel.head s.unr.head fe fc [] b).1
+    let relM : HashMap Key Entry := HashMap.ofList fe.rel
+    let ax := Run.answering c (Worker.relRows relM) k ds
+    let sc := carried c rel unr
+    let spec := (decideBatchIn sc [] b).decisions
+    ax.pays.contains p = (answered sc k spec p &&
+      !(spec.any fun d => d.line.pay == p && d.reasons.contains .ALREADY_DECIDED) &&
+      (Run.earlierBody sc spec p).isSome) := by
+  intro fc fe ds relM ax sc spec
+  have hds : ds = spec := (pay_eq H s c rel unr [] b hr hu hb).1
+  have hl : ∀ d ∈ ds, d.line ∈ b := fetched_lines _ _ _ _ _ _
+  exact (Run.answering_eq (c := sc) (c' := c) (b := b) (hds.trans rfl) rfl
+    (fun d hd rs h => ((Option.some.inj ((rows_read hr hb (hl d hd)).symm.trans h)).symm).trans
+      (congrArg (List.filter _) (carried_rel c rel unr).symm))
+    (fun d hd => (congrArg Option.isSome (rows_read hr hb (hl d hd))).trans rfl) p).trans (by rw [hds])
+
+/-- A line held for an exact repeat whose exact key has more than `capN` released postings: the worker cannot read the
+    key whole, so the line is held with `POSTING_CAP` and its payment is decided contested (never answered, its leaf
+    as before the amendment) and is HOLD, in any batch. -/
+theorem answer_cap (s : St) (c : Ctx) (b : List Line) (k : List Nat) (u : Nat → Bool) :
+    let fc : FCtx := ⟨c.today, c.redo, Worker.feedsOf c, c.byp, c.lim⟩
+    let fe := fetch s fc.redo b
+    let ds := (decideFetched s.rel.head s.unr.head fe fc [] b).1
+    let relM : HashMap Key Entry := HashMap.ofList fe.rel
+    let ax := Run.answering c (Worker.relRows relM) k ds
+    ∀ d ∈ ds, (Reason.FFS_DUPLICATE_LINE ∈ d.reasons ∨ Reason.CAP_MEMBER_MONTH_DUPLICATE ∈ d.reasons) →
+      capN < (relM.getD (exactKey d.line) Entry.empty).count →
+      ax.k.contains d.line.pay = true ∧ ax.pays.contains d.line.pay = false ∧
+      (∀ unf o, answerLeaf ax.c ax.k ax.ds unf o d.line.pay = if unf d.line.pay then .HOLD else .ofOutcome o) ∧
+      d.outcome = .HOLD ∧ Reason.POSTING_CAP ∈ d.reasons ∧
+      Run.leafOutcome ((localIx s.rel.head s.unr.head fe (localRows fe.rel) (localRows fe.unr) fc b).payOutcome ds)
+        u d.line.pay = .HOLD := by
+  intro fc fe ds relM ax d hd hr hc
+  obtain ⟨h1, h2, -, h4, -⟩ := Run.unread_contested c c (k := k) (rowsFor := Worker.relRows relM) hd hr (if_pos hc)
+  have hc' : capN < (if exactKey d.line ∈ ksR s fc.redo b then s.rel.get (exactKey d.line) else Entry.empty).count := by
+    rw [← relM_getD (fun k => s.rel.get k) (ksR s fc.redo b) (exactKey d.line)]
+    exact hc
+  by_cases hm : exactKey d.line ∈ ksR s fc.redo b
+  · rw [if_pos hm] at hc'
+    have hmem : (exactKey d.line, s.rel.get (exactKey d.line)) ∈ fe.rel := by
+      rw [show fe.rel = _ from fetch_rel' s fc.redo b]
+      exact List.mem_map.mpr ⟨_, hm, rfl⟩
+    have hhot := hot_count (fd := fc.feeds) (b := b) (List.mem_append_left _ hmem) hc'
+    have hcap : capped (hotKeys fe fc.feeds b) fe fc.feeds d.line = true := by
+      have : (keys d.line).any (hotKeys fe fc.feeds b).contains = true :=
+        List.any_eq_true.mpr ⟨exactKey d.line, by simp [keys], hhot⟩
+      simp only [capped, this, Bool.or_true, Bool.true_or]
+    obtain ⟨h5, h6⟩ := cap_hold _ _ _ _ _ _ d hd hcap
+    exact ⟨h1, h2, h4, h5, h6, pay_capped _ _ _ _ _ _ u hd hcap⟩
+  · rw [if_neg hm] at hc'
+    exact absurd hc' (by simp [Entry.empty])
 
 /-! ## A payment none of whose lines is capped, in a batch where other lines are
 
@@ -411,12 +468,11 @@ private theorem part_id {fe : Fetched} {fd : Feeds} {b : List Line} {l : Line}
 private theorem part_feed {fe : Fetched} {fd : Feeds} {b : List Line} {l : Line}
     (h : capped (hotKeys fe fd b) fe fd l = false) :
     feedOver (fd.dmf l.member) = false ∧ feedOver (fd.span l.member) = false ∧ feedOver (fd.pdeath l.payee) = false ∧
-    feedOver (fd.excl l.payee) = false ∧ feedOver (fd.pdeath l.rendering) = false ∧ feedOver (fd.excl l.rendering) = false ∧
-    feedOver (fd.elig l.member) = false := by
+    feedOver (fd.excl l.payee) = false ∧ feedOver (fd.pdeath l.rendering) = false ∧ feedOver (fd.excl l.rendering) = false := by
   unfold capped feedCapped at h
   simp only [Bool.or_eq_false_iff, List.any_cons, List.any_nil, Bool.or_false] at h
-  obtain ⟨-, ⟨⟨⟨h1, h2⟩, h7⟩, ⟨h3, h4⟩⟩⟩ := h
-  exact ⟨h1, h2, h3.1, h3.2, h4.1, h4.2, h7⟩
+  obtain ⟨-, ⟨⟨h1, h2⟩, ⟨h3, h4⟩⟩⟩ := h
+  exact ⟨h1, h2, h3.1, h3.2, h4.1, h4.2⟩
 
 private theorem hot_cap {fe : Fetched} {fd : Feeds} {b : List Line} {l : Line} (hl : l ∈ b) (hc : isCap l = true)
     (hov : feedOver (fd.span l.member) = true) {k : Key} (hk : k ∈ keys l) :
@@ -656,12 +712,8 @@ private theorem fires_part (hr : IdxInv H s.rel rel) (hu : IdxInv H s.unr unr) (
   have hid' : idKey l ∈ keys l := idKey_mem
   have hex : exactKey l ∈ keys l := by simp [keys]
   have hne : nearKey l ∈ keys l := by simp [keys]
-  obtain ⟨f1, f2, f3, f4, f5, f6, f7⟩ := part_feed hcl
+  obtain ⟨f1, f2, f3, f4, f5, f6⟩ := part_feed hcl
   obtain ⟨hpay, hrend⟩ := mem_parties hl
-  have hae : (locIx s fc b).aidEligible l = (Ix.build (carried c₀ rel unr) b).aidEligible l :=
-    (aidEligible_loc (s := s) (b := b) (rel := rel) (unr := unr) hc (mem_members hl) f7).trans aidEligible_eq.symm
-  have hle : (locIx s fc b).levelEligible l = (Ix.build (carried c₀ rel unr) b).levelEligible l :=
-    (levelEligible_loc (s := s) (b := b) (rel := rel) (unr := unr) hc (mem_members hl) f7).trans levelEligible_eq.symm
   have hmd : (locIx s fc b).memberDead l = (Ix.build (carried c₀ rel unr) b).memberDead l :=
     (memberDead_loc (s := s) (b := b) (rel := rel) (unr := unr) hc (mem_members hl) f1).trans memberDead_eq.symm
   have hpd : (locIx s fc b).providerDead l = (Ix.build (carried c₀ rel unr) b).providerDead l :=
@@ -685,9 +737,7 @@ private theorem fires_part (hr : IdxInv H s.rel rel) (hu : IdxInv H s.unr unr) (
     rw [looseKeys_eq, this]; simp
   have hrc := relChained_loc (b := b) (unr := unr) hr hc
   have huc := unrChained_loc (b := b) (rel := rel) hu hc
-  obtain ⟨hT, -, hDS, hPS, hES, hSS, hDO, hPO, hEO, hSO, -, -, -, -, -, -, hLS, hLO, -⟩ := hc
-  have hls : (locIx s fc b).eligSome = (Ix.build (carried c₀ rel unr) b).eligSome := hLS
-  have hlo : (locIx s fc b).eligOk = (Ix.build (carried c₀ rel unr) b).eligOk := hLO
+  obtain ⟨hT, -, hDS, hPS, hES, hSS, hDO, hPO, hEO, hSO, -, -, -, -⟩ := hc
   have hto : (locIx s fc b).today = (Ix.build (carried c₀ rel unr) b).today := hT
   have hds : (locIx s fc b).dmfSome = (Ix.build (carried c₀ rel unr) b).dmfSome := hDS
   have hps : (locIx s fc b).pdSome = (Ix.build (carried c₀ rel unr) b).pdSome := hPS
@@ -698,7 +748,7 @@ private theorem fires_part (hr : IdxInv H s.rel rel) (hu : IdxInv H s.unr unr) (
   have heo : (locIx s fc b).exclOk = (Ix.build (carried c₀ rel unr) b).exclOk := hEO
   have hso : (locIx s fc b).spanOk = (Ix.build (carried c₀ rel unr) b).spanOk := hSO
   cases r <;> simp only [Ix.fires, hs _ hex, hs _ hne, hs _ hid', hp _ hex, hp _ hne, hp _ hid', hlk, hmd, hpd, hex',
-    hov, hne', hen, hrc, huc, hto, hds, hps, hes, hss, hdo, hpo, heo, hso, hae, hle, hls, hlo]
+    hov, hne', hen, hrc, huc, hto, hds, hps, hes, hss, hdo, hpo, heo, hso]
 
 private theorem decideLine_part (hr : IdxInv H s.rel rel) (hu : IdxInv H s.unr unr) (hc : FCtxInv fc c₀)
     (hid : idCapped (fetch s fc.redo b) = false) {l : Line} (hl : l ∈ b)
@@ -842,120 +892,13 @@ theorem pay_line_part (H : Bytes → Bytes) (s : St) (c : Ctx) (rel unr : Snapsh
   obtain ⟨rs, h1, h2, h3, h4⟩ := leafReasons_codes spec u p
   exact ⟨by simp only [Run.leafOutcome, hpo], rs, by rw [hlr]; exact h1, h2, h3, h4⟩
 
-/-- `pay_codes_le` for a payment none of whose lines is capped, in a batch where other lines may be (`pay_line_part`).
-    A payment with a capped line is HOLD (`pay_capped`); its codes come from the capped index (`Ix.fires` and
-    `capD`, which adds POSTING_CAP), not the Spec, and are bounded by `pay_codes_le_all` below. -/
-theorem pay_codes_le_part (H : Bytes → Bytes) (s : St) (c : Ctx) (rel unr : Snapshot Line) (f : List Nat)
-    (b : List Line) (hr : IdxInv H s.rel rel) (hu : IdxInv H s.unr unr) (u : Nat → Bool) (p : Nat)
-    (hp : ∀ l ∈ b, l.pay = p → capped (hotKeys (fetch s c.redo b) (Worker.feedsOf c) b) (fetch s c.redo b) (Worker.feedsOf c) l = false) :
-    let fc : FCtx := ⟨c.today, c.redo, Worker.feedsOf c, c.byp, c.lim⟩
-    let fe := fetch s fc.redo b
-    let ds := (decideFetched s.rel.head s.unr.head fe fc f b).1
-    let spec := (decideBatchIn (carried c rel unr) f b).decisions
-    ∃ rs : List String, Run.leafReasons ds u p = (if rs.isEmpty then "-" else ",".intercalate rs) ∧
-      rs.Pairwise (· < ·) ∧ (u p = true → rs = ["UNENCODABLE_PAYMENT"]) ∧
-      (u p = false → ∀ r, r ∈ rs ↔ ∃ d ∈ spec, d.line.pay = p ∧ ∃ y ∈ d.reasons, Run.name y = r) ∧
-      rs.length ≤ BlindLedger.Gate.maxReasonCodes := by
-  intro fc fe ds spec
-  obtain ⟨-, rs, h1, h2, h3, h4⟩ := pay_line_part H s c rel unr f b hr hu u p hp
-  have hm : ∀ d ∈ spec, ∀ r ∈ d.reasons, may (bitsOf (carried c rel unr)) r = true :=
-    decideAll_may (carried c rel unr) (idSeen f ++ seen0 (carried c rel unr) b) (order (carried c rel unr) b)
-  exact ⟨rs, h1, h2, h3, h4, codes_le _ _ u p rs h2 h3 h4 hm⟩
-
-/-! ## The capped path: every payment, capped or not
-
-    The worker's decisions are `Ix.decideAll`'s, each passed through `capD` when its line is capped
-    (`decideFetched`).  `may`'s bit-dependent arms are exactly the reasons `Ix.fires` guards with the index's four
-    usable bits (`ixBits`), as `fires` guards them with `usable`, and `capD` keeps a decision's reasons and adds
-    POSTING_CAP, which `may` allows under every bits.  So every reason the worker gives is allowed by the feeds'
-    bits, and the codes of every `RULES_PAY` line of the flat worker (`Worker.commitBin`, which prints each
-    payment's line from its own group of decisions: `leafReasons_group`) are bounded, with no `Uncapped`
-    hypothesis.  The Engine3 lanes decide with `Rows.decideRows`; carrying the bound to their leaf masks through
-    `decideRows_eq` is not done here. -/
-
-/-- The usable bits of the feeds the worker decides on (`localIx` copies them into the index). -/
-def feedBits (fd : Feeds) : Bits := ⟨fd.dmfOk, fd.pdOk, fd.exclOk, fd.spanOk, fd.eligOk⟩
-
-/-- The usable bits `Ix.fires` reads. -/
-def ixBits (x : Ix) : Bits := ⟨x.dmfOk, x.pdOk, x.exclOk, x.spanOk, x.eligOk⟩
-
-/-- On the pinned context's feeds the bits are the Spec's (`Rules.bitsOf`).  The bound below needs no such link
-    (`Rules.budget` holds for every bits); this relates the bits it uses to the ones `Rules.may_sound` speaks of. -/
-theorem feedBits_inv {fc : FCtx} {c : Ctx} (h : FCtxInv fc c) : feedBits fc.feeds = bitsOf c := by
-  obtain ⟨-, -, -, -, -, -, h7, h8, h9, h10, -, -, -, -, -, -, -, h18, -⟩ := h
-  simp [feedBits, bitsOf, h7, h8, h9, h10, h18]
-
-/-- The fast decider's twin of `Rules.may_sound`: a reason `Ix.fires` gives is allowed by the index's bits. -/
-theorem ix_may_sound (x : Ix) (s : Std.HashSet Key) (l : Line) (r : Reason) (h : x.fires s l r = true) :
-    may (ixBits x) r = true := by
-  revert h
-  cases r <;> simp +contextual [Ix.fires, may, ixBits, Ix.notEnrolled]
-
-private theorem ix_decideAll_may (x : Ix) : ∀ (s : Std.HashSet Key) (ls : List Line),
-    ∀ d ∈ x.decideAll s ls, ∀ r ∈ d.reasons, may (ixBits x) r = true
-  | _, [] => by simp [Ix.decideAll]
-  | s, l :: ls => by
-    intro d hd r hr
-    simp only [Ix.decideAll, List.mem_cons] at hd
-    rcases hd with rfl | hd
-    · simp only [Ix.decideLine, List.mem_filter] at hr
-      exact ix_may_sound x s l r hr.2
-    · exact ix_decideAll_may x _ ls d hd r hr
-
-/-- `capD` keeps a decision's reasons and adds POSTING_CAP, which `may` allows under every bits. -/
-private theorem capD_may (b : Bits) (d : Decision) (h : ∀ r ∈ d.reasons, may b r = true) :
-    ∀ r ∈ (BlindLedger.Gate.OnepIndex.capD d).reasons, may b r = true := by
-  intro r hr
-  simp only [BlindLedger.Gate.OnepIndex.capD, List.mem_filter, Bool.or_eq_true, beq_iff_eq, List.contains_iff_mem] at hr
-  rcases hr.2 with rfl | h2
-  · rfl
-  · exact h r h2
-
-/-- Every reason on every decision of `decideFetched`, capped or not, is allowed by the feeds' bits. -/
-theorem decideFetched_may (hr hu : Head) (fe : Fetched) (fc : FCtx) (f : List Nat) (b : List Line) :
-    ∀ d ∈ (decideFetched hr hu fe fc f b).1, ∀ r ∈ d.reasons, may (feedBits fc.feeds) r = true := by
-  intro d hd r hrd
-  simp only [decideFetched, List.mem_map] at hd
-  obtain ⟨d0, hd0, rfl⟩ := hd
-  have h0 : ∀ r ∈ d0.reasons, may (feedBits fc.feeds) r = true :=
-    ix_decideAll_may (localIx hr hu fe (localRows fe.rel) (localRows fe.unr) fc b) _ _ d0 hd0
-  split at hrd
-  · exact capD_may _ d0 h0 r hrd
-  · exact h0 r hrd
-
-/-- Each `RULES_PAY` line fits one token, in any batch: whether or not a cap touches the batch or the payment, the
-    code list the worker prints for payment `p` (strictly increasing, its members the names of the reasons of the
-    worker's decided lines of `p`, as `leafReasons_codes` gives) has at most `maxReasonCodes` codes.  The members
-    are described by the worker's own decisions (`Ix.fires`, then `capD`), not the Spec's: on a capped line the two
-    may differ.  The worker prints from the payment's group (`leafReasons_group`), which gives the same text. -/
-theorem pay_codes_le_all (hr hu : Head) (fe : Fetched) (fc : FCtx) (f : List Nat) (b : List Line) (u : Nat → Bool)
-    (p : Nat) :
-    let ds := (decideFetched hr hu fe fc f b).1
-    ∃ rs : List String, Run.leafReasons ds u p = (if rs.isEmpty then "-" else ",".intercalate rs) ∧
-      rs.Pairwise (· < ·) ∧ (u p = true → rs = ["UNENCODABLE_PAYMENT"]) ∧
-      (u p = false → ∀ r, r ∈ rs ↔ ∃ d ∈ ds, d.line.pay = p ∧ ∃ y ∈ d.reasons, Run.name y = r) ∧
-      rs.length ≤ BlindLedger.Gate.maxReasonCodes :=
-  leafReasons_le (feedBits fc.feeds) _ u p (decideFetched_may hr hu fe fc f b)
-
-/-- Printing a payment's codes from its own decisions gives the same text as from the whole batch's. -/
-theorem leafReasons_filter (ds : List Decision) (u : Nat → Bool) (p : Nat) :
-    Run.leafReasons (ds.filter (·.line.pay == p)) u p = Run.leafReasons ds u p := by
-  simp [Run.leafReasons, List.filter_filter]
-
-/-- The worker's per-payment group (`Worker.commitBin`'s `byPay`/`grp`) prints the same codes as the whole batch's
-    decisions, so `pay_codes_le_all` bounds the text the worker emits. -/
-theorem leafReasons_group (ds : List Decision) (u : Nat → Bool) (p : Nat) :
-    Run.leafReasons ((ds.foldr (fun d m => m.insert d.line.pay (d :: m.getD d.line.pay []))
-      (∅ : HashMap Nat (List Decision))).getD p []) u p = Run.leafReasons ds u p := by
-  rw [group_getD (fun d : Decision => d.line.pay) ds p]
-  exact leafReasons_filter ds u p
-
 /-! ## Requests: a token's lines and fields are its own request's (K1 review H1)
 
     With requests in the frame (`req HEX`, `Run.addReq`), each entry of `Run.St.reqs` is a request Lean decoded from
     the frame's bytes, its payment number and the lines it read from it (`ReqsOk`, kept by every `req`: `addReq_ok`).
     The commit decides `Run.St.lines`; the lines of a request's payment there are exactly that request's (`lines_req`),
-    and its leaf (`Run.emitWith`) is the Spec's `Run.emit` (`pay_req`).  The frame carries no pairing of a request with other lines, so none can be signed. -/
+    and its leaf before release by cause and the exact-repeat answer (`Run.emitWith`) is the Spec's `Run.emit` (`pay_req`);
+    the leaf written, with both, is the Spec's (`commit_leaves`).  The frame carries no pairing of a request with other lines, so none can be signed. -/
 
 /-- The batch's requests: each payment once; each entry a decoded request, its payment number (`payNat`) and the lines
     `linesOf` reads from it (none for a flow with no rules). -/
@@ -1067,9 +1010,11 @@ theorem lines_req {st : Run.St} {cov : Run.Req → Bool} (hok : ReqsOk st.reqs) 
   exact filter_own _ (hok.1.sublist ((List.filter_sublist).map _)) (fun e he' => reqsOk_pay hok e (List.mem_filter.mp he').1)
     (List.mem_filter.mpr ⟨he, hc⟩)
 
-/-- A request's leaf: on a batch no cap touches, over an index faithful to `rel` and `unr`, the leaf the worker builds
-    (`Run.emitWith` over its index's payment outcome, bypass test and re-decision test) is the Spec's `Run.emit` over the Spec's decisions, so
-    the authority laws of `Run.emit` (`EmitLaws`) hold of the worker's leaf. -/
+/-- A request's leaf before release by cause and the exact-repeat answer: on a batch no cap touches, over an index
+    faithful to `rel` and `unr`, `Run.emitWith` over the index's payment outcome, bypass test and re-decision test and
+    all the batch's decisions is the Spec's `Run.emit` over the Spec's decisions, so the authority laws of `Run.emit`
+    (`EmitLaws`) hold of it.  The leaf the worker writes is `Run.causeLeaf` of it, answered or not as
+    `ExactDuplicate.answerLeaf` says (`commit_leaves`). -/
 theorem pay_req (H : Bytes → Bytes) (s : St) (c : Ctx) (rel unr : Snapshot Line) (f : List Nat) (b : List Line)
     (hr : IdxInv H s.rel rel) (hu : IdxInv H s.unr unr) (hb : Uncapped (fetch s c.redo b) (Worker.feedsOf c) b)
     (hsh : Bytes → Bytes) (g : Authority.Grant) (bps : List Authority.Bypass) (u : Nat → Bool) (e : Run.Req) :
@@ -1091,6 +1036,498 @@ theorem pay_req (H : Bytes → Bytes) (s : St) (c : Ctx) (rel unr : Snapshot Lin
     rw [show x = locIx s fc b from rfl, redo_loc (rel := rel) (unr := unr) (b := b) hc, redo_contains]
   unfold Run.emit
   rw [hx, hpb, hrd, hds]
+
+/-! ## A commit's leaves, records and notes over `ExactDuplicate.decideBatchX`
+
+    `Worker.commitBin` decides a batch with requests once and reads each payment's own decisions (`Worker.byPay`).  It
+    writes for each request `Worker.leafAt` of `Worker.payOf` (`Run.emitWith`, then `Run.causeLeaf`), for each decided
+    line a record whose set is `Worker.ruleOf`, the unresolved lines less those of the payments `Run.answering` answers
+    (it decides the payments of the requests that contest, `Worker.contested`, as before), and the approval notes
+    (`Run.bypNotes`, `Run.causeNotes`).  `commit_leaves`: on a batch no cap touches, over an index faithful to `rel` and
+    `unr`, each of these is the Spec's over `ExactDuplicate.decideBatchX`'s decisions at the payments `Run.answering`
+    decides as contested, and a payment whose sender contests is never answered.  `contested_mem`: those are exactly the
+    payments of the requests that contest.  `causeLeaf_cases`: release by cause changes a leaf only to ALLOW with its
+    record's id, for a payment the record lists, with no unfit line, that the rules release for an approval
+    (`bypassed`: held here, not decided again, and every reason left on its lines one the approval overrides; a held
+    payment whose facts have since cleared has none left).  `approvals_id`: that id is the id of an admitted record
+    that lists the request and judges it, and whose cause pair is the one the rules read for the payment.
+    `leaf_capped`: in any batch, capped or not, a payment with a capped line is neither released for an approval nor
+    lifted at HOLD authority, and the leaf written for its request is not ALLOW and names no approval.
+
+    Mutants and what kills them: `causeLeafM1` (`Run.causeLeaf` without the test that the rules release the payment for
+    an approval) gives ALLOW in its `#guard`, where `Run.causeLeaf` gives HOLD, and the `example` after it shows that
+    `causeLeaf_cases`'s statement is false of it; `contestedM1` (the contest flag inverted) fails `contested_mem` and its
+    `#guard`.  A `Run.causeLeaf` that never releases fails the positive `#guard`; a `Worker.leafAt` body edit, or one
+    that answers when the earlier list cannot be written, fails the leaf pins (the outcome `leafAt` gives
+    `answerLeaf` does not change whether it answers, its `example`); a `Worker.ruleOf` that drops a test of its first
+    three branches, or swaps two of its sets, fails its `#guard`, except the second branch's `!own`, which decides
+    nothing (its `example`). -/
+
+private theorem any_pay (ds : List Decision) (p : Nat) (g : Decision → Bool) :
+    (ds.filter (·.line.pay == p)).any (fun d => d.line.pay == p && g d) = ds.any (fun d => d.line.pay == p && g d) := by
+  induction ds with
+  | nil => rfl
+  | cons d ds ih => cases h : d.line.pay == p <;> simp [h, ih]
+
+private theorem all_pay (ds : List Decision) (p : Nat) (g : Decision → Bool) :
+    (ds.filter (·.line.pay == p)).all (fun d => d.line.pay != p || g d) = ds.all (fun d => d.line.pay != p || g d) := by
+  induction ds with
+  | nil => rfl
+  | cons d ds ih => cases h : d.line.pay == p <;> simp [h, bne]
+
+private theorem payOutcome_filter (c : Ctx) (ds : List Decision) (p : Nat) :
+    payOutcome c (ds.filter (·.line.pay == p)) p = payOutcome c ds p := by
+  simp only [payOutcome, List.filter_filter, Bool.and_self]
+
+private theorem bypassed_filter (c : Ctx) (ds : List Decision) (p : Nat) :
+    bypassed c (ds.filter (·.line.pay == p)) p = bypassed c ds p := by
+  unfold bypassed
+  cases c.byp.lookup p with
+  | none => rfl
+  | some m => simp only [any_pay, all_pay]
+
+private theorem lifts_filter (m : Nat) (ds : List Decision) (p : Nat) (o : Outcome) :
+    lifts m (ds.filter (·.line.pay == p)) p o = lifts m ds p o := by
+  simp only [lifts, all_pay, List.any_filter, Bool.and_self]
+
+private theorem limitedPay_filter (c : Ctx) (ds : List Decision) (p : Nat) :
+    limitedPay c (ds.filter (·.line.pay == p)) p = limitedPay c ds p := by
+  unfold limitedPay
+  cases c.lim.lookup p with
+  | none => rfl
+  | some m => simp only [payOutcome_filter, lifts_filter]
+
+private theorem leafReasons_filter (ds : List Decision) (u : Nat → Bool) (p : Nat) :
+    Run.leafReasons (ds.filter (·.line.pay == p)) u p = Run.leafReasons ds u p := by
+  simp only [Run.leafReasons, List.filter_filter, Bool.and_self]
+
+/-- `Run.emitWith` reads only the decisions of the request's own payment. -/
+private theorem emitWith_filter (hsh : Bytes → Bytes) (g : Authority.Grant) (bps : List Authority.Bypass)
+    (out : Nat → Outcome) (byd rdo : Nat → Bool) (ds : List Decision) (unf : Nat → Bool) (e : Run.Req) :
+    Run.emitWith hsh g bps out byd rdo (ds.filter (·.line.pay == e.q)) unf e = Run.emitWith hsh g bps out byd rdo ds unf e := by
+  simp only [Run.emitWith, Run.limited, lifts_filter, leafReasons_filter]
+
+private theorem payOf_eq {hsh : Bytes → Bytes} {g : Authority.Grant} {bps : List Authority.Bypass} {ap : Run.Approvals}
+    {out : Nat → Outcome} {byd rdo : Nat → Bool} {grp : Nat → List Decision} {unf : Nat → Bool} {e : Run.Req}
+    {c : Ctx} {ds : List Decision} (ho : out = payOutcome c ds) (hb : byd = bypassed c ds) (hr : rdo = c.redo.contains)
+    (hg : grp e.q = ds.filter (·.line.pay == e.q)) :
+    Worker.payOf hsh g bps ap out byd rdo grp unf e =
+      Run.causeLeaf ap (bypassed c ds) unf ((Run.emit hsh g (Run.bypsFor hsh bps e) c ds unf e).getD (Run.uncovered g e)) := by
+  subst ho hb hr
+  unfold Worker.payOf Run.emit
+  rw [hg, emitWith_filter]
+
+private theorem leafAt_eq {c c' : Ctx} {k : List Nat} {ds ds' : List Decision} {unf : Nat → Bool} {m : Run.Pay}
+    {rq : ByteArray} (ha : answered c k ds m.q = answered c' k ds' m.q)
+    (he : Run.earlierBody c ds m.q = Run.earlierBody c' ds' m.q) :
+    Worker.leafAt c k ds unf m rq = Worker.leafAt c' k ds' unf m rq := by
+  unfold Worker.leafAt answerLeaf
+  rw [ha, he]
+
+private theorem rule_unres (al pa rd byd lim own ad ownU ans : Bool) :
+    ((if al && !rd && pa then Frame.Rule.released else if byd || lim && !own then Frame.Rule.bypassed
+      else if !al && !ad && !own && !ownU && !ans then Frame.Rule.unresolved else Frame.Rule.decided) ==
+        Frame.Rule.unresolved) = (!ans && (!al && !ad && !own && !ownU && !byd && !lim)) := by
+  cases al <;> cases pa <;> cases rd <;> cases byd <;> cases lim <;> cases own <;> cases ad <;> cases ownU <;>
+    cases ans <;> rfl
+
+private theorem ruleOf_unres {x : Ix} {grp : Nat → List Decision} {ans : Std.HashSet Nat} {c : Ctx} {k : List Nat}
+    {ds : List Decision} {d : Decision}
+    (hrd : x.redo.contains d.line.pay = c.redo.contains d.line.pay)
+    (ho : x.payOutcome (grp d.line.pay) d.line.pay = payOutcome c ds d.line.pay)
+    (hb : x.bypassed (grp d.line.pay) d.line.pay = bypassed c ds d.line.pay)
+    (hl : x.limitedPay (grp d.line.pay) d.line.pay = limitedPay c ds d.line.pay)
+    (hw : x.own d.line = own c d.line) (hu : x.ownU d.line = ownU c d.line)
+    (ha : ans.contains d.line.pay = answered c k ds d.line.pay) :
+    (Worker.ruleOf x grp ans d == .unresolved) = (!answered c k ds d.line.pay && (d.outcome != .ALLOW &&
+      !d.reasons.contains .ALREADY_DECIDED && !own c d.line && !ownU c d.line && !bypassed c ds d.line.pay &&
+      !limitedPay c ds d.line.pay)) := by
+  unfold Worker.ruleOf
+  rw [hrd, ho, hb, hl, hw, hu, ha]
+  exact rule_unres (d.outcome == .ALLOW) (payOutcome c ds d.line.pay == .ALLOW) _ _ _ _ _ _ _
+
+/-- The payments `Worker.commitBin` passes to `Run.answering` as contested are those of the requests that contest. -/
+theorem contested_mem (reqs : List Run.Req) (p : Nat) :
+    p ∈ Worker.contested reqs ↔ ∃ e ∈ reqs, e.ra.contest = true ∧ e.q = p := by
+  unfold Worker.contested
+  simp only [List.mem_filterMap]
+  constructor
+  · rintro ⟨e, he, h⟩
+    by_cases hc : e.ra.contest = true
+    · rw [if_pos hc] at h
+      exact ⟨e, he, hc, Option.some.inj h⟩
+    · rw [if_neg hc] at h
+      cases h
+  · rintro ⟨e, he, hc, rfl⟩
+    exact ⟨e, he, if_pos hc⟩
+
+/-- Release by cause changes a leaf only to ALLOW with the id of the record that lists its payment, and only for a
+    payment with no unfit line that the rules release for an approval (`bypassed`, over the Spec's decisions in
+    `commit_leaves`: held here, and every reason left on its lines overridden, or none left once its facts cleared);
+    the id is never zero. -/
+theorem causeLeaf_cases (a : Run.Approvals) (byd unf : Nat → Bool) (m : Run.Pay) :
+    Run.causeLeaf a byd unf m = m ∨ ∃ id, a.ids.lookup m.q = some id ∧ unf m.q = false ∧ byd m.q = true ∧
+      id ≠ Gate.zeroDigest ∧ Run.causeLeaf a byd unf m = { m with outcome := .ALLOW, bypass := id } := by
+  cases h : a.ids.lookup m.q with
+  | none => left; simp [Run.causeLeaf, h]
+  | some id =>
+    cases hu : unf m.q <;> cases hb : byd m.q
+    all_goals first
+      | (left; simp [Run.causeLeaf, h, hu, hb]; done)
+      | skip
+    by_cases hz : id = Gate.zeroDigest
+    · left; simp [Run.causeLeaf, h, hu, hb, hz]
+    · right; exact ⟨id, rfl, rfl, rfl, hz, by simp [Run.causeLeaf, h, hu, hb, hz]⟩
+
+/-- A commit with requests (`Worker.commitBin`): on a batch no cap touches, over an index faithful to `rel` and `unr`,
+    with the payments of the requests `reqs` that contest decided as contested (`Worker.contested`):
+    the worker's decisions are `ExactDuplicate.decideBatchX`'s; the lines it adds to the released and unresolved sets
+    (the unresolved less the answered payments') are that batch's; the decided lines its records name unresolved
+    (`Worker.ruleOf`) are those lines; each request's leaf (`Worker.payOf`, `Worker.leafAt`) is the Spec's: `Run.causeLeaf`
+    of `Run.emit` over those decisions, answered with its earlier list as `ExactDuplicate.answerLeaf` and
+    `Run.earlierBody` say over them; its approval notes are the Spec's; and a payment whose sender contests is never
+    answered. -/
+theorem commit_leaves (H : Bytes → Bytes) (s : St) (c : Ctx) (rel unr : Snapshot Line) (b : List Line)
+    (hr : IdxInv H s.rel rel) (hu : IdxInv H s.unr unr) (hb : Uncapped (fetch s c.redo b) (Worker.feedsOf c) b)
+    (hsh : Bytes → Bytes) (g : Authority.Grant) (bps : List Authority.Bypass) (ap : Run.Approvals)
+    (reqs : List Run.Req) (unf : Nat → Bool) :
+    let fc : FCtx := ⟨c.today, c.redo, Worker.feedsOf c, c.byp, c.lim⟩
+    let fe := fetch s fc.redo b
+    let r := decideFetched s.rel.head s.unr.head fe fc [] b
+    let x := Worker.leafIx s.rel.head s.unr.head fe fc b
+    let grp := Worker.leafGrp (Worker.byPay r.1)
+    let byd := Worker.leafByd x (Worker.byPay r.1)
+    let ax := Run.answering c (Worker.relRows (HashMap.ofList fe.rel)) (Worker.contested reqs) r.1
+    let sc := carried c rel unr
+    let X := decideBatchX sc ax.k b
+    r.1 = X.decisions ∧
+    (r.2.1, r.2.2.filter fun l => !ax.pays.contains l.pay) = batchFresh sc X ∧
+    (r.1.filter (Worker.ruleOf x grp ax.pays · == .unresolved)).map (·.line) = (batchFresh sc X).2 ∧
+    (∀ e rq, Worker.leafAt ax.c ax.k ax.ds unf
+        (Worker.payOf hsh g bps ap (fun p => x.payOutcome (grp p) p) byd x.redo.contains grp unf e) rq =
+      Worker.leafAt sc ax.k X.decisions unf (Run.causeLeaf ap (bypassed sc X.decisions) unf
+        ((Run.emit hsh g (Run.bypsFor hsh bps e) sc X.decisions unf e).getD (Run.uncovered g e))) rq) ∧
+    Run.bypNotes hsh bps reqs byd ++ Run.causeNotes ap byd =
+      Run.bypNotes hsh bps reqs (bypassed sc X.decisions) ++ Run.causeNotes ap (bypassed sc X.decisions) ∧
+    ∀ e ∈ reqs, e.ra.contest = true → ∀ o,
+      answerLeaf sc ax.k X.decisions unf o e.q = if unf e.q then .HOLD else .ofOutcome o := by
+  intro fc fe r x grp byd ax sc X
+  have hc : FCtxInv fc c := feedsOf_inv c
+  have hR : r = ((decideBatchIn sc [] b).decisions, batchFresh sc (decideBatchIn sc [] b)) :=
+    decideBatchIdx_eq H s fc c rel unr [] b hr hu hc hb
+  have hds : r.1 = X.decisions := congrArg Prod.fst hR
+  have hdsA : r.1 = decideAll sc (seen0 sc b) (order sc b) := hds
+  have hl : ∀ d ∈ r.1, d.line ∈ b := fetched_lines _ _ _ _ _ _
+  have hl' : ∀ d ∈ X.decisions, d.line ∈ b := fun d hd => hl d (hds ▸ hd)
+  have hgrp : ∀ p, grp p = X.decisions.filter (·.line.pay == p) := fun p =>
+    (group_getD (fun d : Decision => d.line.pay) r.1 p).trans (by rw [hds])
+  have hlg : ∀ p, ∀ d ∈ grp p, d.line ∈ b := fun p d hd => by
+    rw [hgrp p] at hd
+    exact hl' d (List.mem_filter.mp hd).1
+  have hx : x = locIx s fc b := rfl
+  have hrdo : x.redo.contains = sc.redo.contains := funext fun q => by
+    show x.redo.contains q = (carried c rel unr).redo.contains q
+    rw [hx, redo_loc (rel := rel) (unr := unr) (b := b) hc, redo_contains]
+  have hout : (fun p => x.payOutcome (grp p) p) = payOutcome sc X.decisions := funext fun p => by
+    show x.payOutcome (grp p) p = payOutcome (carried c rel unr) X.decisions p
+    rw [hx, payOutcome_loc (unr := unr) hr hc hb (hlg p) p, payOutcome_eq, hgrp p, payOutcome_filter]
+  have hbyd : byd = bypassed sc X.decisions := funext fun p => by
+    show x.bypassed (grp p) p = bypassed (carried c rel unr) X.decisions p
+    rw [hx, bypassed_loc (rel := rel) hu hc hb (hlg p) p, bypassed_eq, hgrp p, bypassed_filter]
+  have hlim : ∀ p, x.limitedPay (grp p) p = limitedPay (carried c rel unr) X.decisions p := fun p => by
+    rw [hx, limitedPay_loc (unr := unr) hr hc hb (hlg p) p, limitedPay_eq, hgrp p, limitedPay_filter]
+  have hrows : ∀ d ∈ r.1, ∀ rs, Worker.relRows (HashMap.ofList fe.rel) (exactKey d.line) = some rs →
+      rs = (releasedSet sc).filter (exactKey · == exactKey d.line) := fun d hd rs h =>
+    ((Option.some.inj ((rows_read hr hb (hl d hd)).symm.trans h)).symm).trans
+      (congrArg (List.filter _) (carried_rel c rel unr).symm)
+  have hall : ∀ d ∈ r.1, (Worker.relRows (HashMap.ofList fe.rel) (exactKey d.line)).isSome = true := fun d hd =>
+    (congrArg Option.isSome (rows_read hr hb (hl d hd))).trans rfl
+  have hpays : ∀ p, ax.pays.contains p = answered sc ax.k X.decisions p := fun p =>
+    (Run.answering_pays (c' := c) (k := Worker.contested reqs) hdsA rfl hrows p).1.trans (congrArg (answered sc ax.k · p) hds)
+  have hfx : (batchFresh sc X).2 = unresolvedLinesX sc ax.k X.decisions := by
+    show List.drop (unresolvedSet sc).length (unresolvedSet sc ++ unresolvedLinesX sc ax.k X.decisions) = _
+    exact List.drop_left
+  have hfu : r.2.2 = unresolvedLines sc X.decisions := by
+    rw [hR]
+    show List.drop (unresolvedSet sc).length (unresolvedSet sc ++ unresolvedLines sc X.decisions) = _
+    exact List.drop_left
+  have hfr : r.2.1 = (batchFresh sc X).1 := (congrArg (·.2.1) hR).trans rfl
+  refine ⟨hds, Prod.ext hfr ?_, ?_, fun e rq => ?_, by rw [hbyd], fun e he hcon o => ?_⟩
+  · show r.2.2.filter (fun l => !ax.pays.contains l.pay) = (batchFresh sc X).2
+    rw [hfx, hfu]
+    exact List.filter_congr fun l _ => by simp only [hpays]
+  · rw [hfx, hds]
+    unfold unresolvedLinesX unresolvedLines
+    rw [List.filter_map, List.filter_filter]
+    congr 1
+    exact List.filter_congr fun d hd => ruleOf_unres (congrFun hrdo _) (congrFun hout _) (congrFun hbyd _) (hlim _)
+      (own_b (unr := unr) hr hc hb (hl' d hd)) ((ownU_loc (rel := rel) hu hc hb (hl' d hd)).trans ownU_eq) (hpays _)
+  · rw [payOf_eq (grp := grp) (e := e) hout hbyd hrdo (hgrp e.q)]
+    refine leafAt_eq ?_ ?_
+    · exact (Run.answering_pays (c' := c) (k := Worker.contested reqs) hdsA rfl hrows _).2.trans (congrArg (answered sc ax.k · _) hds)
+    · exact (Run.answering_earlierBody (c' := c) (k := Worker.contested reqs) hdsA rfl hrows hall _).trans (congrArg (Run.earlierBody sc · _) hds)
+  · have hk : ax.k.contains e.q = true :=
+      List.contains_iff_mem.mpr (List.mem_append_left _ ((contested_mem reqs e.q).mpr ⟨e, he, hcon, rfl⟩))
+    exact (contested_as_before hk unf o).1
+
+/-- Mutant: `Run.causeLeaf` without the test that the rules release the payment for an approval. -/
+def causeLeafM1 (a : Run.Approvals) (_byd unf : Nat → Bool) (p : Run.Pay) : Run.Pay :=
+  match a.ids.lookup p.q with
+  | some id => if !unf p.q && id != Gate.zeroDigest then { p with outcome := .ALLOW, bypass := id } else p
+  | none => p
+
+private def vPay : Run.Pay := ⟨5, .HOLD, "MEMBER_DECEASED", .HOLD, [], Gate.zeroDigest⟩
+private def vAp : Run.Approvals := ⟨[], [], [(5, List.replicate 64 7)], []⟩
+
+-- payment 5's record pair stands but the rules do not hold it for an approval: the real leaf stays HOLD
+#guard (Run.causeLeaf vAp (fun _ => false) (fun _ => false) vPay).outcome == .HOLD
+#guard (causeLeafM1 vAp (fun _ => false) (fun _ => false) vPay).outcome == .ALLOW
+-- released for an approval: ALLOW with the record's id, every other field as it was; with an unfit line, as it was
+#guard
+  let p := Run.causeLeaf vAp (fun _ => true) (fun _ => false) vPay
+  p.outcome == .ALLOW && p.bypass == List.replicate 64 7 && p.q == 5 && p.reasons == vPay.reasons && p.grantId == []
+#guard (Run.causeLeaf vAp (fun _ => true) (fun _ => true) vPay).outcome == .HOLD
+
+-- `causeLeaf_cases`'s statement is false of the mutant
+example : ¬ ∀ (a : Run.Approvals) (byd unf : Nat → Bool) (m : Run.Pay), causeLeafM1 a byd unf m = m ∨
+    ∃ id, a.ids.lookup m.q = some id ∧ unf m.q = false ∧ byd m.q = true ∧ id ≠ Gate.zeroDigest ∧
+      causeLeafM1 a byd unf m = { m with outcome := .ALLOW, bypass := id } := by
+  intro h
+  rcases h vAp (fun _ => false) (fun _ => false) vPay with h | ⟨_, _, _, h, _⟩
+  · exact absurd (congrArg Run.Pay.outcome h) (by decide)
+  · cases h
+
+/-- Mutant: the contest flag inverted. -/
+def contestedM1 (reqs : List Run.Req) : List Nat := reqs.filterMap fun e => if !e.ra.contest then some e.q else none
+
+private def vReq (q : Nat) (k : Bool) : Run.Req :=
+  ⟨q, ⟨.empty, .empty, .FFS_CLAIM, .empty, .empty, .empty, .empty, 0, .empty, [], [], k⟩, [], .empty⟩
+
+#guard Worker.contested [vReq 1 false, vReq 2 true] == [2]
+#guard contestedM1 [vReq 1 false, vReq 2 true] == [1]
+
+/-- Pins of `Worker.leafAt`: a payment one of whose lines repeats a paid line, its sender not contesting. -/
+private def vTwin : Line := ⟨257, 265, .FFS_CLAIM, 1, 4, 5, 20270310, 99213, 1, 9200⟩
+private def vAnsCtx : Ctx :=
+  { today := 20270315, dmf := none, providerDeaths := none, exclusions := none, enrollment := none, released := none,
+    unresolved := none, releasedPrior := ⟨0, 1, [vTwin]⟩, unresolvedPrior := ⟨0, 0, []⟩, anchor := 0, redo := [] }
+private def vAnsDs : List Decision := [⟨{ vTwin with id := 258, pay := 261 }, .HOLD, [.FFS_DUPLICATE_LINE], []⟩]
+private def vAnsPay : Run.Pay := ⟨261, .HOLD, "FFS_DUPLICATE_LINE", .TRANSFER, [], Gate.zeroDigest⟩
+private def vRq : ByteArray := ⟨#[1, 2, 3]⟩
+
+-- answered: ANSWERED (3) with its earlier list, every other field the payment's own leaf
+#guard (Run.earlierBody vAnsCtx vAnsDs 261).isSome &&
+  Worker.leafAt vAnsCtx [] vAnsDs (fun _ => false) vAnsPay vRq ==
+    { Worker.leafOf vAnsPay vRq with outcome := 3, earlier := ((Run.earlierBody vAnsCtx vAnsDs 261).getD []).toByteArray }
+-- contested, or with an unfit line: the payment's own leaf
+#guard Worker.leafAt vAnsCtx [261] vAnsDs (fun _ => false) vAnsPay vRq == Worker.leafOf vAnsPay vRq
+#guard Worker.leafAt vAnsCtx [] vAnsDs (fun _ => true) vAnsPay vRq == Worker.leafOf vAnsPay vRq
+-- answered, but its earlier list names one line id twice and cannot be written: the payment's own leaf
+#guard Rules.answerLeaf vAnsCtx [] (vAnsDs ++ vAnsDs) (fun _ => false) .HOLD 261 == .ANSWERED &&
+  (Run.earlierBody vAnsCtx (vAnsDs ++ vAnsDs) 261).isNone &&
+  Worker.leafAt vAnsCtx [] (vAnsDs ++ vAnsDs) (fun _ => false) vAnsPay vRq == Worker.leafOf vAnsPay vRq
+-- `leafAt` reads only whether `answerLeaf` answers, which does not depend on the outcome it is given
+example (c : Ctx) (k : List Nat) (ds : List Decision) (unf : Nat → Bool) (o : Outcome) (p : Nat) :
+    Rules.answerLeaf c k ds unf o p = .ANSWERED ↔ Rules.answerLeaf c k ds unf .HOLD p = .ANSWERED := by
+  unfold Rules.answerLeaf
+  by_cases h1 : unf p <;> by_cases h2 : Rules.answered c k ds p <;> cases o <;>
+    simp [h1, h2, Rules.AnswerOutcome.ofOutcome]
+
+/-- A pin of `Worker.ruleOf`: payment 1 ALLOW; payment 2 held here, its approval overriding its one reason; payment 3
+    held; payment 4 ALLOW and decided again, its line released before; payment 5 an ALLOW line beside a held one;
+    payment 7 held and lifted at HOLD authority; payment 8 held as decided already; payment 9 held, decided again, its
+    line released before; payment 10 held, its line held before, its approval not overriding its reason. -/
+private def vL (id : Nat) : Line := ⟨id, id, .FFS_CLAIM, 1, 4, 5, 20270310, 99213, 1, 9200 + id⟩
+private def vRuleCtx : Ctx :=
+  { today := 20270315, dmf := none, providerDeaths := none, exclusions := none, enrollment := none, released := none,
+    unresolved := none, releasedPrior := ⟨0, 2, [vL 4, vL 9]⟩, unresolvedPrior := ⟨0, 2, [vL 2, vL 10]⟩, anchor := 0,
+    redo := [4, 9], byp := [(2, 2 ^ Reason.MEMBER_DECEASED.idx), (10, 2 ^ Reason.SERVICE_DATE_FUTURE.idx)],
+    lim := [(7, 2 ^ Reason.SERVICE_DATE_FUTURE.idx)] }
+private def vRuleDs : List Decision :=
+  [⟨vL 1, .ALLOW, [], []⟩, ⟨vL 2, .HOLD, [.MEMBER_DECEASED], []⟩, ⟨vL 3, .HOLD, [.MEMBER_DECEASED], []⟩, ⟨vL 4, .ALLOW, [], []⟩,
+    ⟨vL 5, .ALLOW, [], []⟩, ⟨{ vL 6 with pay := 5 }, .HOLD, [.MEMBER_DECEASED], []⟩, ⟨vL 7, .HOLD, [.MEMBER_DECEASED], []⟩,
+    ⟨vL 8, .HOLD, [.ALREADY_DECIDED], []⟩, ⟨vL 9, .HOLD, [.MEMBER_DECEASED], []⟩, ⟨vL 10, .HOLD, [.MEMBER_DECEASED], []⟩]
+private def vRuleIx : Ix := Ix.build vRuleCtx (vRuleDs.map (·.line))
+
+#guard vRuleDs.map (Worker.ruleOf vRuleIx (fun p => vRuleDs.filter (·.line.pay == p)) ∅) ==
+  [Frame.Rule.released, Frame.Rule.bypassed, Frame.Rule.unresolved, Frame.Rule.decided, Frame.Rule.decided,
+    Frame.Rule.unresolved, Frame.Rule.bypassed, Frame.Rule.decided, Frame.Rule.decided, Frame.Rule.decided]
+-- `!own` beside `limitedPay` in its second branch decides nothing: a lifted payment is never decided again
+example (x : Ix) (ds : List Decision) (l : Line) : (x.limitedPay ds l.pay && !x.own l) = x.limitedPay ds l.pay := by
+  unfold Ix.limitedPay Ix.own
+  split <;> cases x.redo.contains l.pay <;> simp
+-- an answered payment's held line joins no set
+#guard vRuleDs.map (Worker.ruleOf vRuleIx (fun p => vRuleDs.filter (·.line.pay == p)) (Std.HashSet.ofList [3])) ==
+  [Frame.Rule.released, Frame.Rule.bypassed, Frame.Rule.decided, Frame.Rule.decided, Frame.Rule.decided,
+    Frame.Rule.unresolved, Frame.Rule.bypassed, Frame.Rule.decided, Frame.Rule.decided, Frame.Rule.decided]
+
+/-! ## A capped line: its payment is never released for an approval or lifted
+
+    `Uncapped` is a property of the whole batch, so `commit_leaves` says nothing of a batch a cap touches.  A capped
+    line is HOLD with `POSTING_CAP` (`cap_hold`), a reason no approval overrides and no holds mask lifts (`bypassable`).
+    `leaf_capped`: in any batch, the payment of a capped line is not released for an approval (so release by cause
+    leaves its leaf alone) and not lifted at HOLD authority, and the leaf the worker writes for its request is not ALLOW
+    and names no approval. -/
+
+/-- A payment with a decided line carrying a reason no approval overrides is never released for an approval and never
+    lifted at HOLD authority, whatever the masks. -/
+theorem unbypassable_pay (x : Ix) {ds : List Decision} {d : Decision} (hd : d ∈ ds) {r : Reason} (hr : r ∈ d.reasons)
+    (hb : bypassable r = false) : x.bypassed ds d.line.pay = false ∧ ∀ m o, lifts m ds d.line.pay o = false := by
+  have key : ∀ t : Reason → Bool,
+      (ds.all fun e => e.line.pay != d.line.pay || e.reasons.all fun r => bypassable r && t r) = true → False := by
+    intro t h
+    simp only [List.all_eq_true] at h
+    have e := h d hd
+    simp only [bne_self_eq_false, Bool.false_or, List.all_eq_true] at e
+    have := e r hr
+    simp [hb] at this
+  refine ⟨?_, fun m o => ?_⟩
+  · cases h : x.bypassed ds d.line.pay
+    · rfl
+    · exfalso
+      unfold Ix.bypassed at h
+      cases hm : x.byp.lookup d.line.pay with
+      | none => simp [hm] at h
+      | some m =>
+        simp only [hm, Bool.and_eq_true] at h
+        exact key (fun r => m >>> r.idx % 2 == 1) h.2
+  · cases h : lifts m ds d.line.pay o
+    · rfl
+    · exfalso
+      unfold lifts at h
+      simp only [Bool.and_eq_true] at h
+      exact key (fun r => !(m >>> r.idx % 2 == 1)) h.2
+
+/-- A request's leaf before an exact-repeat answer, when its payment is not released for an approval, is not lifted
+    and its rules outcome is not ALLOW: not ALLOW, and naming no approval. -/
+private theorem payOf_unreleased {hsh : Bytes → Bytes} {g : Authority.Grant} {bps : List Authority.Bypass}
+    {ap : Run.Approvals} {out : Nat → Outcome} {byd rdo : Nat → Bool} {grp : Nat → List Decision} {unf : Nat → Bool}
+    {e : Run.Req} (hb : byd e.q = false) (hl : ∀ m, lifts m (grp e.q) e.q (out e.q) = false) (ho : out e.q ≠ .ALLOW) :
+    (Worker.payOf hsh g bps ap out byd rdo grp unf e).outcome ≠ .ALLOW ∧
+      (Worker.payOf hsh g bps ap out byd rdo grp unf e).bypass = Gate.zeroDigest := by
+  have hpre : ((Run.emitWith hsh g (Run.bypsFor hsh bps e) out byd rdo (grp e.q) unf e).getD (Run.uncovered g e)).q = e.q ∧
+      ((Run.emitWith hsh g (Run.bypsFor hsh bps e) out byd rdo (grp e.q) unf e).getD (Run.uncovered g e)).outcome ≠ .ALLOW ∧
+      ((Run.emitWith hsh g (Run.bypsFor hsh bps e) out byd rdo (grp e.q) unf e).getD (Run.uncovered g e)).bypass =
+        Gate.zeroDigest := by
+    unfold Run.emitWith
+    cases Authority.entryFor g e.r.programId e.r.flow with
+    | none =>
+      refine ⟨rfl, ?_, rfl⟩
+      show (if e.r.flow.ruled then Outcome.HOLD else .HUMAN_REVIEW) ≠ .ALLOW
+      split <;> simp
+    | some en =>
+      simp only [Option.bind_eq_bind, Option.bind_some, Option.getD_some, Option.pure_def]
+      repeat' split
+      all_goals simp_all [Run.limited]
+  unfold Worker.payOf
+  obtain ⟨hq, h1, h2⟩ := hpre
+  generalize (Run.emitWith hsh g (Run.bypsFor hsh bps e) out byd rdo (grp e.q) unf e).getD (Run.uncovered g e) = p at hq h1 h2
+  unfold Run.causeLeaf
+  split
+  · rw [hq, hb]; simp only [Bool.and_false, Bool.false_and, Bool.false_eq_true, if_false]; exact ⟨h1, h2⟩
+  · exact ⟨h1, h2⟩
+
+/-- A payment with a capped line, in any batch (`Uncapped` or not): the worker's bypass test is false for it and no
+    holds mask lifts it, so the leaf written for its request (`Worker.payOf`, then `Worker.leafAt` over any answering
+    context) is not ALLOW and names no approval; release by cause leaves it alone (`Run.causeLeaf` needs the bypass
+    test). -/
+theorem leaf_capped (hr hu : Head) (fe : Fetched) (fc : FCtx) (f : List Nat) (b : List Line) (hsh : Bytes → Bytes)
+    (g : Authority.Grant) (bps : List Authority.Bypass) (ap : Run.Approvals) (unf : Nat → Bool) (e : Run.Req)
+    (c : Ctx) (k : List Nat) (ds' : List Decision) (rq : ByteArray) :
+    let ds := (decideFetched hr hu fe fc f b).1
+    let x := Worker.leafIx hr hu fe fc b
+    let grp := Worker.leafGrp (Worker.byPay ds)
+    let byd := Worker.leafByd x (Worker.byPay ds)
+    let m := Worker.payOf hsh g bps ap (fun p => x.payOutcome (grp p) p) byd x.redo.contains grp unf e
+    ∀ d ∈ ds, d.line.pay = e.q → capped (hotKeys fe fc.feeds b) fe fc.feeds d.line = true →
+      byd e.q = false ∧ (∀ h o, lifts h (grp e.q) e.q o = false) ∧ m.outcome ≠ .ALLOW ∧
+      m.bypass = Gate.zeroDigest ∧ (Worker.leafAt c k ds' unf m rq).outcome ≠ Frame.outCode .ALLOW ∧
+      (Worker.leafAt c k ds' unf m rq).bypass = Gate.zeroDigest.toByteArray := by
+  intro ds x grp byd m d hd hp hcap
+  obtain ⟨hh, hcp⟩ := cap_hold hr hu fe fc f b d hd hcap
+  have hg' : grp e.q = ds.filter (·.line.pay == e.q) := group_getD (fun d : Decision => d.line.pay) ds e.q
+  have hg : d ∈ grp e.q := by
+    rw [hg']
+    exact List.mem_filter.mpr ⟨hd, by simp [hp]⟩
+  obtain ⟨hby, hli⟩ := unbypassable_pay x hg hcp rfl
+  rw [hp] at hby hli
+  have hout : x.payOutcome (grp e.q) e.q = .HOLD := by
+    unfold Ix.payOutcome
+    have : ((grp e.q).filter (·.line.pay == e.q)).any (·.outcome == .HOLD) = true :=
+      List.any_eq_true.mpr ⟨d, List.mem_filter.mpr ⟨hg, by simp [hp]⟩, by simp [hh]⟩
+    simp [this]
+  obtain ⟨h1, h2⟩ := payOf_unreleased (hsh := hsh) (g := g) (bps := bps) (ap := ap) (rdo := x.redo.contains)
+    (unf := unf) (out := fun p => x.payOutcome (grp p) p) (byd := byd) (grp := grp) (e := e) hby (fun h => hli h _)
+    (by simp [hout])
+  refine ⟨hby, hli, h1, h2, ?_⟩
+  have h2' : m.bypass = Gate.zeroDigest := h2
+  unfold Worker.leafAt Worker.leafOf
+  split
+  · exact ⟨by simp [Frame.outCode], by simp [h2']⟩
+  · refine ⟨?_, by simp [h2']⟩
+    show Frame.outCode m.outcome ≠ Frame.outCode .ALLOW
+    exact fun heq => h1 (by revert heq; cases m.outcome <;> simp [Frame.outCode])
+
+-- A batch where a line is capped, so `leaf_capped` and `cap_hold` are not vacuous: line 1's member has `capN + 1` death
+-- facts in the feed, more than the decider may read.  The line is capped, and is decided HOLD with `POSTING_CAP`.
+private def vCapFe : Fetched := ⟨[], [], fun _ => 0, fun _ => 0⟩
+private def vCapFd : Feeds :=
+  ⟨true, false, false, false, true, true, true, true, fun i => List.replicate (capN + 1) ⟨i, 20270101⟩, fun _ => [],
+    fun _ => [], fun _ => []⟩
+private def vCapFc : FCtx := ⟨20270315, [], vCapFd, [], []⟩
+
+example : capped (hotKeys vCapFe vCapFd [vL 1]) vCapFe vCapFd (vL 1) = true := by
+  have h : feedCapped vCapFd (vL 1) = true := by
+    have h1 : feedOver (vCapFd.dmf (vL 1).member) = true := by decide +kernel
+    unfold feedCapped
+    rw [h1]
+    rfl
+  unfold capped
+  rw [h, Bool.or_true]
+
+#guard (decideFetched ⟨0, 0, 0⟩ ⟨0, 0, 0⟩ vCapFe vCapFc [] [vL 1]).1.map (fun d => (d.outcome, d.reasons.contains .POSTING_CAP)) ==
+  [(.HOLD, true)]
+
+/-! ## The record id on a leaf -/
+
+/-- The id release by cause writes on a payment's leaf (`causeLeaf_cases`: the id `Run.Approvals.ids` gives it) is the
+    id of an admitted record that lists a request of the batch with that payment number and judges it (`fits`), and
+    that record's cause pair for the payment is the one the rules read (`Ctx.byp`, which `bypassed` reads). -/
+theorem approvals_id (hsh : Bytes → Bytes) (g : Authority.Grant) (bps : List Authority.Bypass)
+    (rs : List CauseRelease.Release) (reqs : List Run.Req) (redo : List Nat) {q : Nat} {id : Bytes}
+    (h : (Run.approvals hsh g bps rs reqs redo).ids.lookup q = some id) :
+    ∃ r ∈ rs, r.id = id ∧ (∃ e ∈ reqs, e.q = q ∧ CauseRelease.fits r.doc (Run.seenOf hsh g redo e) = true) ∧
+      (q, 2 ^ r.doc.cause.idx) ∈ (Run.approvals hsh g bps rs reqs redo).byp := by
+  have hm : (q, id) ∈ (Run.approvals hsh g bps rs reqs redo).ids := by
+    obtain ⟨_, _, hl, -⟩ := List.lookup_eq_some_iff.mp h
+    rw [hl]; simp
+  have hne : rs.isEmpty = false := by
+    cases hrs : rs.isEmpty
+    · rfl
+    · rw [List.isEmpty_iff.mp hrs] at hm; simp [Run.approvals] at hm
+  simp only [Run.approvals, hne, Bool.false_eq_true, if_false, List.mem_filterMap] at hm ⊢
+  obtain ⟨⟨id', q', j⟩, hj, hf⟩ := hm
+  cases j with
+  | error _ => cases hf
+  | ok u =>
+    simp only at hf
+    split at hf
+    · cases hf
+    · rename_i hdup
+      cases hf
+      obtain ⟨r, hr, hrj⟩ := List.mem_flatMap.mp hj
+      obtain ⟨s, hs, hl⟩ := List.mem_filterMap.mp hrj
+      obtain ⟨en, hen, hp⟩ := Option.map_eq_some_iff.mp hl
+      simp only [Prod.mk.injEq] at hp
+      obtain ⟨rfl, rfl, hju⟩ := hp
+      obtain ⟨e, he, rfl⟩ := List.mem_map.mp hs
+      have hfit : CauseRelease.fits r.doc (Run.seenOf hsh g redo e) = true := by
+        unfold CauseRelease.fits; rw [hen]; dsimp only; rw [hju]
+      refine ⟨r, hr, rfl, ⟨e, he, rfl, hfit⟩, CauseRelease.mem_merge.mpr ⟨?_, ?_⟩⟩
+      · refine List.mem_append_right _ (List.mem_flatMap.mpr ⟨r, hr, ?_⟩)
+        unfold CauseRelease.pairs
+        exact List.mem_map.mpr ⟨_, List.mem_filter.mpr ⟨List.mem_map_of_mem he, hfit⟩, rfl⟩
+      · simpa using hdup
 
 /-! ## Fresh facts: a missing or stale fact never lets a payment through -/
 
@@ -1139,7 +1576,7 @@ theorem leaf_allow_fresh {c : Ctx} {seen : List Key} {ls : List Line} {u : Nat �
     exact decideAll_allow_fresh hm (hall d hm (by simpa using hp))
 
 
-/-! ## INPUT/v6: what a token's input and a batch's identity commit to (gate K2, III.3) -/
+/-! ## INPUT/v7: what a token's input and a batch's identity commit to (gate K2, III.3) -/
 
 private theorem lp32_inj {x y r s : Bytes} (hx : x.length < 2 ^ 32) (hy : y.length < 2 ^ 32)
     (h : lp32 x ++ r = lp32 y ++ s) : x = y ∧ r = s := by
@@ -1152,30 +1589,23 @@ private theorem lp32_inj {x y r s : Bytes} (hx : x.length < 2 ^ 32) (hy : y.leng
     rwa [beNat_natBE' 4 _ (by omega), beNat_natBE' 4 _ (by omega)] at this
   exact List.append_inj h2 hl
 
-/-- XI.2: INPUT/v5 becomes the batch context, the payment digest, `INPUT/v6` and the batch identity.  The context's
-    preimage fixes the frame body before its request count. -/
+/-- XI.2: INPUT/v5 becomes the batch context, `INPUT/v7` and the batch identity.  The context's preimage fixes the
+    frame body before its request count. -/
 theorem contextPre_inj (a b : Bytes) : contextPre a = contextPre b ↔ a = b := by
   simp [contextPre]
 
-/-- The payment digest's preimage fixes the request's bytes before its lines (length-prefixed), the lines root and the
-    bytes after the lines. -/
-theorem paymentPre_inj {h h' r r' t t' : Bytes} (hh : h.length < 2 ^ 32) (hh' : h'.length < 2 ^ 32)
-    (hr : r.length = 64) (hr' : r'.length = 64) :
-    paymentPre h r t = paymentPre h' r' t' ↔ h = h' ∧ r = r' ∧ t = t' := by
-  refine ⟨fun e => ?_, fun ⟨e1, e2, e3⟩ => by rw [e1, e2, e3]⟩
-  unfold paymentPre at e
+/-- A token's input fixes the batch context, the request's bytes before its lines (length-prefixed), the lines root
+    and the bytes after the lines: everything the payment digest and `INPUT/v6` fixed together, in one preimage. -/
+theorem inputV7Pre_inj {c c' h h' r r' t t' : Bytes} (hc : c.length = 64) (hc' : c'.length = 64)
+    (hh : h.length < 2 ^ 32) (hh' : h'.length < 2 ^ 32) (hr : r.length = 64) (hr' : r'.length = 64) :
+    inputV7Pre c h r t = inputV7Pre c' h' r' t' ↔ c = c' ∧ h = h' ∧ r = r' ∧ t = t' := by
+  refine ⟨fun e => ?_, fun ⟨e1, e2, e3, e4⟩ => by rw [e1, e2, e3, e4]⟩
+  unfold inputV7Pre at e
   simp only [List.append_assoc] at e
-  obtain ⟨e1, e⟩ := lp32_inj hh hh' (List.append_cancel_left e)
-  obtain ⟨e2, e3⟩ := List.append_inj e (hr.trans hr'.symm)
-  exact ⟨e1, e2, e3⟩
-
-/-- A token's input fixes the batch context and the payment digest. -/
-theorem inputV6Pre_inj {c c' d d' : Bytes} (hc : c.length = 64) (hc' : c'.length = 64) :
-    inputV6Pre c d = inputV6Pre c' d' ↔ c = c' ∧ d = d' := by
-  refine ⟨fun e => ?_, fun ⟨e1, e2⟩ => by rw [e1, e2]⟩
-  unfold inputV6Pre at e
-  simp only [List.append_assoc] at e
-  exact List.append_inj (List.append_cancel_left (List.append_cancel_left e)) (hc.trans hc'.symm)
+  obtain ⟨e1, e⟩ := List.append_inj (List.append_cancel_left (List.append_cancel_left e)) (hc.trans hc'.symm)
+  obtain ⟨e2, e⟩ := lp32_inj hh hh' e
+  obtain ⟨e3, e4⟩ := List.append_inj e (hr.trans hr'.symm)
+  exact ⟨e1, e2, e3, e4⟩
 
 private theorem flatten64_inj : ∀ {xs ys : List Bytes}, (∀ x ∈ xs, x.length = 64) → (∀ y ∈ ys, y.length = 64) →
     xs.flatten = ys.flatten → xs = ys

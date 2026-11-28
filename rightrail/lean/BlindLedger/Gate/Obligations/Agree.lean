@@ -5,7 +5,7 @@ import BlindLedger.Financial.FollowThrough
 namespace BlindLedger.Gate.Obligations
 
 open BlindLedger.Gate.FactCodec
-open BlindLedger.Financial (FinancialResult FinancialContext Payment Claim CaseRecord ActionRecord
+open BlindLedger.Financial (FinancialResult FinancialContext Payment Claim CaseRecord ActionRecord EvidenceRecord
   VerificationStatus CaseStatus DeliveryStatus encodeVerificationStatus encodeCaseStatus encodeDeliveryStatus)
 open BlindLedger.Financial.FollowThrough (civilFromDays dayMs)
 
@@ -14,9 +14,12 @@ open BlindLedger.Financial.FollowThrough (civilFromDays dayMs)
     (`ELEMENT_MISMATCH`).  `element_fixed_agree` says each check holds exactly when every such field equals its
     function.
 
-    Covered here: the state row from its financial result and the amount of its causing element, the action and
-    case records from their elements, and the CASH and CLAIM fact rows from the payment and the claim, each on the
-    obligation of its financial context.
+    Covered here: the state row from its financial result and the amount of its causing element, the action
+    record from its element, the case chain's records (OPEN and EVALUATED only) from the case, the follow-through
+    chain's records (ASSIGN and CLOSE only, under the key of `FOLLOW:<item>`), the CASH row from its payment, its void
+    row from the payment and the reversal evidence, and the CLAIM row from the claim, each on the obligation of its
+    financial context.  A case id that begins `FOLLOW:` agrees with no case record, so the two chains never share a
+    key.
 
     Not checked here, each for a stated reason:
     - Fields that a later record changes (an action's status, a payment's reversal) are read from the newest record
@@ -102,9 +105,14 @@ def actionAgree (scope ob : Bytes) (a : ActionRecord) (x : ActionRec) : Bool :=
     x.amount == a.amountCents && x.payload == a.payloadDigest && x.rev == a.revision &&
     decide (x.op = 1 → x.atMs = a.createdAt)
 
+/-- The case chain holds only OPEN (1) and EVALUATED (2). -/
 def caseAgree (scope ob : Bytes) (c : CaseRecord) (x : CaseRec) : Bool :=
-  x.ck == ckOf scope (utf8 c.caseId) && x.ob == ob && x.status == (encodeCaseStatus c.status).toNat &&
-    x.dueMs == c.dueAt && x.atMs == c.updatedAt
+  (x.op == 1 || x.op == 2) && c.caseId.startsWith "FOLLOW:" == false && x.ck == ckOf scope (utf8 c.caseId) &&
+    x.ob == ob && x.status == (encodeCaseStatus c.status).toNat && x.dueMs == c.dueAt && x.atMs == c.updatedAt
+
+/-- The follow-through chain of an item holds only ASSIGN (3) and CLOSE (4), under the key of `FOLLOW:<item>`. -/
+def followAgree (scope ob : Bytes) (item : String) (x : CaseRec) : Bool :=
+  (x.op == 3 || x.op == 4) && x.ck == ckOf scope (utf8 ("FOLLOW:" ++ item)) && x.ob == ob
 
 /-- The UTC day (`yyyymmdd`, as a fact row dates it) of a time in milliseconds. -/
 def utcDate (ms : Nat) : Nat :=
@@ -113,12 +121,20 @@ def utcDate (ms : Nat) : Nat :=
 
 #guard utcDate 1767225600000 == 20260101 && utcDate 1767225599999 == 20251231 && utcDate 951782400000 == 20000229
 
-/-- A CASH row asserts the payment of its element on the obligation of `c`, dated on the payment's UTC day.  A void
-    row (op 1) follows its reversal evidence, not a payment, and is not checked here. -/
+/-- A CASH row asserts the payment of its element on the obligation of `c`, dated on the payment's UTC day. -/
 def cashAgree (c : FinancialContext) (p : Payment) (x : CashF) : Bool :=
   x.h.op == 0 && p.obligationId == c.obligationId && p.itemId == c.itemId && x.h.subject == obOfCtx c &&
     x.h.sid == sidOf 15 [obOfCtx c, utf8 p.commonOriginId] && x.h.vstart == utcDate p.eventAt &&
     x.h.vstop == utcDate p.eventAt && x.amount == p.amountCents && x.eventMs == p.eventAt &&
+    x.pid == cidOf (scopeOfCtx c) (utf8 ("PAYMENT:" ++ p.paymentId)) && x.origin == display 51 p.commonOriginId
+
+/-- A void row (op 1) ends the CASH row of payment `p` with the reversal evidence `e` that names `p`: the same
+    subject, `sid`, amount, payment and origin, dated on the UTC day of the reversal, with its event time. -/
+def cashVoidAgree (c : FinancialContext) (p : Payment) (e : EvidenceRecord) (x : CashF) : Bool :=
+  x.h.op == 1 && p.obligationId == c.obligationId && p.itemId == c.itemId && e.obligationId == c.obligationId &&
+    e.reversalOf == some p.paymentId && x.h.subject == obOfCtx c &&
+    x.h.sid == sidOf 15 [obOfCtx c, utf8 p.commonOriginId] && x.h.vstart == utcDate e.eventAt &&
+    x.h.vstop == utcDate e.eventAt && x.amount == p.amountCents && x.eventMs == e.eventAt &&
     x.pid == cidOf (scopeOfCtx c) (utf8 ("PAYMENT:" ++ p.paymentId)) && x.origin == display 51 p.commonOriginId
 
 /-- A CLAIM row asserts the claim of its element on the obligation of `c`, dated on the UTC day of its `eventMs`. -/
@@ -143,21 +159,29 @@ theorem element_fixed_agree :
       x.amount = a.amountCents ∧ x.payload = a.payloadDigest ∧ x.rev = a.revision ∧
       (x.op = 1 → x.atMs = a.createdAt)) ∧
     (∀ scope ob c x, caseAgree scope ob c x = true ↔
-      x.ck = ckOf scope (utf8 c.caseId) ∧ x.ob = ob ∧ x.status = (encodeCaseStatus c.status).toNat ∧
-      x.dueMs = c.dueAt ∧ x.atMs = c.updatedAt) ∧
+      (x.op = 1 ∨ x.op = 2) ∧ c.caseId.startsWith "FOLLOW:" = false ∧ x.ck = ckOf scope (utf8 c.caseId) ∧
+      x.ob = ob ∧ x.status = (encodeCaseStatus c.status).toNat ∧ x.dueMs = c.dueAt ∧ x.atMs = c.updatedAt) ∧
+    (∀ scope ob item x, followAgree scope ob item x = true ↔
+      (x.op = 3 ∨ x.op = 4) ∧ x.ck = ckOf scope (utf8 ("FOLLOW:" ++ item)) ∧ x.ob = ob) ∧
     (∀ c p x, cashAgree c p x = true ↔
       x.h.op = 0 ∧ p.obligationId = c.obligationId ∧ p.itemId = c.itemId ∧ x.h.subject = obOfCtx c ∧
       x.h.sid = sidOf 15 [obOfCtx c, utf8 p.commonOriginId] ∧ x.h.vstart = utcDate p.eventAt ∧
       x.h.vstop = utcDate p.eventAt ∧ x.amount = p.amountCents ∧ x.eventMs = p.eventAt ∧
+      x.pid = cidOf (scopeOfCtx c) (utf8 ("PAYMENT:" ++ p.paymentId)) ∧ x.origin = display 51 p.commonOriginId) ∧
+    (∀ c p e x, cashVoidAgree c p e x = true ↔
+      x.h.op = 1 ∧ p.obligationId = c.obligationId ∧ p.itemId = c.itemId ∧ e.obligationId = c.obligationId ∧
+      e.reversalOf = some p.paymentId ∧ x.h.subject = obOfCtx c ∧
+      x.h.sid = sidOf 15 [obOfCtx c, utf8 p.commonOriginId] ∧ x.h.vstart = utcDate e.eventAt ∧
+      x.h.vstop = utcDate e.eventAt ∧ x.amount = p.amountCents ∧ x.eventMs = e.eventAt ∧
       x.pid = cidOf (scopeOfCtx c) (utf8 ("PAYMENT:" ++ p.paymentId)) ∧ x.origin = display 51 p.commonOriginId) ∧
     (∀ c cl x, claimAgree c cl x = true ↔
       x.h.op = 0 ∧ cl.obligationId = c.obligationId ∧ x.h.subject = obOfCtx c ∧
       x.h.sid = sidOf 22 [obOfCtx c, utf8 cl.claimId] ∧ x.h.vstart = utcDate x.eventMs ∧
       x.h.vstop = utcDate x.eventMs ∧ x.amount = cl.amountCents ∧ x.deadlineMs = cl.deadlineAt ∧
       x.claim = display 51 cl.claimId) := by
-  refine ⟨?_, ?_, ?_, ?_, ?_⟩ <;> intros <;>
-    simp only [stateAgree, actionAgree, caseAgree, cashAgree, claimAgree, Bool.and_eq_true, beq_iff_eq, and_assoc,
-      decide_eq_true_eq]
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_⟩ <;> intros <;>
+    simp only [stateAgree, actionAgree, caseAgree, followAgree, cashAgree, cashVoidAgree, claimAgree,
+      Bool.and_eq_true, Bool.or_eq_true, beq_iff_eq, and_assoc, decide_eq_true_eq]
 
 theorem status_codes (v : VerificationStatus) (s : CaseStatus) (d : DeliveryStatus) :
     1 ≤ (encodeVerificationStatus v).toNat ∧ (encodeVerificationStatus v).toNat ≤ 3 ∧

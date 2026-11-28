@@ -12,7 +12,7 @@ This replaces `FLAT_V1.md` §5-7 (chunk store, load, worker frames) and, for a p
 say so.
 
 Revision 2 (2026-10-31) is the text of this document: exact identifier widths (§1-§3), feed facts as row words (§19),
-request and answer version 2 and the input commitment INPUT/v6 (§17-§18). The Python host and the pinned `gate_engine` (the `Flat` store) implement revision 1 (113-byte lines, 4,096-byte pages,
+request and answer version 2 and the input commitment INPUT/v7 (§17-§18). The Python host and the pinned `gate_engine` (the `Flat` store) implement revision 1 (113-byte lines, 4,096-byte pages,
 request and answer version 1, INPUT/v5) until the steps of §20 land; the engine in `Gate/Engine3` already uses
 revision 2's 245-byte lines. Each step changes the code and its statements together. Revision 1 stores and logs are refused
 at load, never converted.
@@ -126,7 +126,9 @@ compared whole, so a wrong hint costs a read and nothing else.
 
 A core of more than 32 rows is also summarised (`Engine3/CoreSum.lean`): each of its keys keeps its first row, its count and
 its first row that is not identical to the first. That is all the decider reads of a key where no line of the batch can be
-its own payment's released row, or where the key is a fee-for-service one (`Flat.DecideCut.decideRows_cut`).
+its own payment's released row, or where the key is a fee-for-service one (`Flat.DecideCut.decideRows_cut`). A
+released exact key of more than one row is still read from its chain, since an exact repeat is answered against all of
+its rows (`Run.answering`).
 
 The tables hold nothing the rows files do not. They are built again from the files at load. Only ids and cores are stored
 under a digest; exact and near keys are not digested.
@@ -140,28 +142,46 @@ are updated. There are no windows, seals, installs or reclaims.
 
 ## 6. Root, frame, log, load
 
-Files: `lock`, `key`, `log`, one rows file per set, and `clean` (one byte). Anything else refuses the load (`FILES`).
+Files: `lock`, `key`, `log`, one rows file and one links file per set (`released.links`, `unresolved.links`), and `clean`
+(one byte). Anything else refuses the load (`FILES`).
 
 The log is the truth. The rows files are not synced per batch. A clean stop syncs them and then writes 1 to `clean`; a
 start writes 0 there and syncs it before any other write. A load that finds 1 trusts the rows files: it cuts them to the
-last signed batch and puts the rows they lack from the frames. Any other start, whose process did not itself write the
-files, rebuilds both rows files from the log and swaps them in, so a power loss that left whole but hollow records cannot
+last signed batch and puts the rows they lack from the frames. Any other start, whose process has not completed an open
+of the store, rebuilds both rows files from the log and swaps them in, so a power loss that left whole but hollow records cannot
 reach a decision. Damage to the files while the marker says clean, behind a completed sync, is outside the threat model.
+Before either, a load reads the version of every logged answer (6 bytes per frame) and refuses a log holding one this
+engine does not read (`MAGIC`; a decision answer before version 4, `FRAME_V1.md` section 8), whatever the marker says.
+
+A links file holds one 32-byte record per row of its set's rows file, at the row's number (`Engine3/HLinks.lean`, the
+format and projection of `FactStore.lean`): the previous row of the set with the same member, payee and rendering
+provider (each plus one, 40 bits; 0 none), then the row's batch (40 bits), the index of its record in that batch's answer
+(24 bits), the record's reason bits (32 bits), its rule (8 bits: 1, 2 or 5) and the day of the batch's authority record
+(32 bits), little endian. A batch appends the records of the rows it adds, with the rows. A load cuts each links file
+to its rows; a trusted one is kept up to its first record whose links the rows do not give or whose rule is not its
+set's (1 or 5 released, 2 unresolved), any other is emptied, and the records it lacks are computed from the frames'
+answers, each checked against its trailer. The other answer fields of a kept record are not computed again: damage to
+them behind a completed sync is outside the threat model, as for the rows files.
+The head tables (per set, the newest row of each member, payee and rendering provider) are built again at load and hold
+nothing the files do not.
 
 Frame, one per batch, appended to `log` and synced once:
 
     RRF4 ‖ u32 |request| ‖ u32 |answer| ‖ u32 |trailer| ‖ request ‖ answer ‖ trailer
 
-The request and answer are the engine's frames (§17). `rq` is the batch identity (`Frame.ident`: BATCH-INPUT over the
-batch context and each request's INPUT/v6, §18), not a frame digest (§24). Rows are not copied
+The request and answer are the version 2 bytes of §17. `rq` is the request's batch identity (§18). Rows are not copied
 into the frame: a batch's appended rows are the lines of its rule 1, 2 and 5 records, read from the request and answer
 (`rows_of_records`).
 
 Trailer: `dom STORE/FRAME4 ‖ u32 shard ‖ u64 batches ‖ head(released) ‖ head(unresolved) ‖ u64 nx ‖ u64 bOpen ‖
-u64 bSeal ‖ events ‖ au 208 ‖ rq 64 ‖ an 64 ‖ replaced 64 ‖ prev 64 ‖ bd 64 ‖ root 64 ‖ head 64`, where a set's head is
+u64 bSeal ‖ events ‖ au 276 ‖ rq 64 ‖ an 64 ‖ replaced 64 ‖ prev 64 ‖ bd 64 ‖ root 64 ‖ head 64`, where a set's head is
 `u32 asOf ‖ u64 count ‖ u64 rows`. The chunk fields (`nx`, `bOpen`, `bSeal`, `events`) are zero. `an = H(dom ANSWER2 ‖ the
 answer's bytes with its head and root fields left out)`, so every other answer byte (notes, leaves, rows) is bound;
-`replaced` is §9's digest or `Z`; `bd` is the CHAIN/v1 batch digest; `au` is the 208-byte authority record.
+`replaced` is §9's digest or `Z`; `bd` is the CHAIN/v1 batch digest; `au` is the 276-byte authority record (`authLen`, FLAT_V1 §2.1).
+A batch with requests first takes the rule-set step on the record and the rule-set records its frame presents, then
+the frame's asserted rule-set floor (`RuleGate.after`, RULESET_V1 section 9). A batch it holds (`RULESET_REFUSED`,
+`RULESET_NOT_RUN`, `RULESET_MISSING`, `RULESET_OTHER`, `RULESET_STALE`, `RULESET_FORK`, `HEAD`) is answered with its hold
+word, not logged, and the record is unchanged; a batch it passes writes the rule-set head and version into `au`.
 
     Root4 = H(dom STORE/STATE4 ‖ u32 shard ‖ u64 batches ‖ tree root ‖ heads ‖ u64 nx ‖ ks ‖ u64 bOpen ‖ u64 bSeal ‖
               u32 sealing chunk (2^32 − 1 when none) ‖ au ‖ rq ‖ an ‖ replaced)
@@ -174,7 +194,7 @@ Load at signed head `hd` and batch count `bt`:
 
 1. Read `key`; refuse `KEY` when it is missing or not 32 bytes. Decode the frames of `log`; frame `bt` must carry `hd`
    and `bt` and be the last whole frame or the one before it (`HEAD`).
-2. Check every frame without deciding it again. Its request must have the identity `rq` (the request's own digest first), its
+2. Check every frame without deciding it again. Its request must have the identity `rq`, its
    answer to its `an`, and the rows the answer adds to its `bd`; these checks need no state. Its `prev` is the head
    before it, its root is the state root of its own fields, and its head is the chain head of `prev`, `bd` and root
    (`REPLAY`). So every frame is chained by SHA3-512 digests to the signed head `hd`. The genesis is under the key-set pin
@@ -260,14 +280,21 @@ whole, the pending frame. A pending frame was never signed and nothing was relea
 | batch `bt`, the logged `rq` | return the committed frame's answer bytes, which the signed head binds through `an` |
 | batch `bt`, another `rq` | `CONFLICT` |
 | batch `bt + 1`, nothing pending | decide and append |
-| batch `bt + 1`, pending with another `rq` | `HOLD RETRY` (`retry3_other`), the answer word `CONFLICT` |
+| batch `bt + 1`, pending with another `rq`, its authority record not passed | `HOLD RETRY` (`retry3_other`), the answer word `CONFLICT` |
+| batch `bt + 1`, pending decision frame with another `rq`, its authority record passed by the request's floors | decide afresh on the loaded state; decided: cut the log after frame `bt`, append the fresh frame with `replaced` naming the pending one, as below, and return it; held or refused: the pending frame stays |
 | batch `bt + 1`, pending with the same `rq` | decide afresh on the loaded state; equal bytes: keep the pending frame and return it; different bytes: cut the log after frame `bt`, append the fresh frame with `replaced = H(dom STORE/REPLACED ‖ pending frame)`, and return it |
 | any other batch | `NOT_NEXT` |
 
 "The same `rq`" compares the pending trailer's `rq` with the digest the engine checked over the host's request bytes.
 The pending frame's own request bytes are neither read nor compared: the fresh decision is made from the host's bytes,
 so request bytes edited on disk make the fresh frame differ and it replaces the pending one. A pending trailer that
-cannot be read is `CORRUPT`; one whose `rq` differs stays `HOLD RETRY`. A committed frame is never replaced.
+cannot be read is `CORRUPT`; one whose `rq` differs stays `HOLD RETRY` unless the request's floors have passed its
+authority record: a higher grant floor or key-set epoch, a higher rule-set version, or the same version under another
+digest (`RuleGate.passedBy`, the host's `right_rail_gate_chain.behind`, and the pinned engine's cut). Such a frame can
+never be signed, since the host never signs below its floors, so it is cut and replaced. A record that does not decode
+is never passed. A pending fact frame carries the authority record of the batch before it, so it is never cut: a
+frame of another request answers `CONFLICT` there until the fact frame is sealed, so the host that seals fact frames
+must be able to seal one whatever the floors have become since it was decided. A committed frame is never replaced.
 
 With nothing committed (`bt = 0`) the store's start, the genesis head and the first authority record, is the request's
 own: a pending first frame does not choose it, and since its `rq` binds the request's date, previous head and keys, a
@@ -290,13 +317,75 @@ log) in a process that shares no memory with the engine. It reads `key`, builds 
 rows files, tables, chain walk and reads: none of the engine's `Hist` or `StepH`) from batch 1, and `rows-tail` follows
 the log as the engine writes. Per frame it:
 
-1. decodes the request (`decodeB`) and admits it (`admitC`, `admB`); the first frame and one in 64 are also decoded and
-   admitted by the specification's code and must agree;
+1. decodes the request (`decodeB`), recomputes its frame digest, which must be the header's (§17; `frame digest`
+   otherwise), and admits it (`admitC`, `admB`); the first frame and one in 64 are also decoded and
+   admitted by the specification's code and must agree. A frame without a bypass whose admission inputs (stored pin,
+   ratchet and floor, day, asserted floors, tenant, and the bytes of the key set, grant and key-set steps) all equal
+   those of the last such frame this process admitted in full reuses that result (`admit_of_key`: equal inputs, equal
+   admission); any other frame is admitted in full. The kept result is the checker process's own and is never stored.
+   `RR_E3_ADMIT_FRESH` (a test hook, engine and checker) admits every frame in full;
 2. decides the kept lines with the proved `decideRows` over its own reads, POSTING_CAP counted per core;
 3. compares the answer bytes, `an`, the request, batch and authority digests, the heads, `Root4` and the head with the
    frame's, and requires the trailer `freshH` writes (no chunk events, install number 1, no windows).
 
-The checker resumes from its last state (`vlast`) when its tag, the rows files and the log agree; otherwise it prints
+`RR_E3_CRASH=<name>` (a test hook of the engine) makes the engine stop at the named point (`before_append`,
+`after_append`; it ends the process with exit code 99), or fail one open once (`facts_in_flight`, `open_before_links`; a comma-separated list names several, each failing once on its own), so
+the recovery tests can cut a run short. Nothing checks for it at start, so a deployment must leave `RR_E3_CRASH`
+unset, as it must `RR_E3_ADMIT_FRESH`, `RR_E3_SPEC` and `RR_V3_SKIP`.
+
+A fact frame (`RRDF`) is replayed by the specification instead (`FactFrame.checkFact`, `Gate/FactAdmit.lean`): its
+request must decode at the frame's batch, previous head and key-set pin with the trailer's `rq`; its entries and the
+`facts` records it adds are derived again from the request and the records of the earlier fact frames (`admit`, sharing
+only the codecs with the engine; it keeps its own index of those records: receipts by record, the first receipt of each
+file, the readings of each source and `fseq`, per source the full files not outdone by a later, earlier-starting one, and
+the row in force of each statement, so a row costs lookups, not a scan of the records); the logged answer must be the fact answer of those entries byte for byte and `an` its
+`ANSWER3` digest (theorem `rrdf_log`); the authority record and both heads are unchanged, `bd` is the batch digest of no
+rows, then `Root4` and the head as for a decision frame. A fact frame adds no lines. After the last whole frame the
+store's `facts` file is checked against the file of the derived records. The file is a cache: a live batch writes its
+records, unsynced, before its frame goes to the log, and a clean stop syncs it before the clean-stop marker. An open
+after a clean stop keeps the file's records up to the receipt of the last logged fact frame, builds the engine's tables,
+links and reference entries from them, and admits that frame and the fact frames after it again; any other open (or a
+file whose records do not decode or whose links differ) admits every fact frame of the log again and writes the file
+whole. Either way each frame admitted again must give the answer its trailer binds. So a byte prefix of the derived
+file (a crash before the file was written again) or the derived file followed by more bytes (the records of a batch not
+yet logged) prints `FACTS_STALE(shard)` with the byte counts and does not stop verification; any other file is exit 3,
+naming the first record that differs. The file is never read as input by the checker.
+
+A full file (cover 1) that states again, with equal content, a row of its own source in force at a lower rank writes no
+row: the entry is disposition 2 naming that row, and the frame's lift records (tag `0x41`, after its rows: the receipt's
+record number, then up to 23 pairs of 5-byte numbers, the row's record and the full file row's `roff`) raise the row's
+rank in force to the full file's (`fseq`, reader, `roff`), placed at the lift record. A lift is 10 bytes instead of a
+256-byte record. A row in force from another source, a re-read and a change file are written again as before. The engine
+and the checker both read lifts from the `facts` records, so the file alone still gives the rows in force.
+
+Every fact answer carries the reference set's digest `rs` (fact record design §2.9) after the frame is admitted. Reference
+rows are the rows of kinds 3 (EXCL) and 4 (PDEATH); a receipt the frame writes (not `ALREADY`) whose rows include one is
+a reference receipt, with entry `src u16 ‖ fseq u64 ‖ reader u16` (big-endian) `‖ file ‖ rd`, `rd = H(dom REFROWS ‖ its
+reference rows in wire order)`. The entries in byte order form one chain per source, `h = H(dom REFSRC ‖ src u16)` then
+`h = H(dom REFSRC ‖ h ‖ fseq u64 ‖ file ‖ rd)` per entry, and `rs = H(dom REFSET ‖ per source ascending: src u16 ‖ its
+last h)`, which is `H(dom REFSET)` with no reference receipt. The engine keeps the entries sorted with their chain values
+and computes again only from a late receipt's place to the end of its source. A written receipt keeps its `rd` in the
+64 bytes after `frows` (zero without a reference row; then 16 zero bytes; zero on the wire), so the entries are read
+back from the receipts of the `facts` records. The checker keeps the entries its own replay derives in byte order, puts
+a new entry in its place, and computes `rs` by the specification (`Gate/RefSet.lean`) again only when a frame
+adds an entry. The same reference receipts in any order give the same `rs`
+(`rs_order`), and `rs` reads only the receipts with reference rows, each by its source, `fseq`, reader, file and
+reference rows: member rows, and receipts without reference rows in any number and order, do not enter it (`rs_shard`).
+So every shard answers the same `rs` for the same reference receipts.
+
+Frames logged before the source registry is admitted (fact record design §2.11) are replayed as admitted then: the
+receipt's own checks, no registry checks, and `rs` from the rows of kinds 3 and 4. They are never refused for want of a
+registry.
+
+The checker resumes from its last state (`vlast`) when its tag, the rows files, the log and its facts digest agree. The
+facts digest is over the checker's fact record bodies, the number of reference entries as u64, the entries, and a
+running digest of the fact frames it checked (`H(dom VLAST/FFRAME ‖ previous ‖ batch u64 ‖ rq ‖ an)` per frame, from
+the empty string). Beside `vlast` it keeps `vfacts`, its record bodies, written (new file, synced, renamed) before
+`vlast` whenever their size changed. A start reads `vfacts`, the reference entries its receipts give, and only the
+headers and fact frame trailers of the log before the position; when those give the digest, it resumes from them, so a
+fact frame changed after it was checked is caught by its trailer digests without replaying any frame. When they do not
+(no `vfacts`, or one written after the last state) it replays the fact frames before the position from the log, and
+those must give the digest; it prints `FACTS_REPLAYED(shard)` and writes `vfacts` again. Otherwise it prints
 `VSTORE_REFUSED` with the cause and rebuilds from the log. A mismatch stops the shard's releases and raises one item,
 `VERIFY_MISMATCH(shard)`, with the batch and both digests; `VERIFY_COUNT`, `TORN_TAIL` and an empty log are refused
 too (exit 3, 3, 4). Any other mode word is exit 64. The chunk-store modes `offline` and `tail` were removed on
@@ -501,8 +590,8 @@ refuses the frame (`FRAME`) with nothing written. Staff see one item per field o
 
 Statements that exist in the sources are in the `Engine3` files. These names are planned
 and have no theorem yet: `fitsLine_fitsLine2`, `decideRowsX_eq`, `payIdx_eq`, `putLine_getLine`, `kbytes_inj`,
-`kbOfRow_key`, `feedOrder_decode`, `pinInputW_eq`, `feedW_eq`, `feedW_at_eq`, `frameV2Pre_inj`, `inputCtxPre_inj`,
-`inputV6_bind`, `decodeAns_leafCount`, `bd_of_records`, `treeSet_root`, `install_leaf_eq`,
+`kbOfRow_key`, `feedOrder_decode`, `pinInputW_eq`, `feedW_eq`, `feedW_at_eq`, `inputCtxPre_inj`,
+`inputV7_bind`, `decodeAns_leafCount`, `bd_of_records`, `treeSet_root`, `install_leaf_eq`,
 `install_leaf_sound`.
 
 | Statement | Says |
@@ -532,7 +621,7 @@ and have no theorem yet: `fitsLine_fitsLine2`, `decideRowsX_eq`, `payIdx_eq`, `p
 | `payIdx_eq` | on a decoded frame, grouping lines by request position is grouping by `Line.pay` |
 | `putLine_getLine`, `kbytes_inj`, `kbOfRow_key` | a fitting line reads back from its 245 bytes; key bytes are one to one; a row's key bytes are its line's key |
 | `feedOrder_decode`, `pinInputW_eq`, `feedW_eq`, `feedW_at_eq` | §19 |
-| `frameV2Pre_inj`, `contextPre_inj`, `paymentPre_inj`, `inputV6Pre_inj`, `batchInputPre_inj` | §17-§18: injective preimages; equal digests mean equal fields or a named SHA3-512 collision (the four §18 ones proved) |
+| `framePre_inj`, `frameDigest_binds`, `frameDigestB_eq`, `contextPre_inj`, `inputV7Pre_inj`, `batchInputPre_inj` | §17-§18: injective preimages; equal digests mean equal fields or a named SHA3-512 collision; the checker's byte computation of the frame digest is the specification's (all proved) |
 | `decodeAns_leafCount`, `bd_of_records` | §17: an answer whose leaves are not one per request is refused; the host's rebuilt rows are the engine's |
 | `treeSet_root` | the state tree updated at install and reclaim has the root of the whole tree |
 | `install_leaf_eq`, `install_leaf_sound` | §10 step 5 |
@@ -603,30 +692,41 @@ end-state design.
 
 ## 17. Request and answer, version 2
 
-These replace, for this engine, `FRAME_V1.md` §2's digest field and feed rows and §4's extension.
+These replace, for this engine, `FRAME_V1.md` §2's feed rows and §4's extension.
 
 Request header: `magic RRDQ ‖ version u16 = 2 ‖ shard u32 ‖ batch u64 ‖ digest 64`, 82 bytes, where
 
-    rd_i   = H(request_i)                       the plain SHA3-512 of request blob i, which begins with its own domain
-    digest = H("RR/GATE/FRAME/v2" 0 ‖ body′ ‖ rd_1 ‖ … ‖ rd_n)
+    digest = H("RR/GATE/FRAME2/v1" 0 ‖ body)      the frame digest: one hash of every byte after the header
 
-`body′` is the body with each request blob replaced by its `u32` length, and `n` is the authority section's request
-count. The engine hashes each request once, checks `digest` before it reads any other body byte (`DIGEST` otherwise),
-and reuses each `rd_i` in the bypass check (`b.request == rd_i`). The preimage has a fixed layout with every length
-kept, so it is one to one (`frameV2Pre_inj`). `rq` in the trailer and in Root4 is the batch identity of §18, not this
-digest (§24). The body is `FRAME_V1.md` §2's with the feed rows of §19.
+The host computes it in one library call per batch. The engine does not hash the body: it carries `digest` into its
+log and echoes it in the answer. The checker recomputes it over every logged request before it decides the frame and
+reports `frame digest` when the header's field differs (`frameDigestB_eq`: its byte computation is
+`Frame.frameDigest`). The preimage is the tag and then the body, so it is one to one in the body: two frames with
+equal preimages have the same body bytes in the same order, and decode to the same request apart from the header's
+shard and batch (`framePre_inj`, `frameDigest_binds`). `H(request_i)`, the plain SHA3-512 of a request blob, is
+computed only for a payment that a signed bypass names: the bypass's `request` field must equal it
+(`Run.bypass_attributed`), so a bypass binds the exact bytes of the request it releases. `rq` in the trailer and in
+Root4 is the batch identity of §18, not this digest (§24). The body is `FRAME_V1.md` §2's with the feed rows of §19.
+The record of this digest is §28.
 
 Answer header: `FRAME_V1.md` §4's. Extension, after `head` and `root` (§25):
 
     hold 16 ‖ grant id 64 ‖ notes u32, each blob2 ‖ leaves u32, each:
-        outcome u8 ‖ reasons u64 ‖ authority u8 ‖ bypass flag u8 ‖ (bypass id 64) ‖ input 64     75 or 139 bytes
+        outcome u8 ‖ reasons u64 ‖ authority u8 ‖ flag u8 ‖ (id 64 | earlier list blob2) ‖ input 64
     ‖ adds u32, each blob2
 
-Leaf `i` is request `i`'s. A rule reason is at bit `Reason.idx`; bits 62 (UNENCODABLE_PAYMENT) and 63 (SCOPE) are
-leaf-only codes (`Frame.leafUnencodable`, `Frame.leafScope`). The grant id is carried once, all zero when there is none. The bypass flag is 0 when no
-bypass released the payment and 1 when one did; 1 is followed by that bypass's id, which is not all zero, and any other
-flag refuses the answer. The leaf copies no request field: the host takes tenant, program, payment, member, payee,
-period, flow and cents from the request it sent, computes the lines root and `input` (§18) from those bytes, and
+Leaf `i` is request `i`'s, in the bytes of `FRAME_V1.md` §4: 75 or 139 bytes, or 78 and more with an earlier list. The
+grant id is carried once, all zero when there is none. Flag 0: nothing released the payment. Flag 1: a bypass or a
+cause record released it, and its id follows, not all zero. Flag 2: the payment exactly repeats paid lines, the outcome
+is 3 (`ANSWERED`) and the earlier list follows, not empty. Any other flag refuses the answer. The combined history
+engine (`gate_hist3`, `gate_verify3`) takes the approvals, release by cause and exact repeats through the definitions
+`gate_engine` uses (`Engine3/Step.lean`: `approvalsB` is `Run.approvals`; `leafIn` applies `Run.causeLeaf`, then
+`Rules.answerLeaf` and `Run.earlierBody`; `answeringB` is `Run.answering` over the decisions with a reason it reads,
+`answering_filter`). The rows under an exact key are its released rows in row order, read back as lines
+(`RowX.line_of`), and none when the read did not take all of them: a key of more than 1,024 rows, or one whose core
+holds more than 1,024 rows (only the core's first 1,024 are chained), so its payment is decided as contested. An
+answered payment's lines leave the unresolved additions and their records say decided. The leaf copies no
+request field: the host takes tenant, program, payment, member, payee, period, flow and cents from the request it sent, computes the lines root and `input` (§18) from those bytes, and
 refuses the answer when a leaf's `input` differs from its own or the leaves are not one per request
 (`right_rail_gate_decide._answer`). The token leaf is then built from the host's fields, the answer leaf and the grant
 id, byte for byte as before. The appended rows stay in the answer, and the host checks `bd` from them, until the batch
@@ -634,11 +734,10 @@ digest moves to the records after the cosignature; then the host rebuilds them f
 (`rows_of_records`, `bd_of_records`) and the Lean decoder states the leaf count (`decodeAns_leafCount`, not yet
 written). `an = H(dom ANSWER2 ‖ answer bytes before its head and root)` (§6).
 
-## 18. Input commitment INPUT/v6
+## 18. Input commitment INPUT/v7
 
     ctx      = H(dom CONTEXT ‖ the request body before its request count)
-    rd       = H(dom PAYMENT ‖ lp32 head ‖ lines root ‖ tail)
-    input    = H("RR/GATE/INPUT/v6" 0 ‖ ctx ‖ rd)
+    input    = H("RR/GATE/INPUT/v7" 0 ‖ ctx ‖ lp32 head ‖ lines root ‖ tail)
     identity = H(dom BATCH-INPUT ‖ ctx ‖ input_1 ‖ … ‖ input_n)
 
 `lp32` is a 4-byte big-endian length and then the bytes. The context is every body byte before the request count: today,
@@ -646,15 +745,15 @@ the head the batch follows, the feeds with their pins, the redone payments, the 
 grant, key set and key-set steps, the signed bypasses and the engine release (`Gate.context`, `Frame.ctxBytes`). It is
 hashed once per batch. For each request, `head` is its bytes before its lines (the domain, the payment's fields and the
 line count, `Gate.requestHead`) and `tail` its bytes after them (the evidence count and references,
-`Gate.requestTail`); the lines are hashed once, as the leaves of their root, so every request byte is hashed once
-(`Gate.payDigest`). `input` is a token's input commitment (`Gate.inputV6`) and costs one permutation more per payment.
+`Gate.requestTail`); the lines are hashed once, as the leaves of their root, so every request byte is hashed once.
+`input` is a token's input commitment (`Gate.inputV7`): one hash per payment over the context digest and those parts.
 The batch's identity (`Frame.ident`, `Gate.batchInput`) is the trailer's and Root4's `rq`: the retry and pending checks
 compare it, so a retry with the same payments and the same context (today, head, feeds, grant, key set, release) has the
 same identity (III.3). Each preimage is one to one
-(`contextPre_inj`, `paymentPre_inj`, `inputV6Pre_inj`, `batchInputPre_inj`, all proved), so equal values mean equal
+(`contextPre_inj`, `inputV7Pre_inj`, `batchInputPre_inj`, all proved), so equal values mean equal
 fields or a SHA3-512 collision. `input` binds the request and the context, not the engine's outcome and not the bypass
 id: which bypass released a payment depends on the decisions before it, so it is not a function of the request and the
-signed bypasses (INPUT/v6 carries no bypass id). The host therefore checks each leaf's bypass id against the signed
+signed bypasses (INPUT/v7 carries no bypass id). The host therefore checks each leaf's bypass id against the signed
 bypasses it sent (the id is the SHA3-512 of the bypass document, for that payment's program and payment) and the grant
 id against its grant, and refuses the answer otherwise (`_answer`, `_approval`); it refuses an answer with no leaves for
 a batch with requests. The outcome it takes from the engine. An auditor rebuilds every other value from the request
@@ -696,7 +795,7 @@ Each step changes the code, its statements and its tests together, and leaves th
 2. Store widths and layouts (§1-§3), key bytes (`KEY2`), `STORE/BLOCK2`, `STORE/PAGE4`, `STORE/CHUNK2`, frames `RRF4`.
 3. Feed rows and the feed words (§19).
 4. Request version 2 (§17).
-5. INPUT/v6 (§18).
+5. INPUT/v7 (§18).
 6. Answer version 2 (§17).
 7. The state tree kept in memory and updated at install and reclaim (`treeSet_root`); the root does not change.
 8. The verifier's chunk rebuild at install (§10 step 5).
@@ -820,3 +919,107 @@ line matched is not observable in them and is covered by the reasons alone.
   check binds each leaf to its payment and context; it is not a recomputation, and `publishOk` recomputes nothing. Open:
   the history engine does not yet run the spec decision on 1 in 64 batches (its step has no spec store), and
   `decodeAns_leafCount` is not written, so the leaf count is checked by the host only.
+
+## 26. Protected change record (Constitution XI.2): the tag of a row in the checker's store (2026-11-11)
+
+- Exact predicate: the 64-byte tag of each 320-byte record of the checker's rows files,
+  `H(dom VTAG ‖ k ‖ shard u32 ‖ set u8 ‖ seq u64 ‖ leaf ‖ link)` with `leaf = H(dom ROW ‖ row)`: two hashes, six
+  permutations, for every row the checker stores and for every stored row it reads back from disk.
+- Invariant and failure it protects: a party that can write the checker's files but does not hold its key cannot make
+  the checker read a changed row, a row moved to another place, set or shard, or a row of an earlier build of the store.
+- Evidence it is unsuitable: the leaf binds nothing the tag does not; nothing else reads it. It costs one permutation
+  and one hash call per row stored or re-read, in a process that is over the 40 us CPU per line bar (67.0-69.8 us at 3M
+  rows, run sp-32).
+- Disposition: replace.
+- Replacement control: `H(dom VTAG2 ‖ k ‖ shard u32 ‖ set u8 ‖ seq u64 ‖ record)` over the whole 256-byte record, one
+  hash of 318 bytes, five permutations (`VStore.tagOf`, `VStore.tagInto`). Same key, place, set and shard, and every
+  byte of the record. `vstore_check` checks the in-place tag against the definition, every flipped byte, a moved
+  record, a wrong key, shard, set and place, and that a record under the earlier tag is refused;
+  `tests/test_engine3_vstore.py` recomputes the tag of the test record with Python's `hashlib`.
+- Scope and duration: the checker's private rows files (`gate_verify3`), from the commit that lands this record;
+  permanent. The engine's rows files and every logged or signed value are unchanged.
+- Claims withdrawn: the checker's stored row carries a leaf of the row.
+- Stored format: a checker directory written under the earlier tag holds no record that passes. Its rows files are cut
+  to nothing at open, the checker prints `VSTORE_REFUSED` with the cause and rebuilds from the log (§10). Nothing is
+  migrated.
+
+## 27. Protected change record (Constitution XI.2): one hash for a token's input (2026-11-11)
+
+- Exact predicate: §18 as of 2026-11-04: the payment digest `rd = H(dom PAYMENT ‖ lp32 head ‖ lines root ‖ tail)` and
+  then `input = H("RR/GATE/INPUT/v6" 0 ‖ ctx ‖ rd)` (`Gate.payDigest`, `Gate.inputV6`, with `paymentPre_inj` and
+  `inputV6Pre_inj`).
+- Invariant and failure it protects: every token's input names everything its decision read (gate K2); the batch
+  identity is a function of the context and the payments (III.3).
+- Evidence it is unsuitable: the second hash binds nothing the first does not; it costs two permutations per payment
+  in the engine, the checker and the host, on a path that is over the 40 us CPU per line bar (115.5-117.2 us for
+  engine plus checker at 3M rows, run sp-32).
+- Disposition: replace.
+- Replacement control: `input = H("RR/GATE/INPUT/v7" 0 ‖ ctx ‖ lp32 head ‖ lines root ‖ tail)` (`Gate.inputV7Pre`,
+  `Gate.inputV7`): the same four fields in one preimage. `inputV7Pre_inj` (proved) states that the preimage fixes the
+  context, the head, the lines root and the tail, which is what the two earlier statements fixed together.
+  `identFast_eq` (the engines' byte computation is `Frame.ident`) is proved over the new input. The vectors `input7`
+  of `tests/gate_vectors/gate_v1.vectors` are computed by Python's `hashlib` from the format and judged by
+  `gate_vectors`; the host recomputes every leaf's input as before (`payment_input`).
+- Scope and duration: the token input commitment and, through it, the logged batch identity of `gate_engine` and
+  `gate_hist3`, the checker and the host, from the commit that lands this record; permanent.
+- Claims withdrawn: the payment digest `rd` exists; `paymentPre_inj`; `inputV6Pre_inj`; INPUT/v6 is the token input
+  commitment. The records of §24 and §25 name the earlier statements as they stood then.
+- Stored format: a store logged under INPUT/v6 holds batch identities this release does not compute. It is not
+  migrated (synthetic stores only): a load that replays one of its frames is refused with `REPLAY` and the cause
+  `rq true`, which names `STORE_FORMAT` and INPUT/v6; a retry of its last committed batch is answered CONFLICT. A
+  token made under INPUT/v6 carries that input; no check recomputes a token's input from another release's format.
+
+## 28. Protected change record (Constitution XI.2): the frame digest is one hash, which the engine carries (2026-11-12)
+
+- Exact predicate: `FRAME_V1.md` §2 as of 2026-11-11: request version 1 and `digest = H(dom FRAME ‖ body)`, which
+  every decoder recomputed before it read a body byte, refusing `DIGEST` when it differed (`Frame.decodeReq`,
+  `decodeReq_digest`). Also §17 of this document as planned on 2026-10-31: a `FRAME/v2` digest over the body with each
+  request blob replaced by its length, followed by one hash `rd_i` per request. That form was never built, and
+  `frameV2Pre_inj` was a planned name only.
+- Invariant and failure it protects: the engine decides the bytes the host sent and the log holds those bytes (K2,
+  III.3). A frame damaged between the host and the engine, or in the log, must not become a released decision.
+- Evidence it is unsuitable: the engine's recomputation is not what binds a decision to its request. Retry is keyed by
+  the batch identity (§24), every token's input is INPUT/v7 over the request's own bytes (§27), and the host refuses
+  an answer whose leaf input is not the one it computes from the bytes it sent (§17). The recomputation hashed every
+  body byte once more on the decision path: 2.0 of the engine's 8.4 thousand ns per line of decode (run sp-52), on a
+  path over the 40 us CPU per line bar. The planned `rd_i` form adds a hash per request on top of that.
+- Disposition: replace.
+- Replacement control: `digest = H(dom FRAME2 ‖ body)` under request version 2 (`Frame.framePre`,
+  `Frame.frameDigest`, `Frame.reqVersion`). The host computes it once per batch (`request_frame`). The checker
+  recomputes it for every logged request and reports `frame digest` (`Engine3/Verify.lean` `prep`); `frameDigestB_eq`
+  states that its byte computation is `Frame.frameDigest` of the body. `framePre_inj`: equal preimages are equal
+  bodies. `frameDigest_binds`: two decoded frames with equal preimages have equal bodies and the same request apart
+  from shard and batch, which are header fields outside the digest, as before. All three are proved. A bypass binds
+  its request as before (`Run.bypass_attributed`: `b.request = H(request)`), and `H(request)` is computed only when the
+  batch carries a bypass or a cause record (`Engine3/Step.lean` `approvalsB`, `Run.approvals`). The host's checks are unchanged: the echoed digest must
+  be the one it sent and every leaf's input must be its own (`_answer`). Tests: `tests/test_engine3_verify.py`
+  `test_flipped_request_byte` (a body byte and a digest byte of a logged request are each reported as
+  `frame digest`); `tests/test_decode_fuzz.py` (the two decoders agree on damaged frames, and no cut or extended frame
+  is read).
+- Scope and duration: every request frame of `gate_engine`, `gate_hist3`, `gate_verify3` and the host, from the
+  commit that lands this record; permanent. The answer's version stays 1 and its layout is unchanged.
+- Claims withdrawn:
+  1. The engine refuses a frame whose body does not hash to its digest. `decodeReq_digest` is deleted. Status
+     `DIGEST` (code 3) is reserved and no longer sent; the codes keep their positions.
+  2. `encodeReq_decodeReq` (a frame that decodes is the encoding of its request) now needs the hypothesis that the
+     frame's digest field is the frame digest of its body. Without it the statement is false: the decoder accepts
+     any 64 bytes in that field, and the encoder writes the frame digest.
+  3. A frame damaged in transit is no longer refused with no state change. If the damaged bytes decode, the engine
+     decides and logs them. The host refuses the answer (`rules_refused`: a leaf input or the echoed digest is not its
+     own), so nothing is sealed, and the checker reports `frame digest` for the logged frame. The host's resend of the
+     right bytes is then answered `CONFLICT` when the body was damaged (another identity), or with the logged answer,
+     which the host refuses again, when only the header's digest was. The shard holds every line until the store is
+     repaired. Before this change the engine refused `DIGEST` and the resend was decided.
+  4. On the chunk engine (`gate_engine`, which logs no request bytes, and `gate_verify`, which reads none) no process
+     but the host recomputes the frame digest.
+
+  Statements that lose a hypothesis and are otherwise unchanged: `decodeReq_trailing` (the two forms are one, with no
+  digest hypothesis), `decodeReqFast_eq` and `decodeB_eq` (no hash-length hypothesis). `decodeReq_encodeReq`,
+  `decodeReq_wf`, `decodeReq_length`, `decodeReq_hdr`, `serve_retry`, `serve_conflict`, `serve_not_next` and
+  `serve_log` are restated over the decoder without its hash argument.
+- Stored format: a store logged before this change holds version 1 requests. Its trailers, rows files and chain are
+  unchanged, so the engine opens it after a clean stop without reading a request. The checker refuses its first frame
+  (`request undecodable`), so nothing in it is verified. A load that reads a logged request again (the rows rebuilt
+  after an unclean stop, or a lost rows tail) refuses the store (`IO` or `CORRUPT`; `tests/test_engine3_recovery.py`
+  `test_a_logged_request_of_version_1_is_not_replayed`). Nothing is migrated (synthetic stores only). `staleFormat`
+  and its `STORE_FORMAT` text (§24, §27) are deleted: no caller printed it.

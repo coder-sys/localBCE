@@ -65,6 +65,7 @@ RECEIPTS = {
                      "sender": ident(21, ""), "channel": 3, "key": 0, "reader": 65535, "reread": M40, "rows": M32,
                      "admitted": M32, "same": M32, "quar": M32, "scope": ident(21, "P" * 20), "frows": M64},
 }
+RECEIPTS["receipt_rd"] = {**RECEIPTS["receipt_full"], "rd": pat(64, 77)}
 
 
 def lean_golden():
@@ -112,6 +113,8 @@ class FactCodecTests(unittest.TestCase):
         self.assertEqual(r[136:157], ident(21, "MEDICAID"))
         self.assertEqual(r[157:165], (4000).to_bytes(8, "little"))
         self.assertEqual(r[165:], bytes(80))
+        r = c.encode_receipt(RECEIPTS["receipt_rd"])
+        self.assertEqual((r[165:229], r[229:]), (pat(64, 77), bytes(16)))
 
     def test_value_widths_are_the_kinds_table(self):
         widths = {1: 52, 2: 65, 3: 11, 4: 1, 5: 132, 6: 112, 7: 132}
@@ -150,7 +153,7 @@ class FactCodecTests(unittest.TestCase):
                     with self.assertRaises(ValueError):
                         c.decode_fact(bytes(bad))
         r = bytearray(c.encode_receipt(RECEIPTS["receipt_full"]))
-        r[200] = 1
+        r[240] = 1
         with self.assertRaises(ValueError):
             c.decode_receipt(bytes(r))
 

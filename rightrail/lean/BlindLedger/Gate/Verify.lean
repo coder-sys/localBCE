@@ -1,38 +1,25 @@
-import BlindLedger.Gate.Spec
-import BlindLedger.Gate.MlDsa87
+import BlindLedger.Gate.Payer
 
-/-! The real `Crypto` of the gate: SHA3-512, ML-DSA-87 (pure, empty context, so M' = `00 00 ‖ message`) and a
-    KEY-CERT that decodes and carries a valid signature from the tenant's root key; no checkpoint verifies under its own tenant's root key (known limit: tenant A's root key certified as tenant B's epoch key).  `accepts` is the whole
-    decision of the `gate_verify` executable (`VerifyCli`): under a root key, install the certificate, then
-    store the checkpoint, on an empty payer state. -/
+/-! `accepts` is the decision of the `gate_verify` executable (`VerifyCli`) on one certificate and one checkpoint:
+    on a state that holds only the given authority link, install the certificate, then store the checkpoint.  The
+    certificate is judged as the payer judges it (`Cosign.installCert`): canonical, of the link's tenant and
+    generation, naming the link, its keys apart from the link's keys and commitments, and signed by the link's root
+    and witness keys.  So no checkpoint verifies under a root or witness key. -/
 namespace BlindLedger.Gate
 
-def sha3 (x : Bytes) : Bytes := (Semantic.sha3_512Fast x.toByteArray).toList
-
-def mlDsaOk (pk msg sig : Bytes) : Bool :=
-  MlDsa87.verify pk.toByteArray (([0, 0] ++ msg).toByteArray) sig.toByteArray
-
-/-- `roots`: (tenant, root public key). -/
-def realCrypto (roots : List (Bytes × Bytes)) : Crypto where
-  hash := sha3
-  rootSigned e := decodeKeyCert e.signed == some e && roots.any fun r => r.1 == e.tenantId &&
-    mlDsaOk r.2 (e.signed.take (e.signed.length - 2 - mlDsa87Signature)) (e.signed.drop (e.signed.length - mlDsa87Signature))
-  keyUsable e := roots.all (·.2 != e.publicKey)
-  sigOk := mlDsaOk
-
 def emptyState : PayerState :=
-  { fence := fun _ => 0, now := 0, certs := [], checkpoints := [], grants := [], released := [],
-    forked := [], equivocations := [], pins := [] }
+  { Cosign.Auth.empty with now := 0, checkpoints := [], grants := [], released := [], forked := [], pins := [] }
 
-def accepts (rootPk cert checkpoint : Bytes) : Bool :=
-  match decodeCheckpoint checkpoint, decodeKeyCert cert with
-  | some x, some e =>
-    let c := realCrypto [(x.checkpoint.tenantId, rootPk)]
-    match installCert c emptyState e with
-    | (s, true) => match storeCheckpoint c s checkpoint with
-      | some s' => s'.forked.isEmpty
-      | none => false
-    | _ => false
-  | _, _ => false
+/-- The state that holds the one authority link, as its tenant's whole chain; no chain at all when the link has one
+    key in both roles. -/
+def linkState (link : Cosign.Link) : PayerState :=
+  { emptyState with chainOf := fun t => if t = link.tenantId then Cosign.Chain.start link else none }
+
+def accepts (link : Cosign.Link) (cert checkpoint : Bytes) : Bool :=
+  match installCert realCrypto (linkState link) cert with
+  | (s, .installed) => match storeCheckpoint realCrypto s checkpoint with
+    | some s' => s'.forked.isEmpty
+    | none => false
+  | _ => false
 
 end BlindLedger.Gate

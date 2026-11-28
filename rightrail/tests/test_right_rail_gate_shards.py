@@ -170,7 +170,7 @@ class ShardTests(fx.Scratch):
         with tempfile.TemporaryDirectory() as keep, self.cluster() as c:
             copy = Path(keep) / "copy"
             shutil.copytree(c.dir, copy)
-            c.payer = store = self.track(payer.PayerStore(Path(keep) / "payer.sqlite3", root_keys={fx.TENANT: c.custody[1]},
+            c.payer = store = self.track(payer.PayerStore(Path(keep) / "payer.sqlite3", links={fx.TENANT: c.custody[1]},
                                                           grants=((fx.TENANT, g.GRANT_ID, (g.release(),), (g.release(),)),)))
             store.install_cert(c.custody[2])
             self.assertIsNone(self.pay(c, store, 0, 1))

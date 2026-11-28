@@ -5,24 +5,25 @@ import BlindLedger.Gate.Engine3.Index
 /-! The checker's own rows file.  A record is 320 bytes: the 256-byte rows record (the 245-byte row, then 11 link bytes:
     the previous row of its core plus one, its core's row count, flags, zeros), then a 64-byte tag
 
-      `H512(dom VTAG ‖ k ‖ shard u32 ‖ set u8 ‖ seq u64 ‖ leaf ‖ link)`,  `leaf = H512(dom ROW ‖ row)`,
+      `H512(dom VTAG2 ‖ k ‖ shard u32 ‖ set u8 ‖ seq u64 ‖ record)`,
 
-    two permutations over the leaf's four.  Record `seq` sits at byte `320 · seq`.  Without the key `k` a party that can
+    one hash of 318 bytes (five permutations).  Record `seq` sits at byte `320 · seq`.  Without the key `k` a party that can
     write the files cannot make a record the checker accepts; a record moved to another place, set or shard fails
     because the tag names them.  `k` is 32 bytes, sealed for the current user by DPAPI in a file of its own, and a new
-    one is made whenever the store is rebuilt, so no record of an earlier build passes either.
+    one is made whenever the store is rebuilt, so no record of an earlier build passes either.  A file written under the
+    earlier tag (`VTAG`: a leaf of the row, then a tag over the leaf and the link bytes) holds no record that passes
+    this one, so it is cut to nothing at open and rebuilt from the log.
 
     The file is a projection of the log: a torn tail, or the first record that fails its tag, is cut back at open, and
     the caller replays the log from there.  An open store never holds a bad record.  The newest records appended in
     this process are also kept in memory (tagged when they were made), so a fetch of one costs no read and no hash.
-    Anything older, and everything after a restart, is read and its leaf and tag computed again. -/
+    Anything older, and everything after a restart, is read and its tag computed again. -/
 
 namespace BlindLedger.Gate.Engine3.VStore
 
 open BlindLedger.Gate.Flat
 
 def recLen : Nat := 256
-def rowLen : Nat := 245
 def tagLen : Nat := 64
 def sealedLen : Nat := recLen + tagLen
 /-- Records kept in memory: the newest this many appended in this process, in a ring allocated once at open (at its exact size, never through an array of boxed bytes). -/
@@ -31,18 +32,14 @@ def cacheRows : Nat := 65536
 /-- The tag of the 256-byte record `rec` as place `seq` of set `set` of shard `shard` under `k`: the definition, by the
     generic digest. -/
 def tagOf (k : ByteArray) (shard set seq : Nat) (rec : ByteArray) : ByteArray :=
-  hD "VTAG" [k, putN ByteArray.empty shard 4, putN ByteArray.empty set 1, putN ByteArray.empty seq 8,
-    hD "ROW" [rec.extract 0 rowLen], rec.extract rowLen recLen]
+  hD "VTAG2" [k, putN ByteArray.empty shard 4, putN ByteArray.empty set 1, putN ByteArray.empty seq 8, rec.extract 0 recLen]
 
 /-- What every tag of one set starts with: the domain, the key, the shard and the set. -/
-def preOf (k : ByteArray) (shard set : Nat) : ByteArray := putN (putN (domB "VTAG" ++ k) shard 4) set 1
+def preOf (k : ByteArray) (shard set : Nat) : ByteArray := putN (putN (domB "VTAG2" ++ k) shard 4) set 1
 
-def rowPre : ByteArray := domB "ROW"
-
-/-- `acc` followed by the tag of the record at byte `off` of `b` as place `seq`: the leaf of its row, then the tag over
-    the leaf and the link bytes, both read in place (`tagOf`). -/
+/-- `acc` followed by the tag of the record at byte `off` of `b` as place `seq`, the record read in place (`tagOf`). -/
 @[inline] def tagInto (acc pre b : ByteArray) (off seq : Nat) : ByteArray :=
-  sha3_512Into acc (sha3_512Into (putN pre seq 8) rowPre b off rowLen) b (off + rowLen) (recLen - rowLen)
+  sha3_512Into acc (putN pre seq 8) b off recLen
 
 /-- `a[ao, ao + n)` equals `b[bo, bo + n)`; false when either is out of range. -/
 @[extern c inline "({ extern int rr_memcmp(const void*, const void*, size_t) __asm__(\"memcmp\"); (lean_is_scalar(#2) && lean_is_scalar(#4) && lean_is_scalar(#5) && lean_unbox(#2) + lean_unbox(#5) <= lean_sarray_size(#1) && lean_unbox(#4) + lean_unbox(#5) <= lean_sarray_size(#3) && rr_memcmp(lean_sarray_cptr(#1) + lean_unbox(#2), lean_sarray_cptr(#3) + lean_unbox(#4), lean_unbox(#5)) == 0); })"]

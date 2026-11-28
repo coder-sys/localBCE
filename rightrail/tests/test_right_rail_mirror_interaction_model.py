@@ -1,4 +1,4 @@
-"""Exhaustive check of interaction-model.json (Art. XIII.4): its structure (no dead control, orphan screen or trap), then the real page, role by role."""
+"""Exhaustive check of interaction-model.json (Art. XII.7): its structure (no dead control, orphan screen or trap), then the real page, role by role."""
 
 import copy
 import json
@@ -63,7 +63,7 @@ class InteractionModelStructureTests(unittest.TestCase):
                     self.assertIn("reload", outcome["message"].lower(), f"{name}/{response}")
 
     def test_every_rejected_transition_code_is_named_in_the_model(self) -> None:
-        """Every code the Lean correction-transition can reject with (Art. XIII.4.d)."""
+        """Every code the Lean correction-transition can reject with (Art. XII.7.d)."""
         owner_src = (Path(__file__).resolve().parents[1] / "app" / "right_rail_financial_owner.py").read_text(encoding="utf-8")
         for method, control in (("reject_offset_and_authorize_correction", "reject-offset"), ("authorize_offset", "authorize-offset")):
             start = owner_src.index(f"def {method}")
@@ -257,6 +257,76 @@ class InteractionModelBrowserCrawlTests(unittest.TestCase):
             self._stop_workflow(workflow, server, thread)
         self.assertEqual(able, set(_MODEL["roles"]))
 
+    def test_a_record_is_not_downloadable_while_its_state_report_is_still_loading(self) -> None:
+        """the State report arrives in a read after the record; until it lands the page offers no download and says why; once it has landed the file is offered, has the State report and is the plain-text view's record"""
+        workflow, server, thread = self._start_workflow(Path(self.temp.name) / "owner-followup-pending")
+        link = _MODEL["local_controls"]["download-record"]["name"]
+        for role, step in _JOURNEY[:2]:  # the stage where the record has a State report: the correction is authorized and acknowledged
+            self._run_step(workflow, server, role, step)
+        server.fault = {"route": "GET /api/correction-followup", "code": "success", "then_real": True, "entered": threading.Event(), "release": threading.Event()}
+        probe = lambda: self.browser.call({"op": "role", "role": "link", "name": link, "act": "find", "text": None, "selector": None, "wait": False})  # noqa: E731  the held read keeps the page busy, so do not wait for it to settle
+        try:
+            self.browser.port = server.server_address[1]
+            self.browser.call({"op": "navigate", "port": self.browser.port, "path": "/role/operator#item-h", "wait": False})
+            self.assertTrue(server.fault["entered"].wait(30), "the State report read never started")
+            held = probe()
+            self.assertEqual((held["found"], held["disabled"]), (1, True))
+            self.assertIn("Loading the State report", self.browser.call({"op": "role", "role": None, "name": None, "act": "find", "text": None, "selector": ".foot", "wait": False})["text"])
+            server.fault["release"].set()
+            self.browser.view()  # settles: the read has landed
+            ready = probe()
+            self.assertEqual((ready["found"], ready["disabled"]), (1, False))
+            name, data = self.browser.download(link)
+            shown = self._open_path("/role/operator#item-h.txt", server).view()["texts"]["text-view"]
+            neutral = re.sub(r"\n\n(?:YOUR DECISION|NEXT STEPS)\n.*?(?=\n\n|\Z)", "", shown, flags=re.S)  # the on-page view's own sections, as the crawl test sets them aside
+            unstated = lambda text: re.sub(r"(?m)^STATUS .*\n", "", text)  # noqa: E731
+            self.assertEqual((name, unstated(data.decode("utf-8"))), ("record-item-h.txt", unstated(neutral)))
+            self.assertIn("\n\nSTATE REPORT\n", data.decode("utf-8"))
+        finally:
+            server.fault["release"].set()
+            server.fault = None
+            self._stop_workflow(workflow, server, thread)
+
+    def test_the_state_report_of_h_is_never_drawn_into_another_items_record(self) -> None:
+        """H's State report read is still out when the person opens another item; whatever order the answers come in, that item's page, plain-text view and download carry no STATE REPORT, which belongs to H alone"""
+        workflow, server, thread = self._start_workflow(Path(self.temp.name) / "owner-followup-other-item")
+        link = _MODEL["local_controls"]["download-record"]["name"]
+        for role, step in _JOURNEY[:2]:  # the stage where H has a State report
+            self._run_step(workflow, server, role, step)
+        server.fault = {"route": "GET /api/correction-followup", "code": "success", "then_real": True, "entered": threading.Event(), "release": threading.Event()}
+        try:
+            self.browser.port = server.server_address[1]
+            self.browser.call({"op": "navigate", "port": self.browser.port, "path": "/role/operator#item-h", "wait": False})
+            self.assertTrue(server.fault["entered"].wait(30), "the State report read never started")
+            self.browser.call({"op": "click", "id": "row-item-01", "wait": False})  # another item is opened while H's read is out
+            server.fault["release"].set()
+            self.browser.view()  # settles: every read has landed
+            name, data = self.browser.download(link)
+            self.assertEqual(name, "record-item-01.txt")
+            self.browser.click("plain-text")
+            shown = self.browser.view()["texts"]["text-view"]
+            for text in (data.decode("utf-8"), shown):
+                self.assertTrue(text.startswith("OBLIGATION") and "item-01" in text.split("\n")[0], text[:200])
+                self.assertNotIn("STATE REPORT", text)
+        finally:
+            server.fault["release"].set()
+            server.fault = None
+            self._stop_workflow(workflow, server, thread)
+
+    def test_a_record_downloaded_after_a_failed_state_report_read_says_so(self) -> None:
+        """when the State report cannot be read the download is still offered, and its STATE REPORT section says so in plain words instead of leaving it out"""
+        workflow, server, thread = self._start_workflow(Path(self.temp.name) / "owner-followup-failed")
+        link = _MODEL["local_controls"]["download-record"]["name"]
+        server.fault = {"route": "GET /api/correction-followup", "code": "transport_failure"}
+        try:
+            found = self._open_path("/role/operator#item-h", server).role("link", link)
+            self.assertEqual((found["found"], found["disabled"]), (1, False))
+            _name, data = self.browser.download(link)
+            self.assertRegex(data.decode("utf-8"), r"\n\nSTATE REPORT\n[^\n]*The State report could not be read at that time")
+        finally:
+            server.fault = None
+            self._stop_workflow(workflow, server, thread)
+
     def test_the_screen_writes_instants_in_program_time_and_the_record_in_utc(self) -> None:
         """every instant on the screen, the due date included, is the Owner's instant in the program's zone with its label and no calendar date is left; the record keeps the same instants in UTC, newest first; the engine's detail stays in the record."""
         self.assertEqual((_MODEL["time"]["zone"], _MODEL["time"]["label"]), ("America/Chicago", "CT"))
@@ -393,7 +463,7 @@ class InteractionModelBrowserCrawlTests(unittest.TestCase):
         self._walk(self.workflow, self.server, _JOURNEY)
 
     def test_restore_test_at_every_position_still_completes_the_journey(self) -> None:
-        """restore-test is the only non-linear control (Art. XIII.4): at every position, every later step and state still matches the model."""
+        """restore-test is the only non-linear control (Art. XII.7): at every position, every later step and state still matches the model."""
         def walk(position: int, tab) -> None:  # each position on its own store and server, up to three at once
             sequence = _JOURNEY[:position] + (("operator", "restore-test"),) + _JOURNEY[position:]
             workflow, server, thread = self._start_workflow(Path(self.temp.name) / f"owner-restore-at-{position}")
@@ -406,7 +476,7 @@ class InteractionModelBrowserCrawlTests(unittest.TestCase):
                 future.result()
 
     def test_stale_revision_conflict_shows_the_declared_message_on_every_command(self) -> None:
-        """A stale snapshot (Art. XIII.4.d) on every command shows the model's own per-control words, not a raw code."""
+        """A stale snapshot (Art. XII.7.d) on every command shows the model's own per-control words, not a raw code."""
         owner_dir = Path(self.temp.name) / "owner-stale-probe"
         workflow, server, thread = self._start_workflow(owner_dir)
         probe = [0]
@@ -663,7 +733,7 @@ class InteractionModelBrowserCrawlTests(unittest.TestCase):
             self._stop_workflow(workflow, server, thread)
 
     def test_accessibility_regressions_are_caught(self) -> None:
-        """WCAG 2.1 AA guard (Art. XIII.3): names, aria-live and token contrast in both themes; the keyboard test is above."""
+        """WCAG 2.1 AA guard (Art. XII.6): names, aria-live and token contrast in both themes; the keyboard test is above."""
         css = (_WORKSPACE / "staff.css").read_text(encoding="utf-8")
         def palette(anchor: str) -> dict[str, str]:
             block = css[css.index(anchor):]; return dict(re.findall(r"--([\w-]+):\s*(#[0-9a-fA-F]{6})", block[:block.index("}")]))
@@ -853,6 +923,8 @@ def _response_handler(workflow):
                 fault["entered"].set()
                 if not fault["release"].wait(30):
                     raise RuntimeError("browser_fault_release_timeout")
+                if fault.get("then_real"):  # a read only held back: once released, the Owner answers it as it would have
+                    return False
             result = workflow.command(scorecard.staff._COMMAND_ROUTES[self.path], body) if fault.get("commit") else None
             code = fault["code"]
             if code == "transport_failure":

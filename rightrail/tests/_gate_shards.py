@@ -22,7 +22,8 @@ from tests._test_only_counter import TestOnlyCounter
 from app import right_rail_gate_codec as gate
 from app import right_rail_gate_decide as decider
 from app import right_rail_gate_producer as producer
-from conformance import gate_rules_v2_ref as ref
+from app import right_rail_gate_signer as signer
+from conformance import gate_rules_v1_ref as ref
 from tests import _gate_authority as au
 from tests import test_gate_rules_vectors as rules
 from tests import test_right_rail_gate_formats as fx
@@ -102,34 +103,9 @@ def feeds_of(head: list[str]) -> tuple[int, tuple[tuple[bytes, bytes], ...]]:
 HEAD = feeds_of(_HEAD)
 EXIT = 77
 BAD_DATE = 20280101  # after every enrollment span: a line dated so is MEMBER_NOT_ENROLLED
-UNSIGNED = "RR_GATE_UNSIGNED"  # test-only switch: "1" selects the signer-free authority (_gate_authority_unsigned)
-_AUTHORITY: dict = {}
-
-
-def _authority() -> dict:
-    """The authority the harness decides under, built at first use (importing this module runs no signer):
-    ``GRANT`` (the program's TRANSFER grant), ``KEYS`` (the key set it is admitted under), ``GRANT_ID`` and ``PIN`` (the
-    tenant's key-set pin, its GATE_KEYSET_PIN deployment slot).  Unset ``RR_GATE_UNSIGNED`` (or "0"): the signed
-    ``au.standing()`` and ``au.genesis()``, as always; a missing signer fails as before, never falls back.  "1": the
-    signer-free fixture of the same shape, which only ``gate_engine_unsigned`` admits.  Read once; any other value is refused."""
-    if not _AUTHORITY:
-        mode = os.environ.get(UNSIGNED)
-        if mode not in (None, "", "0", "1"):
-            raise RuntimeError(f"{UNSIGNED}={mode!r}: only 1 (signer-free fixture) or unset (signed)")
-        if mode == "1":
-            from tests import _gate_authority_unsigned as source
-        else:
-            source = au
-        grant, keys = source.standing()
-        _AUTHORITY.update(GRANT=grant, KEYS=keys, GRANT_ID=source.grant_id(grant), PIN=source.genesis()[0], unsigned=mode == "1")
-    return _AUTHORITY
-
-
-def __getattr__(name: str):
-    """``GRANT``, ``KEYS``, ``GRANT_ID`` and ``PIN`` resolve lazily (``_authority``); call sites keep ``g.GRANT`` and so on."""
-    if name in ("GRANT", "KEYS", "GRANT_ID", "PIN"):
-        return _authority()[name]
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+GRANT, KEYS = au.standing()  # the program's signed TRANSFER grant and the key set it is admitted under
+GRANT_ID = au.grant_id(GRANT)
+PIN = au.genesis()[0]  # the tenant's key-set pin (its GATE_KEYSET_PIN deployment slot)
 
 
 class _Idle:
@@ -165,10 +141,10 @@ class Cluster:
         return self.dir / f"s{k}.sqlite3"
 
     def producer(self, k: int) -> producer.ShardProducer:
-        handle, root_pk, cert = self.custody
+        handle, held, cert = self.custody
         newest = self.payer.newest_stored(fx.TENANT).get(k, gate.ZERO_DIGEST) if self.payer else gate.ZERO_DIGEST
         self.open[k] = producer.ShardProducer(self.store(k), mark_path=self.dir / f"s{k}.mark", tenant_id=fx.TENANT, shard_id=k,
-                                              epoch=fx.EPOCH, handle=handle, root_pk=root_pk, key_cert=cert, payer_newest=newest,
+                                              epoch=fx.EPOCH, handle=handle, link=held, cosign=fx.cosigner(), key_cert=cert, payer_newest=newest,
                                               counter=TestOnlyCounter(self.dir / f"s{k}.counter"),
                                               floors=lambda: decider.TenantAuthority.floors_in(self.dir / "tenant.floor", fx.TENANT))
         if self._tenant is not None:
@@ -182,7 +158,7 @@ class Cluster:
             return run_batch(self, k, payments, bad)
         self.lines.update({(k, n): ids for n, ids in payments.items()})
         args = json.dumps([str(self.dir), [self.custody[0], self.custody[1].hex(), self.custody[2].hex()], self.shards, k, payments, list(bad), crash])
-        done = subprocess.run([sys.executable, "-m", "tests._gate_shards", args], cwd=ROOT, capture_output=True, timeout=900)
+        done = subprocess.run([sys.executable, "-m", "tests._gate_shards"], cwd=ROOT, input=args.encode(), capture_output=True, timeout=900)
         if done.returncode != EXIT:
             raise AssertionError(f"the child did not die at {crash}: {done.returncode} {done.stderr.decode()[-600:]}")
         return {}
@@ -244,7 +220,7 @@ def decide_batch(c: Cluster, prod, k: int, payments: dict[int, list[int]], bad=(
     c.lines.update({(k, n): ids for n, ids in payments.items()})
     own = worker or decider.RulesWorker(ENGINE)  # without a worker the batch gets its own, closed at once: it holds the index open
     try:
-        ans = decider.decide(HEAD, ASOF, prod, [request(p, k, v, bad) for p, v in payments.items()], flat or c.dir / f"idx{k}", own, _authority()["GRANT"], _authority()["KEYS"], c.tenant, seal=seal)
+        ans = decider.decide(HEAD, ASOF, prod, [request(p, k, v, bad) for p, v in payments.items()], flat or c.dir / f"idx{k}", own, GRANT, KEYS, c.tenant, seal=seal)
     finally:
         if worker is None:
             own.close()
@@ -267,6 +243,28 @@ def run_batch(c: Cluster, k: int, payments: dict[int, list[int]], bad=()) -> dic
         return status
     finally:
         prod.close()
+
+
+_CAME_WITH = {"listed": "earlier", "rset": "rbuckets"}  # each pledged column an older store lacks, and the table that came with it
+
+
+def before(db: sqlite3.Connection, handle: str, who: tuple[str, int], *columns: str) -> None:
+    """Make the closed store ``db`` one sealed before ``columns`` existed (``listed``: earlier lists stored; ``rset``: the
+    root of its retry keys pledged): neither they, their triggers nor their tables (a reopen adds them, NULL and empty),
+    each row pledged by ``handle`` as a producer of then wrote it."""
+    rows = db.execute(f"SELECT id, {producer._PLEDGED} FROM batches").fetchall()
+    db.executescript("DROP TRIGGER IF EXISTS batches_fixed;" + "".join(f"DROP TABLE {_CAME_WITH[c]}; DROP TRIGGER IF EXISTS batches_{c};" for c in columns))
+    at = [producer._PLEDGED.split(", ").index(c) for c in columns]
+    for id_, *row in rows:
+        for i in at:
+            row[i] = None
+        db.execute("UPDATE batches SET pledge=? WHERE id=?", (signer.sign(handle, producer._pledge(who, row)), id_))
+    db.executescript("".join(f"ALTER TABLE batches DROP COLUMN {c};" for c in columns))
+
+
+def before_lists(db: sqlite3.Connection, handle: str, who: tuple[str, int]) -> None:
+    """Make the closed store ``db`` one sealed before earlier lists were stored (and so before the root of its retry keys)."""
+    before(db, handle, who, "listed", "rset")
 
 
 def read_only(path) -> sqlite3.Connection:
@@ -296,7 +294,7 @@ def sealed_allows(c: Cluster, k: int) -> dict[bytes, list[tuple[int, int]]]:
             p = next(p for (s, p) in c.lines if s == k and f"pay-{p:04d}".encode() in token[:200])
             r = request(p, k, c.lines[(k, p)])  # an ALLOW line has no reason (Rules.Spec), so an ALLOW payment's token has none
             leaf = gate.TokenLeaf(r.tenant_id, fx.PROGRAM, k, r.flow, 0, r.payment_id, r.member_key, r.payee_ref, r.amount_cents,
-                                  r.period, gate.lines_root(r.lines), "ALLOW", (), "TRANSFER", _authority()["GRANT_ID"], bytes(64), engine, engine,
+                                  r.period, gate.lines_root(r.lines), "ALLOW", (), "TRANSFER", GRANT_ID, bytes(64), engine, engine,
                                   inputs.get(gate.encode_decide_request(r), bytes(64)), fx.NOW, fx.EPOCH, first + i, fx.NOW, fx.NOW + producer.LIFETIME)
             if token.startswith(gate.encode_token_leaf(leaf)):
                 found[digest] += [(p, line) for line in c.lines[(k, p)]]
@@ -316,8 +314,8 @@ def inv(t, c: Cluster) -> None:
     t.assertEqual(len(paid), len(set(paid)), "a line was ALLOWed twice by one shard")
 
 
-def _main(argv: list[str]) -> None:
-    tmp, (handle, root, cert), shards, k, payments, bad, crash = json.loads(argv[0])
+def _main() -> None:
+    tmp, (handle, root, cert), shards, k, payments, bad, crash = json.loads(sys.stdin.read())
     c = Cluster(tmp, (handle, bytes.fromhex(root), bytes.fromhex(cert)), shards)
     die = lambda *_, **__: os._exit(EXIT)
     if crash in ("commit", "seal"):
@@ -328,4 +326,4 @@ def _main(argv: list[str]) -> None:
 
 
 if __name__ == "__main__":
-    _main(sys.argv[1:])
+    _main()
